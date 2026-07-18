@@ -77,6 +77,16 @@ keymap = [
     ],
 ]
 
+# The lighting processor (src/lighting.rs) adds a LayerChangeEvent subscriber
+# on both halves. Defaults are base subs = 1 plus an automatic +1 for the
+# split feature, which the central's peripheral-sync subscriber already uses
+# exactly. Raise the base so our subscriber has a slot (plus one spare);
+# channel_size gains headroom so rapid layer flips don't force lag-skips.
+[event.layer_change]
+channel_size = 4
+pubs = 2
+subs = 2
+
 [storage]
 enabled = true
 # ZMK storage partition: 0xec000-0xf4000 (eight 4 KiB sectors, ends at the
