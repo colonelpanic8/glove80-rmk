@@ -37,8 +37,8 @@ Bluetooth transport, never writes live frames to flash, and restores ordinary
 firmware lighting when the host clears the override or its timeout expires.
 
 See [`docs/host-lighting-protocol.md`](./docs/host-lighting-protocol.md) for the
-wire contract and current limitations. The firmware builds successfully, but
-this extension still needs testing on a physical keyboard.
+wire contract and current limitations. Static lighting has been exercised on
+both halves over USB; animated effects remain to be verified on hardware.
 
 ## Manual lighting editor
 
@@ -56,15 +56,19 @@ Open the printed localhost URL in Chrome or Edge, connect the keyboard, select a
 color, and click or drag across keys. See [`ui/README.md`](./ui/README.md) for
 browser support, architecture, and connection details.
 
-For terminal control over USB, use the standalone Python CLI (no daemon or
-third-party packages required):
+For terminal control over USB, use the Rust CLI (no daemon required):
 
 ```sh
-python3 scripts/glove80-control.py capabilities
-python3 scripts/glove80-control.py all ff0066
-python3 scripts/glove80-control.py set 0=ff0000 1=00ff00 40=0000ff
-python3 scripts/glove80-control.py clear
+cargo run --quiet -- capabilities
+cargo run --quiet -- all ff0066
+cargo run --quiet -- set 0=ff0000 1=00ff00 40=0000ff
+cargo run --quiet -- effect 0 blink ff0000 --period-ms 500
+cargo run --quiet -- effect 40 breathe 00aaff --period-ms 1500
+cargo run --quiet -- clear
 ```
+
+Run `cargo install --path tools/glove80-control` if you prefer a normal
+`glove80-control` executable on your `PATH`.
 
 The login running the command must have read/write access to `/dev/ttyACM0`
 (normally through the `dialout` group).
@@ -73,8 +77,8 @@ After this custom firmware has been installed once, either half can be put into
 its UF2 bootloader without using a key chord:
 
 ```sh
-python3 scripts/glove80-control.py bootloader right
-python3 scripts/glove80-control.py bootloader left
+cargo run --quiet -- bootloader right
+cargo run --quiet -- bootloader left
 ```
 
 The command is USB-only and requires local permission to open the Studio serial
@@ -88,9 +92,11 @@ active Bluetooth profile is connected, amber means the selected transport is
 not ready, and dim white means the firmware is running without a more specific
 connection state.
 
-Right-half host lighting uses a dedicated split packet with four pixels per BLE
-write and exposes LED indices 40 through 79. A partial-result response indicates
-that the peripheral half was unavailable for at least one batch.
+Right-half host lighting exposes LED indices 40 through 79. Static colors use
+four-pixel split batches; animated effects use two-effect batches with 50 ms
+timing resolution. Both fit a default BLE ATT payload and also work over the
+wired split transport. A partial-result response indicates that the peripheral
+half was unavailable for at least one batch.
 
 ## Build
 

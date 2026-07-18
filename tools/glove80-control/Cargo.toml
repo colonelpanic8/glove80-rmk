@@ -1,0 +1,11 @@
+[package]
+name = "glove80-control"
+version = "0.1.0"
+edition = "2021"
+description = "Control Glove80 host extensions over ZMK Studio USB serial"
+license = "MIT"
+
+[dependencies]
+anyhow = "1.0"
+clap = { version = "4.5", features = ["derive"] }
+serialport = { version = "4.7", default-features = false }
