@@ -121,6 +121,8 @@ const output = `/*
 
 /* Generated from config/moergo-layout.json by scripts/generate-keymap.mjs. */
 
+#undef ZMK_BEHAVIORS_KEEP_ALL
+
 #include <behaviors.dtsi>
 #include <dt-bindings/zmk/outputs.h>
 #include <dt-bindings/zmk/keys.h>
@@ -132,6 +134,16 @@ ${generatedLayerDefines()}
 #ifndef LAYER_Lower
 #define LAYER_Lower 0
 #endif
+
+/ {
+    behaviors {
+        hostled: hostled {
+            compatible = "zmk,behavior-host-lighting";
+            #binding-cells = <2>;
+            display-name = "Host Lighting";
+        };
+    };
+};
 
 / {
     conditional_layers {

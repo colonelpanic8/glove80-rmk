@@ -1,5 +1,5 @@
 diff --git a/nix/zmk.nix b/nix/zmk.nix
-index f43c466..bc5a2d2 100644
+index f43c466..a0e1660 100644
 --- a/nix/zmk.nix
 +++ b/nix/zmk.nix
 @@ -1,5 +1,5 @@
@@ -9,7 +9,13 @@ index f43c466..bc5a2d2 100644
  , zephyr
  , board ? "glove80_lh"
  , shield ? null
-@@ -40,6 +40,8 @@ let
+@@ -7,4 +7,5 @@
+ , kconfig ? null
+ , extraModules ? []
+ , snippets ? []
++, studioMessagesOverlay ? null
+ }:
+@@ -40,6 +41,8 @@ let
      packaging
      progress
      anytree
@@ -18,7 +24,7 @@ index f43c466..bc5a2d2 100644
      intelhex
  
      # TODO: this was required but not in shell.nix
-@@ -48,6 +49,7 @@ let
+@@ -48,6 +51,7 @@ let
  
    requiredZephyrModules = [
      "cmsis" "hal_nordic" "tinycrypt" "lvgl" "picolibc" "segger" "cirque-input-module"
@@ -26,7 +32,7 @@ index f43c466..bc5a2d2 100644
    ];
  
    # Some Zephyr modules seemingly need a symlink indirection (modulePath),
-@@ -55,9 +57,21 @@ let
+@@ -55,9 +59,31 @@ let
    # This is not the best way to fix it, but it works around the problem.
    directZephyrModules = [ "cirque-input-module" ];
  
@@ -38,19 +44,29 @@ index f43c466..bc5a2d2 100644
 +    patchShebangs --build $out
 +  '';
 +
++  studioMessagesModule = zephyr.modules.zmk-studio-messages;
++  patchedStudioMessagesModule =
++    if studioMessagesOverlay == null then studioMessagesModule.modulePath
++    else buildPackages.runCommand "zmk-studio-messages-patched" {} ''
++      cp -R ${studioMessagesModule.src} $out
++      chmod -R u+w $out
++      cp -R ${studioMessagesOverlay}/. $out/
++    '';
++
    zephyrModuleDeps =
 -    let modules = lib.attrVals requiredZephyrModules zephyr.modules;
 -    in map (x: if builtins.elem x.src.name directZephyrModules then x.src else x.modulePath) modules;
 +    map (name:
 +      let module = zephyr.modules.${name};
 +      in if name == "nanopb" then patchedNanopbModule
++         else if name == "zmk-studio-messages" then patchedStudioMessagesModule
 +         else if builtins.elem module.src.name directZephyrModules then module.src
 +         else module.modulePath
 +    ) requiredZephyrModules;
  in
  
  stdenvNoCC.mkDerivation {
-@@ -107,7 +121,7 @@ stdenvNoCC.mkDerivation {
+@@ -107,7 +133,7 @@ stdenvNoCC.mkDerivation {
    (lib.optional (extraModules != []) "-DZMK_EXTRA_MODULES=${lib.concatStringsSep ";" extraModules}") ++
    (lib.optional (snippets != []) "-DSNIPPET=${lib.concatStringsSep ";" snippets}");
  

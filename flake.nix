@@ -18,7 +18,12 @@
         patchedZmk = zmkPkgs.applyPatches {
           name = "moergo-zmk-studio";
           src = zmk;
-          patches = [ ./nix/moergo-zmk-studio-modules.patch ];
+          patches = [
+            ./nix/moergo-zmk-studio-modules.patch
+            ./nix/moergo-zmk-host-lighting.patch
+            ./nix/moergo-zmk-status-pixel.patch
+            ./nix/moergo-zmk-power-led.patch
+          ];
         };
         firmware = import patchedZmk { pkgs = zmkPkgs; };
       in

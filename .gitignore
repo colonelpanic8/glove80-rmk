@@ -5,3 +5,10 @@
 /.west
 /build
 /*.uf2
+/.worktrees/
+/scripts/__pycache__/
+/ui/dist
+/ui/node_modules
+/ui/*.tsbuildinfo
+/ui/vite.config.js
+/ui/vite.config.d.ts

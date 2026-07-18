@@ -1,0 +1,5 @@
+description: Internal split transport for ephemeral host lighting
+
+compatible: "zmk,behavior-host-lighting"
+
+include: two_param.yaml

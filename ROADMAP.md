@@ -6,11 +6,11 @@ Studio configuration must never depend on a daemon being present.
 
 ## Foundation: ZMK Studio migration
 
-- Build against the maintained MoErgo Glove80 ZMK distribution.
-- Support ZMK Studio over USB serial and Bluetooth GATT.
-- Preserve the generated keymap as the recoverable stock configuration.
-- Reserve extra layers for runtime editing.
-- Require the physical Studio unlock binding before persistent changes.
+- [x] Build against the maintained MoErgo Glove80 ZMK distribution.
+- [x] Support ZMK Studio over USB serial and Bluetooth GATT.
+- [x] Preserve the generated keymap as the recoverable stock configuration.
+- [x] Reserve extra layers for runtime editing.
+- [x] Require the physical Studio unlock binding before persistent changes.
 
 ## Next: host-controlled lighting
 
@@ -20,12 +20,18 @@ clearing host colors, and reporting protocol capabilities.
 
 Firmware requirements:
 
-- Keep key scanning and HID reporting at higher priority than lighting work.
-- Coalesce lighting frames and drop stale frames under load.
-- Do not persist live lighting frames to flash.
-- Restore normal firmware-managed lighting after disconnect or timeout.
-- Apply a conservative update-rate and brightness limit, especially over BLE.
-- Propagate the resulting frame to the peripheral half asynchronously.
+- [x] Add a versioned, capability-negotiated Studio RPC extension.
+- [x] Bound each request to eight pixel updates.
+- [x] Keep rendering on ZMK's low-priority work queue.
+- [x] Do not persist live lighting frames to flash.
+- [x] Restore firmware-managed lighting after clear or timeout.
+- [x] Clamp RGB channels and advertise a conservative maximum update rate.
+- [x] Propagate commands to the peripheral half through split transport.
+- [x] Add a daemon-independent manual editor with USB and BLE transports.
+- [x] Map all logical keys to their hardware LED-chain indices.
+- [ ] Coalesce incoming frames and enforce the update-rate limit in firmware.
+- [ ] Verify USB, Bluetooth, timeout, split, and low-battery behavior on hardware.
+- [ ] Add a native/background transport service for shared device ownership.
 
 ## Next: Codex bridge daemon
 
