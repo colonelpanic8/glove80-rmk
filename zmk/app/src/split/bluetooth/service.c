@@ -66,6 +66,10 @@ static ssize_t split_svc_run_behavior(struct bt_conn *conn, const struct bt_gatt
                                       const void *buf, uint16_t len, uint16_t offset,
                                       uint8_t flags);
 
+static ssize_t split_svc_host_lighting(struct bt_conn *conn, const struct bt_gatt_attr *attrs,
+                                       const void *buf, uint16_t len, uint16_t offset,
+                                       uint8_t flags);
+
 static ssize_t split_svc_num_of_positions(struct bt_conn *conn, const struct bt_gatt_attr *attrs,
                                           void *buf, uint16_t len, uint16_t offset) {
     return bt_gatt_attr_read(conn, attrs, buf, len, offset, attrs->user_data, sizeof(uint8_t));
@@ -205,7 +209,13 @@ BT_GATT_SERVICE_DEFINE(
                            BT_GATT_CHRC_WRITE | BT_GATT_CHRC_READ,
                            BT_GATT_PERM_WRITE_ENCRYPT | BT_GATT_PERM_READ_ENCRYPT,
                            split_svc_get_selected_phys_layout, split_svc_select_phys_layout,
-                           NULL), );
+                           NULL),
+#if IS_ENABLED(CONFIG_ZMK_HOST_LIGHTING)
+    BT_GATT_CHARACTERISTIC(BT_UUID_DECLARE_128(ZMK_SPLIT_BT_HOST_LIGHTING_UUID),
+                           BT_GATT_CHRC_WRITE_WITHOUT_RESP, BT_GATT_PERM_WRITE_ENCRYPT, NULL,
+                           split_svc_host_lighting, NULL),
+#endif
+);
 
 K_THREAD_STACK_DEFINE(service_q_stack, CONFIG_ZMK_SPLIT_BLE_PERIPHERAL_STACK_SIZE);
 
@@ -431,6 +441,28 @@ static ssize_t split_svc_run_behavior(struct bt_conn *conn, const struct bt_gatt
         if (err) {
             LOG_ERR("Failed to invoke behavior %s: %d", payload->behavior_dev, err);
         }
+    }
+
+    return len;
+}
+
+static ssize_t split_svc_host_lighting(struct bt_conn *conn, const struct bt_gatt_attr *attrs,
+                                       const void *buf, uint16_t len, uint16_t offset,
+                                       uint8_t flags) {
+    if (offset != 0 || len != sizeof(struct zmk_split_transport_host_lighting_command)) {
+        return BT_GATT_ERR(BT_ATT_ERR_INVALID_ATTRIBUTE_LEN);
+    }
+
+    struct zmk_split_transport_central_command cmd = {
+        .type = ZMK_SPLIT_TRANSPORT_CENTRAL_CMD_TYPE_HOST_LIGHTING,
+    };
+    memcpy(&cmd.data.host_lighting, buf, len);
+
+    int err = zmk_split_transport_peripheral_command_handler(
+        zmk_split_transport_peripheral_bt(), cmd);
+    if (err < 0) {
+        LOG_ERR("Failed to apply split host lighting batch: %d", err);
+        return BT_GATT_ERR(BT_ATT_ERR_UNLIKELY);
     }
 
     return len;

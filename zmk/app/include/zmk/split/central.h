@@ -8,6 +8,7 @@
 
 #include <zephyr/bluetooth/addr.h>
 #include <zmk/behavior.h>
+#include <zmk/split/transport/types.h>
 
 #if IS_ENABLED(CONFIG_ZMK_SPLIT_BLE)
 
@@ -34,6 +35,9 @@
 
 int zmk_split_central_invoke_behavior(uint8_t source, struct zmk_behavior_binding *binding,
                                       struct zmk_behavior_binding_event event, bool state);
+
+int zmk_split_central_update_host_lighting(
+    uint8_t source, const struct zmk_split_transport_host_lighting_command *command);
 
 #if IS_ENABLED(CONFIG_ZMK_SPLIT_PERIPHERAL_HID_INDICATORS)
 

@@ -103,7 +103,7 @@ export function App() {
     const updates = [...pendingPixels.current].map(([index, rgb]) => ({
       index,
       rgb: withBrightness(rgb, brightnessRef.current),
-    }));
+    })).filter(({ index }) => index < client.capabilities.pixelCount);
     pendingPixels.current.clear();
     const chunkSize = client.capabilities.maxUpdatesPerRequest;
     try {
@@ -156,15 +156,12 @@ export function App() {
     if (!client) return;
     const interval = window.setInterval(() => {
       const frame = deviceColors();
+      const keepalive = [{ index: 0, rgb: frame[0] }];
+      if (client.capabilities.supportsSplit && client.capabilities.pixelCount > 40) {
+        keepalive.push({ index: 40, rgb: frame[40] });
+      }
       client
-        .setPixels(
-          [
-            { index: 0, rgb: frame[0] },
-            { index: 40, rgb: frame[40] },
-          ],
-          false,
-          FRAME_TIMEOUT_MS,
-        )
+        .setPixels(keepalive, false, FRAME_TIMEOUT_MS)
         .catch((error) => setStatus({ tone: "error", message: connectionError(error) }));
     }, KEEPALIVE_MS);
     return () => window.clearInterval(interval);

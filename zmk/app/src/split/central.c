@@ -110,6 +110,19 @@ int zmk_split_central_invoke_behavior(uint8_t source, struct zmk_behavior_bindin
     return active_transport->api->send_command(source, command);
 };
 
+int zmk_split_central_update_host_lighting(
+    uint8_t source, const struct zmk_split_transport_host_lighting_command *lighting) {
+    if (!active_transport || !active_transport->api || !active_transport->api->send_command) {
+        return -ENODEV;
+    }
+
+    return active_transport->api->send_command(
+        source, (struct zmk_split_transport_central_command){
+                    .type = ZMK_SPLIT_TRANSPORT_CENTRAL_CMD_TYPE_HOST_LIGHTING,
+                    .data = {.host_lighting = *lighting},
+                });
+}
+
 #if IS_ENABLED(CONFIG_ZMK_SPLIT_PERIPHERAL_HID_INDICATORS)
 
 int zmk_split_central_update_hid_indicator(zmk_hid_indicators_t indicators) {

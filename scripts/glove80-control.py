@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Control the Glove80 host-lighting extension over ZMK Studio USB serial."""
+"""Control Glove80 host extensions over ZMK Studio USB serial."""
 
 from __future__ import annotations
 
@@ -43,16 +43,20 @@ def message_field(field: int, value: bytes) -> bytes:
     return varint((field << 3) | 2) + varint(len(value)) + value
 
 
-def studio_request(request_id: int, host_request: bytes) -> bytes:
-    return uint_field(1, request_id) + message_field(6, host_request)
+def studio_request(request_id: int, subsystem: int, request: bytes) -> bytes:
+    return uint_field(1, request_id) + message_field(subsystem, request)
 
 
 def capabilities_request(request_id: int) -> bytes:
-    return studio_request(request_id, uint_field(1, 1))
+    return studio_request(request_id, 6, uint_field(1, 1))
 
 
 def clear_request(request_id: int) -> bytes:
-    return studio_request(request_id, uint_field(3, 1))
+    return studio_request(request_id, 6, uint_field(3, 1))
+
+
+def enter_bootloader_request(request_id: int, target: str) -> bytes:
+    return studio_request(request_id, 7, uint_field(1, 1 if target == "right" else 0))
 
 
 def set_pixels_request(
@@ -69,7 +73,7 @@ def set_pixels_request(
         body.extend(uint_field(2, 1))
     if timeout_ms:
         body.extend(uint_field(3, timeout_ms))
-    return studio_request(request_id, message_field(2, bytes(body)))
+    return studio_request(request_id, 6, message_field(2, bytes(body)))
 
 
 def frame(payload: bytes) -> bytes:
@@ -194,15 +198,26 @@ def decode_response(payload: bytes) -> tuple[int, str, Capabilities | int] | Non
     if not isinstance(request_response, bytes):
         return None
     request_id = 0
-    host_response: bytes | None = None
+    subsystem_response: tuple[int, bytes] | None = None
     for field, wire, value in ProtoReader(request_response).fields():
         if field == 1 and wire == 0:
             request_id = int(value)
-        elif field == 6 and wire == 2:
-            host_response = value if isinstance(value, bytes) else None
-    if host_response is None:
+        elif field in (2, 6, 7) and wire == 2 and isinstance(value, bytes):
+            subsystem_response = (field, value)
+    if subsystem_response is None:
         return request_id, "unknown", -1
-    for field, wire, value in ProtoReader(host_response).fields():
+    subsystem, response = subsystem_response
+    if subsystem == 2:
+        for field, wire, value in ProtoReader(response).fields():
+            if field == 2 and wire == 0:
+                return request_id, "error", int(value)
+        return request_id, "unknown", -1
+    if subsystem == 7:
+        for field, wire, value in ProtoReader(response).fields():
+            if field == 1 and wire == 0:
+                return request_id, "bootloader", int(value)
+        return request_id, "unknown", -1
+    for field, wire, value in ProtoReader(response).fields():
         if field == 1 and wire == 2 and isinstance(value, bytes):
             return request_id, "capabilities", decode_capabilities(value)
         if field in (2, 3) and wire == 0:
@@ -308,6 +323,11 @@ class SerialClient:
         if kind != "clear" or result != 0:
             raise LightingError(f"keyboard rejected clear request: {result}")
 
+    def enter_bootloader(self, target: str) -> None:
+        kind, result = self.call(enter_bootloader_request(self.request_id, target))
+        if kind != "bootloader" or result != 1:
+            raise LightingError(f"keyboard rejected {target} bootloader request: {result}")
+
 
 def parse_color(value: str) -> int:
     text = value.removeprefix("#").removeprefix("0x")
@@ -367,6 +387,11 @@ def command_parser() -> argparse.ArgumentParser:
     )
 
     subcommands.add_parser("clear", help="release host control and restore firmware lighting")
+    bootloader_parser = subcommands.add_parser(
+        "bootloader",
+        help="reboot either half into its UF2 bootloader over USB",
+    )
+    bootloader_parser.add_argument("target", choices=("left", "right"), nargs="?", default="left")
     return parser
 
 
@@ -381,6 +406,10 @@ def main() -> int:
     arguments = command_parser().parse_args()
     try:
         with SerialClient(arguments.device) as client:
+            if arguments.command == "bootloader":
+                client.enter_bootloader(arguments.target)
+                print(f"{arguments.target.capitalize()} bootloader request accepted")
+                return 0
             capabilities = client.capabilities()
             if arguments.command == "capabilities":
                 for field in dataclasses.fields(capabilities):

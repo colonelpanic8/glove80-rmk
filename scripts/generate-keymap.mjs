@@ -136,16 +136,6 @@ ${generatedLayerDefines()}
 #endif
 
 / {
-    behaviors {
-        hostled: hostled {
-            compatible = "zmk,behavior-host-lighting";
-            #binding-cells = <2>;
-            display-name = "Host Lighting";
-        };
-    };
-};
-
-/ {
     conditional_layers {
         compatible = "zmk,conditional-layers";
 

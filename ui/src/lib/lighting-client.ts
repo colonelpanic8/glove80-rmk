@@ -137,6 +137,9 @@ export class ZmkLightingClient implements LightingClient {
       if (pixels.length > limit) {
         throw new Error(`At most ${limit} pixels may be sent in one update`);
       }
+      if (pixels.some((pixel) => pixel.index < 0 || pixel.index >= this.capabilities.pixelCount)) {
+        throw new Error(`This firmware exposes pixels 0–${this.capabilities.pixelCount - 1}`);
+      }
       const safePixels = pixels.map((pixel) => ({
         ...pixel,
         rgb: scaleToChannelLimit(pixel.rgb, this.capabilities.maxChannelValue),
@@ -153,7 +156,9 @@ export class ZmkLightingClient implements LightingClient {
     colorsByPixel: readonly number[],
     timeoutMs = this.capabilities.defaultTimeoutMs,
   ): Promise<void> {
-    const updates = colorsByPixel.map((rgb, index) => ({ index, rgb }));
+    const updates = colorsByPixel
+      .slice(0, this.capabilities.pixelCount)
+      .map((rgb, index) => ({ index, rgb }));
     const chunkSize = this.capabilities.maxUpdatesPerRequest;
     const interval = Math.ceil(1000 / this.capabilities.maxUpdateHz);
     for (let offset = 0; offset < updates.length || offset === 0; offset += chunkSize) {

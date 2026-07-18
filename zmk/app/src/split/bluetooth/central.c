@@ -52,6 +52,9 @@ struct peripheral_slot {
     struct bt_gatt_subscribe_params sensor_subscribe_params;
     struct bt_gatt_discover_params sub_discover_params;
     uint16_t run_behavior_handle;
+#if IS_ENABLED(CONFIG_ZMK_HOST_LIGHTING)
+    uint16_t host_lighting_handle;
+#endif
 #if IS_ENABLED(CONFIG_ZMK_SPLIT_BLE_CENTRAL_BATTERY_LEVEL_FETCHING)
     struct bt_gatt_subscribe_params batt_lvl_subscribe_params;
     struct bt_gatt_read_params batt_lvl_read_params;
@@ -215,6 +218,9 @@ int release_peripheral_slot(int index) {
     // Clean up previously discovered handles;
     slot->subscribe_params.value_handle = 0;
     slot->run_behavior_handle = 0;
+#if IS_ENABLED(CONFIG_ZMK_HOST_LIGHTING)
+    slot->host_lighting_handle = 0;
+#endif
     slot->selected_physical_layout_handle = 0;
 #if IS_ENABLED(CONFIG_ZMK_SPLIT_PERIPHERAL_HID_INDICATORS)
     slot->update_hid_indicators = 0;
@@ -609,6 +615,12 @@ static uint8_t split_central_chrc_discovery_func(struct bt_conn *conn,
             slot->discover_params.uuid = NULL;
             slot->discover_params.start_handle = attr->handle + 2;
             slot->run_behavior_handle = bt_gatt_attr_value_handle(attr);
+#if IS_ENABLED(CONFIG_ZMK_HOST_LIGHTING)
+        } else if (bt_uuid_cmp(chrc_uuid, BT_UUID_DECLARE_128(ZMK_SPLIT_BT_HOST_LIGHTING_UUID)) ==
+                   0) {
+            LOG_DBG("Found host lighting handle");
+            slot->host_lighting_handle = bt_gatt_attr_value_handle(attr);
+#endif
         } else if (!bt_uuid_cmp(((struct bt_gatt_chrc *)attr->user_data)->uuid,
                                 BT_UUID_DECLARE_128(ZMK_SPLIT_BT_SELECT_PHYS_LAYOUT_UUID))) {
             LOG_DBG("Found select physical layout handle");
@@ -687,6 +699,10 @@ static uint8_t split_central_chrc_discovery_func(struct bt_conn *conn,
 
     bool subscribed = slot->run_behavior_handle && slot->subscribe_params.value_handle &&
                       slot->selected_physical_layout_handle;
+
+#if IS_ENABLED(CONFIG_ZMK_HOST_LIGHTING)
+    subscribed = subscribed && slot->host_lighting_handle;
+#endif
 
 #if ZMK_KEYMAP_HAS_SENSORS
     subscribed = subscribed && slot->sensor_subscribe_params.value_handle;
@@ -1075,6 +1091,24 @@ void split_central_split_run_callback(struct k_work *work) {
                 &peripherals[payload_wrapper.source],
                 payload_wrapper.cmd.data.set_physical_layout.layout_idx);
             break;
+#if IS_ENABLED(CONFIG_ZMK_HOST_LIGHTING)
+        case ZMK_SPLIT_TRANSPORT_CENTRAL_CMD_TYPE_HOST_LIGHTING: {
+            if (!peripherals[payload_wrapper.source].host_lighting_handle) {
+                LOG_ERR("Host lighting handle not found");
+                continue;
+            }
+
+            int err = bt_gatt_write_without_response(
+                peripherals[payload_wrapper.source].conn,
+                peripherals[payload_wrapper.source].host_lighting_handle,
+                &payload_wrapper.cmd.data.host_lighting,
+                sizeof(payload_wrapper.cmd.data.host_lighting), true);
+            if (err) {
+                LOG_ERR("Failed to write host lighting characteristic (err %d)", err);
+            }
+            break;
+        }
+#endif
 #if IS_ENABLED(CONFIG_ZMK_SPLIT_PERIPHERAL_HID_INDICATORS)
         case ZMK_SPLIT_TRANSPORT_CENTRAL_CMD_TYPE_SET_HID_INDICATORS:
             LOG_WRN("do the indicators dance");
@@ -1180,7 +1214,8 @@ static int split_central_bt_send_command(uint8_t source,
     switch (cmd.type) {
     case ZMK_SPLIT_TRANSPORT_CENTRAL_CMD_TYPE_SET_HID_INDICATORS:
     case ZMK_SPLIT_TRANSPORT_CENTRAL_CMD_TYPE_SET_PHYSICAL_LAYOUT:
-    case ZMK_SPLIT_TRANSPORT_CENTRAL_CMD_TYPE_INVOKE_BEHAVIOR: {
+    case ZMK_SPLIT_TRANSPORT_CENTRAL_CMD_TYPE_INVOKE_BEHAVIOR:
+    case ZMK_SPLIT_TRANSPORT_CENTRAL_CMD_TYPE_HOST_LIGHTING: {
         struct central_cmd_wrapper wrapper = {.source = source, .cmd = cmd};
         return split_bt_invoke_behavior_payload(wrapper);
     }

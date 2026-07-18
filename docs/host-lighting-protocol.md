@@ -50,9 +50,11 @@ Host lighting is optional and RAM-only. A missing, stopped, or disconnected
 daemon therefore affects only the temporary lighting overlay; typing, layers,
 bindings, and Studio-saved settings continue to work independently.
 
-Commands for the right half use ZMK's existing split behavior transport. A
-response can report a partial application if one half is unavailable. Lighting
-rendering runs on ZMK's low-priority work queue, below key scanning and HID work.
+Commands for the right half use a dedicated 20-byte split packet containing up
+to four pixel updates. This fits the default BLE ATT payload without
+fragmentation and is also supported by wired split transport. A response can
+report a partial application if one half is unavailable. Lighting rendering
+runs on ZMK's low-priority work queue, below key scanning and HID work.
 The advertised rate is currently 20 updates per second; firmware-side rate
 enforcement and frame coalescing remain roadmap work.
 

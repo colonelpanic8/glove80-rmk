@@ -60,20 +60,37 @@ For terminal control over USB, use the standalone Python CLI (no daemon or
 third-party packages required):
 
 ```sh
-python3 scripts/glove80-lighting.py capabilities
-python3 scripts/glove80-lighting.py all ff0066
-python3 scripts/glove80-lighting.py set 0=ff0000 1=00ff00 40=0000ff
-python3 scripts/glove80-lighting.py clear
+python3 scripts/glove80-control.py capabilities
+python3 scripts/glove80-control.py all ff0066
+python3 scripts/glove80-control.py set 0=ff0000 1=00ff00 40=0000ff
+python3 scripts/glove80-control.py clear
 ```
 
 The login running the command must have read/write access to `/dev/ttyACM0`
 (normally through the `dialout` group).
+
+After this custom firmware has been installed once, either half can be put into
+its UF2 bootloader without using a key chord:
+
+```sh
+python3 scripts/glove80-control.py bootloader right
+python3 scripts/glove80-control.py bootloader left
+```
+
+The command is USB-only and requires local permission to open the Studio serial
+device, but deliberately does not require a physical Studio unlock. Request the
+right bootloader before the left, since the left provides the split and USB RPC
+transports used to reach the right.
 
 The left Magic/MoErgo key is reserved as a firmware status pixel: cyan means a
 host lighting frame is active, green means USB HID is ready, blue means the
 active Bluetooth profile is connected, amber means the selected transport is
 not ready, and dim white means the firmware is running without a more specific
 connection state.
+
+Right-half host lighting uses a dedicated split packet with four pixels per BLE
+write and exposes LED indices 40 through 79. A partial-result response indicates
+that the peripheral half was unavailable for at least one batch.
 
 ## Build
 
@@ -87,11 +104,18 @@ The build produces half-specific images plus a combined archival artifact:
 ```sh
 result/glove80-left.uf2
 result/glove80-right.uf2
+result/glove80-left-settings-reset.uf2
+result/glove80-right-settings-reset.uf2
 result/glove80.uf2
 ```
 
 Flash `glove80-left.uf2` to the left bootloader and `glove80-right.uf2` to the
 right bootloader. Do not use the combined artifact for routine flashing.
+
+The settings-reset images are recovery tools. Flash the matching reset image,
+allow it to boot once and erase persistent state, then return that half to its
+bootloader and flash the matching normal image. Reset both halves together when
+repairing their split bond.
 
 ## Updating From MoErgo
 

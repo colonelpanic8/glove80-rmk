@@ -17,6 +17,10 @@
 #include <zmk/events/sensor_event.h>
 #include <zmk/events/battery_state_changed.h>
 
+#if IS_ENABLED(CONFIG_ZMK_HOST_LIGHTING)
+#include <zmk/rgb_underglow.h>
+#endif
+
 #include <zephyr/init.h>
 #include <zephyr/logging/log.h>
 
@@ -50,6 +54,44 @@ int zmk_split_transport_peripheral_command_handler(
         if (err) {
             LOG_ERR("Failed to invoke behavior %s: %d", binding.behavior_dev, err);
         }
+        return err;
+    }
+    case ZMK_SPLIT_TRANSPORT_CENTRAL_CMD_TYPE_HOST_LIGHTING: {
+#if IS_ENABLED(CONFIG_ZMK_HOST_LIGHTING)
+        const struct zmk_split_transport_host_lighting_command *lighting =
+            &cmd.data.host_lighting;
+        if (lighting->pixel_count > ZMK_SPLIT_HOST_LIGHTING_MAX_PIXELS) {
+            return -EINVAL;
+        }
+        if (lighting->flags & ZMK_SPLIT_HOST_LIGHTING_FLAG_CLEAR) {
+            return zmk_rgb_underglow_host_clear();
+        }
+
+        int err = 0;
+        if (lighting->flags & ZMK_SPLIT_HOST_LIGHTING_FLAG_REPLACE) {
+            err = zmk_rgb_underglow_host_replace(lighting->timeout_ms);
+        }
+
+        struct zmk_rgb_underglow_host_pixel
+            pixels[ZMK_SPLIT_HOST_LIGHTING_MAX_PIXELS];
+        for (size_t i = 0; i < lighting->pixel_count; i++) {
+            pixels[i] = (struct zmk_rgb_underglow_host_pixel){
+                .index = lighting->pixels[i].index,
+                .r = lighting->pixels[i].r,
+                .g = lighting->pixels[i].g,
+                .b = lighting->pixels[i].b,
+            };
+        }
+
+        if (lighting->pixel_count > 0 &&
+            zmk_rgb_underglow_host_update(pixels, lighting->pixel_count,
+                                          lighting->timeout_ms) < 0) {
+            err = -EIO;
+        }
+        return err;
+#else
+        return -ENOTSUP;
+#endif
     }
     default:
         LOG_WRN("Unhandled command type %d", cmd.type);

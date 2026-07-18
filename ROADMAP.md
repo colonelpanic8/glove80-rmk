@@ -26,7 +26,7 @@ Firmware requirements:
 - [x] Do not persist live lighting frames to flash.
 - [x] Restore firmware-managed lighting after clear or timeout.
 - [x] Clamp RGB channels and advertise a conservative maximum update rate.
-- [x] Propagate commands to the peripheral half through split transport.
+- [x] Propagate four-pixel batches through a dedicated BLE/wired split command.
 - [x] Add a daemon-independent manual editor with USB and BLE transports.
 - [x] Map all logical keys to their hardware LED-chain indices.
 - [ ] Coalesce incoming frames and enforce the update-rate limit in firmware.

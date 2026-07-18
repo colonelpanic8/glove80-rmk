@@ -129,6 +129,11 @@ if (CONFIG_ZMK_STUDIO_RPC)
          ${ZEPHYR_ZMK_STUDIO_MESSAGES_MODULE_DIR}/proto/zmk/host_lighting.proto)
   endif()
 
+  if(CONFIG_ZMK_MAINTENANCE_RPC)
+    list(APPEND studio_proto_files
+         ${ZEPHYR_ZMK_STUDIO_MESSAGES_MODULE_DIR}/proto/zmk/maintenance.proto)
+  endif()
+
   nanopb_generate_cpp(proto_srcs proto_hdrs
                       RELPATH ${ZEPHYR_ZMK_STUDIO_MESSAGES_MODULE_DIR}
                       ${studio_proto_files})
