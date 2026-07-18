@@ -18,6 +18,7 @@
     chosen {
         zmk,kscan = &kscan0;
         zmk,physical-layout = &physical_layout0;
+        zmk,runtime-config-partition = &runtime_config_partition;
         zephyr,code-partition = &code_partition;
         zephyr,sram = &sram0;
         zephyr,flash = &flash0;
@@ -81,7 +82,12 @@ zephyr_udc0: &usbd {
             reg = <0x00000000 0x00026000>;
         };
         code_partition: partition@26000 {
-            reg = <0x00026000 0x000c6000>;
+            reg = <0x00026000 0x000b6000>;
+        };
+
+        /* Dedicated storage for the versioned runtime configuration. */
+        runtime_config_partition: partition@dc000 {
+            reg = <0x000dc000 0x00010000>;
         };
 
         /*
