@@ -22,7 +22,7 @@
 //! versions). Both cases decode to a distinct error so firmware can drop
 //! them silently-but-logged.
 
-use crate::{Activation, Cell, MAX_CELLS_PER_RECORD, MAX_RECORDS, Record};
+use crate::{Activation, Cell, Condition, MAX_CELLS_PER_RECORD, MAX_RECORDS, Record};
 
 /// Version byte carried by every sync payload.
 pub const SYNC_VERSION: u8 = 1;
@@ -55,6 +55,17 @@ const TAG_ENTER_BOOTLOADER: u8 = 0x09;
 // Peripheral → central build identity, announced once per link-up (host
 // protocol v1.3 GET_VERSION). Additive: an old central ignores it.
 const TAG_PERIPHERAL_VERSION: u8 = 0x0A;
+// Per-record gate for a staged persistent-config record (conditional
+// lighting). Additive: an old peripheral ignores it (UnknownTag) and stages
+// the record ungated — the record still composes, just without the extra
+// suppression the gate would apply. Sent after the record's `ConfigRecord`.
+const TAG_CONFIG_GATE: u8 = 0x0B;
+// Shared lighting state, extended with the central's usb-connected flag
+// (conditional lighting). Distinct tag from `TAG_STATE` so an old peripheral
+// falls back to ignoring it rather than mis-decoding; a new peripheral still
+// accepts the legacy 8-byte `TAG_STATE` (usb_connected defaults false) from an
+// old central.
+const TAG_STATE2: u8 = 0x0C;
 
 /// Wire magic carried by [`SyncMessage::EnterBootloader`] so a corrupted or
 /// truncated payload can never reboot the peripheral (same value as the
@@ -161,9 +172,12 @@ pub enum SyncMessage {
     /// Clear the whole host overlay.
     Clear,
     /// Shared lighting state snapshot: brightness scalar, effective ceiling
-    /// (still bounded by the receiver's compiled `CHANNEL_CEILING`), and the
-    /// full toggle bitmap.
-    State { brightness: u8, ceiling: u8, toggles: u32 },
+    /// (still bounded by the receiver's compiled `CHANNEL_CEILING`), the full
+    /// toggle bitmap, and the central's usb-connected truth (the
+    /// [`Condition::UsbConnected`] gate input, mirrored to the peripheral so
+    /// both halves gate identically). Encodes under [`TAG_STATE2`]; a legacy
+    /// 8-byte [`TAG_STATE`] payload still decodes with `usb_connected = false`.
+    State { brightness: u8, ceiling: u8, toggles: u32, usb_connected: bool },
     /// Begin staging a persistent-config record set of `record_count`
     /// records (Phase 4). Discards any half-staged set; the live records
     /// stay untouched until [`SyncMessage::ConfigCommit`].
@@ -171,6 +185,10 @@ pub enum SyncMessage {
     /// Declare record `index`: its activation predicate and how many cells
     /// [`SyncMessage::ConfigCells`] messages will deliver for it.
     ConfigRecord { index: u8, activation: Activation, cell_count: u8 },
+    /// Attach a [`gate`](Record::gate) [`Condition`] to staged record
+    /// `record_index` (conditional lighting). Additive tag: an old peripheral
+    /// ignores it and stages the record ungated.
+    ConfigGate { record_index: u8, gate: Condition },
     /// Append cells to staged record `record_index`.
     ConfigCells { record_index: u8, cells: SyncCells },
     /// Atomically swap the staged set (which must be complete and match
@@ -231,6 +249,9 @@ pub enum SyncDecodeError {
     UnknownTag(u8),
     UnknownCellKind(u8),
     UnknownActivation(u8),
+    /// A [`SyncMessage::ConfigGate`] named an unknown gate kind (or the
+    /// "no gate" kind 0, which is never sent as a gate message).
+    UnknownGate(u8),
     /// An [`SyncMessage::EnterBootloader`] payload without the wire magic.
     BadMagic,
     /// Payload shorter or longer than the tag's layout requires.
@@ -304,15 +325,16 @@ impl SyncMessage {
                 out[1] = TAG_CLEAR;
                 2
             }
-            SyncMessage::State { brightness, ceiling, toggles } => {
-                out[1] = TAG_STATE;
+            SyncMessage::State { brightness, ceiling, toggles, usb_connected } => {
+                out[1] = TAG_STATE2;
                 out[2] = *brightness;
                 out[3] = *ceiling;
                 out[4] = (*toggles & 0xff) as u8;
                 out[5] = ((*toggles >> 8) & 0xff) as u8;
                 out[6] = ((*toggles >> 16) & 0xff) as u8;
                 out[7] = ((*toggles >> 24) & 0xff) as u8;
-                8
+                out[8] = *usb_connected as u8;
+                9
             }
             SyncMessage::ConfigReset { record_count } => {
                 out[1] = TAG_CONFIG_RESET;
@@ -330,6 +352,14 @@ impl SyncMessage {
                 out[4] = arg;
                 out[5] = *cell_count;
                 6
+            }
+            SyncMessage::ConfigGate { record_index, gate } => {
+                out[1] = TAG_CONFIG_GATE;
+                out[2] = *record_index;
+                let (kind, arg) = gate.to_wire();
+                out[3] = kind;
+                out[4] = arg;
+                5
             }
             SyncMessage::ConfigCells { record_index, cells } => {
                 out[1] = TAG_CONFIG_CELLS;
@@ -407,15 +437,23 @@ impl SyncMessage {
                 }
                 Ok(SyncMessage::Clear)
             }
-            TAG_STATE => {
-                if bytes.len() != 8 {
+            TAG_STATE | TAG_STATE2 => {
+                let extended = bytes[1] == TAG_STATE2;
+                let want = if extended { 9 } else { 8 };
+                if bytes.len() != want {
                     return Err(SyncDecodeError::BadLength);
                 }
                 let toggles = bytes[4] as u32
                     | ((bytes[5] as u32) << 8)
                     | ((bytes[6] as u32) << 16)
                     | ((bytes[7] as u32) << 24);
-                Ok(SyncMessage::State { brightness: bytes[2], ceiling: bytes[3], toggles })
+                let usb_connected = extended && bytes[8] != 0;
+                Ok(SyncMessage::State {
+                    brightness: bytes[2],
+                    ceiling: bytes[3],
+                    toggles,
+                    usb_connected,
+                })
             }
             TAG_CONFIG_RESET => {
                 if bytes.len() != 3 {
@@ -432,6 +470,20 @@ impl SyncMessage {
                     activation: get_activation(bytes[3], bytes[4])?,
                     cell_count: bytes[5],
                 })
+            }
+            TAG_CONFIG_GATE => {
+                if bytes.len() != 5 {
+                    return Err(SyncDecodeError::BadLength);
+                }
+                let gate = match Condition::from_gate_wire(bytes[3], bytes[4]) {
+                    Ok(Some(c)) => c,
+                    // Kind 0 ("no gate") is never a valid gate message.
+                    Ok(None) => return Err(SyncDecodeError::UnknownGate(0)),
+                    Err(crate::UnknownCondition(k)) => {
+                        return Err(SyncDecodeError::UnknownGate(k));
+                    }
+                };
+                Ok(SyncMessage::ConfigGate { record_index: bytes[2], gate })
             }
             TAG_CONFIG_CELLS => {
                 if bytes.len() < 4 {
@@ -628,6 +680,18 @@ impl ConfigStage {
         self.expected_cells[index as usize] = cell_count;
     }
 
+    /// Attach a gate to staged record `record_index` (conditional lighting).
+    /// A gate for an undeclared or out-of-transfer record aborts the stage.
+    pub fn gate(&mut self, record_index: u8, gate: Condition) {
+        let declared = matches!(self.expected, Some(n) if record_index < n)
+            && self.declared[record_index as usize];
+        if !declared {
+            self.expected = None;
+            return;
+        }
+        self.records[record_index as usize].set_gate(Some(gate));
+    }
+
     /// Append cells to staged record `record_index`. Any inconsistency
     /// (undeclared record, overflow past the declared cell count) aborts the
     /// stage.
@@ -682,6 +746,8 @@ pub enum ConfigPush {
     Reset,
     /// About to declare record `record`.
     Record { record: u8 },
+    /// About to send record `record`'s gate (only for gated records).
+    Gate { record: u8 },
     /// About to send the batch starting at cell `cell` of record `record`.
     Cells { record: u8, cell: u8 },
     Commit,
@@ -704,6 +770,11 @@ impl ConfigPush {
                     activation: r.activation(),
                     cell_count: r.cells().count() as u8,
                 })
+            }
+            ConfigPush::Gate { record } => {
+                let r = records.get(record as usize)?;
+                // Only reached for gated records; a missing gate is skipped.
+                r.gate().map(|gate| SyncMessage::ConfigGate { record_index: record, gate })
             }
             ConfigPush::Cells { record, cell } => {
                 let r = records.get(record as usize)?;
@@ -728,6 +799,16 @@ impl ConfigPush {
                 ConfigPush::Commit
             }
         };
+        // After a record's header (and gate) are sent, either stream its
+        // cells or move on if it has none.
+        let cells_or_next = |record: u8| {
+            let cells = records.get(record as usize).map_or(0, |r| r.cells().count());
+            if cells == 0 {
+                next_record_or_commit(record)
+            } else {
+                ConfigPush::Cells { record, cell: 0 }
+            }
+        };
         *self = match *self {
             ConfigPush::Reset => {
                 if records.is_empty() {
@@ -737,13 +818,14 @@ impl ConfigPush {
                 }
             }
             ConfigPush::Record { record } => {
-                let cells = records.get(record as usize).map_or(0, |r| r.cells().count());
-                if cells == 0 {
-                    next_record_or_commit(record)
+                // A gated record sends its gate before its cells.
+                if records.get(record as usize).is_some_and(|r| r.gate().is_some()) {
+                    ConfigPush::Gate { record }
                 } else {
-                    ConfigPush::Cells { record, cell: 0 }
+                    cells_or_next(record)
                 }
             }
+            ConfigPush::Gate { record } => cells_or_next(record),
             ConfigPush::Cells { record, cell } => {
                 let cells = records.get(record as usize).map_or(0, |r| r.cells().count());
                 let next = cell as usize + MAX_CELLS_PER_SYNC;
@@ -803,7 +885,56 @@ mod tests {
         roundtrip(SyncMessage::UnsetKeys(keys));
 
         roundtrip(SyncMessage::Clear);
-        roundtrip(SyncMessage::State { brightness: 128, ceiling: 204, toggles: 0xA5A5_5A5A });
+        roundtrip(SyncMessage::State {
+            brightness: 128,
+            ceiling: 204,
+            toggles: 0xA5A5_5A5A,
+            usb_connected: true,
+        });
+        roundtrip(SyncMessage::State {
+            brightness: 0,
+            ceiling: 10,
+            toggles: 0,
+            usb_connected: false,
+        });
+    }
+
+    #[test]
+    fn legacy_state_decodes_with_usb_disconnected() {
+        // A pre-gate central sends the 8-byte TAG_STATE (0x04); a new
+        // peripheral must accept it and assume usb disconnected.
+        let legacy = [SYNC_VERSION, 0x04, 200, 100, 0x01, 0x00, 0x00, 0x00];
+        assert_eq!(
+            SyncMessage::decode(&legacy),
+            Ok(SyncMessage::State { brightness: 200, ceiling: 100, toggles: 1, usb_connected: false })
+        );
+        // The extended encoding uses a distinct tag (0x0C).
+        let mut buf = [0u8; MAX_SYNC_PAYLOAD];
+        let len = SyncMessage::State { brightness: 200, ceiling: 100, toggles: 1, usb_connected: true }
+            .encode(&mut buf);
+        assert_eq!(buf[1], 0x0C);
+        assert_eq!(len, 9);
+    }
+
+    #[test]
+    fn config_gate_roundtrips_and_rejects_unknown() {
+        for gate in [
+            Condition::LayerActive(2),
+            Condition::Toggle(31),
+            Condition::UsbConnected,
+            Condition::Charging,
+            Condition::SplitLinkUp,
+        ] {
+            roundtrip(SyncMessage::ConfigGate { record_index: 3, gate });
+        }
+        // Unknown gate kind and the reserved "no gate" kind 0 are rejected.
+        let mut buf = [0u8; MAX_SYNC_PAYLOAD];
+        let len = SyncMessage::ConfigGate { record_index: 0, gate: Condition::UsbConnected }
+            .encode(&mut buf);
+        buf[3] = 9;
+        assert_eq!(SyncMessage::decode(&buf[..len]), Err(SyncDecodeError::UnknownGate(9)));
+        buf[3] = 0;
+        assert_eq!(SyncMessage::decode(&buf[..len]), Err(SyncDecodeError::UnknownGate(0)));
     }
 
     #[test]
@@ -893,9 +1024,12 @@ mod tests {
         for k in 0..5u8 {
             base.set(k, solid(RED)).unwrap();
         }
+        // Gated layer record exercises the ConfigGate step in the push.
         let mut layer = Record::new(Activation::LayerActive(1));
         layer.set(7, Cell::Blink { color: RED, period_ms: 400, phase_ms: 0, duty_pct: 50 }).unwrap();
-        let toggle = Record::new(Activation::Toggle(3)); // zero cells
+        let layer = layer.gated(Condition::LayerActive(1));
+        // Gated zero-cell record: gate is sent, then straight to the next.
+        let toggle = Record::new(Activation::Toggle(3)).gated(Condition::UsbConnected);
         vec![base, layer, toggle]
     }
 
@@ -903,6 +1037,7 @@ mod tests {
         assert_eq!(a.len(), b.len());
         for (x, y) in a.iter().zip(b) {
             assert_eq!(x.activation(), y.activation());
+            assert_eq!(x.gate(), y.gate());
             let xs: Vec<_> = x.cells().map(|(k, c)| (k, *c)).collect();
             let ys: Vec<_> = y.cells().map(|(k, c)| (k, *c)).collect();
             assert_eq!(xs, ys);
@@ -929,6 +1064,9 @@ mod tests {
                 }
                 SyncMessage::ConfigRecord { index, activation, cell_count } => {
                     stage.record(index, activation, cell_count);
+                }
+                SyncMessage::ConfigGate { record_index, gate } => {
+                    stage.gate(record_index, gate);
                 }
                 SyncMessage::ConfigCells { record_index, cells } => {
                     stage.cells(record_index, cells.entries());
@@ -988,6 +1126,12 @@ mod tests {
         assert!(!stage.in_progress());
         assert_eq!(stage.commit(2), None);
 
+        // A gate for an undeclared record aborts the stage.
+        stage.reset(2);
+        stage.record(0, Activation::Always, 0);
+        stage.gate(1, Condition::UsbConnected);
+        assert!(!stage.in_progress());
+
         // Cell overflow past the declared count aborts the stage.
         stage.reset(1);
         stage.record(0, Activation::Always, 1);
@@ -1006,6 +1150,9 @@ mod tests {
             match msg {
                 SyncMessage::ConfigRecord { index, activation, cell_count } => {
                     stage.record(index, activation, cell_count)
+                }
+                SyncMessage::ConfigGate { record_index, gate } => {
+                    stage.gate(record_index, gate)
                 }
                 SyncMessage::ConfigCells { record_index, cells } => {
                     stage.cells(record_index, cells.entries())
