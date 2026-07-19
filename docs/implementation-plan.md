@@ -140,6 +140,17 @@ over BLE, which Vial cannot do on Linux).
   ZMK-era host code.
 - Exit: checklist all green; ZMK tree no longer needed for daily use.
 
+## Post-cutover candidate: Lightbench in Dioxus
+
+Considered, deliberately deferred (working-first rule). The real argument
+is codec unification: a Rust UI consumes glove80-host-protocol directly,
+ending the dual Rust/TS codec maintained via golden vectors; a desktop
+build reuses the CLI's native transports while a WASM build keeps the
+no-install browser path. Costs: full UI rewrite, web-sys WebHID/Web
+Bluetooth glue, and the browser build must remain first-class. The
+current React app keeps all substance in framework-agnostic lib modules,
+so a later port stays cheap.
+
 ## Phase 8 — Fork cleanup and upstreaming (final)
 
 Deliberately last: only after the system works the way we want it, so the
