@@ -352,7 +352,12 @@ impl LightingProcessor {
     /// immediately so a host write is visible without waiting for another
     /// event.
     async fn process_host_request(&mut self, req: crate::host_proto::HostRequest) {
-        let response = if crate::host_proto::is_config_request(&req.request) {
+        let response = if crate::host_proto::is_keymap_request(&req.request) {
+            // Keymap requests don't touch the compositor: they are serviced
+            // by the keymap's owner (RMK's Vial service task) through the
+            // vendored keymap-ops pipe, one operation at a time.
+            crate::host_proto::apply_keymap(req.request_id, &req.request).await
+        } else if crate::host_proto::is_config_request(&req.request) {
             match &mut self.config {
                 Some(cfg) => {
                     crate::host_proto::apply_config(

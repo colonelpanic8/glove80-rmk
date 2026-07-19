@@ -33,8 +33,9 @@ use glove80_host_protocol::config::{
 };
 use glove80_host_protocol::{
     BOOTLOADER_MAGIC, BootTarget, Capabilities, CellState, Effect, EffectKind,
-    MAX_CELLS_PER_MESSAGE, MAX_CONFIG_DATA_PER_MESSAGE, MAX_MESSAGE_LEN, PROTOCOL_VERSION_MAJOR,
-    PROTOCOL_VERSION_MINOR, Request, Response, ResponsePayload, Status, feature,
+    MAX_CELLS_PER_MESSAGE, MAX_CONFIG_DATA_PER_MESSAGE, MAX_KEYMAP_ENTRIES_PER_MESSAGE,
+    MAX_MESSAGE_LEN, PROTOCOL_VERSION_MAJOR, PROTOCOL_VERSION_MINOR, Request, Response,
+    ResponsePayload, Status, feature,
 };
 use rmk::RawMutex;
 
@@ -48,6 +49,17 @@ const TOTAL_KEYS: u8 = LEDS_PER_HALF * 2;
 const LAYER_CAPACITY: u8 = 8;
 /// Toggle ids the compositor's toggle bitmask supports (`0..32`).
 const TOGGLE_ID_LIMIT: u8 = 32;
+/// Keymap grid, matching `[layout] rows/cols` in keyboard.toml. The wire's
+/// keymap key space is `key = row * KEYMAP_COLS + col` over this grid
+/// (84 positions: 80 physical keys + the four holes at 5, 8, 75, 78, which
+/// read back as KC_NO).
+const KEYMAP_ROWS: u8 = 6;
+const KEYMAP_COLS: u8 = 14;
+const KEYMAP_KEY_COUNT: u8 = KEYMAP_ROWS * KEYMAP_COLS;
+/// One full layer fits in one message; also the advertised
+/// `max_keymap_entries_per_op`.
+const MAX_KEYMAP_ENTRIES_PER_OP: u8 = KEYMAP_KEY_COUNT;
+const _: () = assert!(MAX_KEYMAP_ENTRIES_PER_OP as usize <= MAX_KEYMAP_ENTRIES_PER_MESSAGE);
 
 /// Which transport a request arrived on (responses go back the same way).
 // Only the central's pumps (host_pump.rs) construct these; the peripheral
@@ -118,10 +130,14 @@ fn capabilities() -> Capabilities {
             | feature::ATOMIC_REPLACE
             | feature::OVERLAY_READBACK
             | feature::PARTIAL_APPLY
-            | feature::PERSISTENT_CONFIG,
+            | feature::PERSISTENT_CONFIG
+            | feature::KEYMAP,
         // The storage slots hold more (config_store::CONFIG_BLOB_MAX), so
         // the protocol's own maximum is the binding limit.
         max_config_blob_len: MAX_CONFIG_BLOB_LEN as u32,
+        keymap_rows: KEYMAP_ROWS,
+        keymap_cols: KEYMAP_COLS,
+        max_keymap_entries_per_op: MAX_KEYMAP_ENTRIES_PER_OP,
     }
 }
 const _: () = assert!(MAX_CONFIG_BLOB_LEN <= crate::config_store::CONFIG_BLOB_MAX);
@@ -407,14 +423,17 @@ pub fn apply(
                 (Status::Ok, ResponsePayload::Toggle { id: *id, state: comp.toggle(*id) })
             }
         }
-        // Persistent-config commands are routed to [`apply_config`] by the
-        // lighting task (they need the central's store + session state and
-        // async flash access); this arm is unreachable there.
+        // Persistent-config commands are routed to [`apply_config`] and
+        // keymap commands to [`apply_keymap`] by the lighting task (they
+        // need async access to state this function does not own); these
+        // arms are unreachable there.
         Request::ConfigBegin { .. }
         | Request::ConfigData { .. }
         | Request::ConfigCommit
         | Request::ConfigAbort
-        | Request::ConfigRead { .. } => (Status::Busy, ResponsePayload::Empty),
+        | Request::ConfigRead { .. }
+        | Request::KeymapRead { .. }
+        | Request::KeymapWrite { .. } => (Status::Busy, ResponsePayload::Empty),
         Request::EnterBootloader { magic, target } => {
             if *magic != BOOTLOADER_MAGIC {
                 (Status::BadMagic, ResponsePayload::Empty)
@@ -604,6 +623,101 @@ pub async fn apply_config(
             }
         },
         // Non-config requests never reach here (see [`is_config_request`]).
+        _ => (Status::UnknownCommand, ResponsePayload::Empty),
+    };
+    HostResponse {
+        response: Response { request_id, command, status, payload },
+        enter_bootloader: false,
+    }
+}
+
+// --- Keymap editing (protocol v1.2, Phase 6) --------------------------------
+
+/// Whether `req` is a keymap command (routed to [`apply_keymap`] instead of
+/// [`apply`]).
+pub fn is_keymap_request(req: &Request) -> bool {
+    matches!(req, Request::KeymapRead { .. } | Request::KeymapWrite { .. })
+}
+
+/// Wire keymap key (grid position) -> matrix (row, col).
+fn key_to_row_col(key: u8) -> (u8, u8) {
+    (key / KEYMAP_COLS, key % KEYMAP_COLS)
+}
+
+/// Run one keymap operation through the Vial service task (the keymap's
+/// owner) and await its result. See `rmk::keymap_ops_pipe`: the operation is
+/// converted and persisted there via the exact path Vial's own
+/// `DynamicKeymapGet/SetKeyCode` handlers use, so Vial edits and ours are
+/// interchangeable and never race.
+async fn keymap_op(op: rmk::keymap_ops_pipe::KeymapOp) -> u16 {
+    rmk::keymap_ops_pipe::KEYMAP_OPS.send(op).await;
+    rmk::keymap_ops_pipe::KEYMAP_OP_RESULTS.receive().await
+}
+
+/// Apply one keymap request (PROTOCOL.md "Keymap editing"). Called by the
+/// lighting task on the central (the transport pumps' single consumer), so
+/// at most one keymap operation is ever in flight. Reads reflect the live
+/// keymap; writes hit the live keymap immediately and persist to RMK
+/// storage per key, exactly like Vial's writes.
+pub async fn apply_keymap(request_id: u8, req: &Request) -> HostResponse {
+    let command = req.command();
+    let (status, payload) = match req {
+        Request::KeymapRead { layer, start_key, max_count } => {
+            if *layer >= LAYER_CAPACITY || *start_key >= KEYMAP_KEY_COUNT {
+                (Status::OutOfRange, ResponsePayload::Empty)
+            } else {
+                let count = (*max_count)
+                    .min(MAX_KEYMAP_ENTRIES_PER_OP)
+                    .min(KEYMAP_KEY_COUNT - *start_key);
+                let mut keycodes: heapless::Vec<u16, MAX_KEYMAP_ENTRIES_PER_MESSAGE> =
+                    heapless::Vec::new();
+                for key in *start_key..*start_key + count {
+                    let (row, col) = key_to_row_col(key);
+                    let kc =
+                        keymap_op(rmk::keymap_ops_pipe::KeymapOp::Get { layer: *layer, row, col })
+                            .await;
+                    // Capacity: count <= MAX_KEYMAP_ENTRIES_PER_OP <= the
+                    // Vec's capacity (compile-time assert above).
+                    let _ = keycodes.push(kc);
+                }
+                (
+                    Status::Ok,
+                    ResponsePayload::KeymapActions {
+                        layer: *layer,
+                        start_key: *start_key,
+                        keycodes,
+                    },
+                )
+            }
+        }
+        Request::KeymapWrite { entries } => {
+            if entries.len() > MAX_KEYMAP_ENTRIES_PER_OP as usize {
+                (Status::CapacityExceeded, ResponsePayload::Empty)
+            } else if entries
+                .iter()
+                .any(|e| e.layer >= LAYER_CAPACITY || e.key >= KEYMAP_KEY_COUNT)
+            {
+                // All-or-nothing validation: nothing has been written yet.
+                (Status::OutOfRange, ResponsePayload::Empty)
+            } else {
+                let mut keycodes: heapless::Vec<u16, MAX_KEYMAP_ENTRIES_PER_MESSAGE> =
+                    heapless::Vec::new();
+                for e in entries {
+                    let (row, col) = key_to_row_col(e.key);
+                    let stored = keymap_op(rmk::keymap_ops_pipe::KeymapOp::Set {
+                        layer: e.layer,
+                        row,
+                        col,
+                        keycode: e.keycode,
+                    })
+                    .await;
+                    // Capacity: entries.len() <= MAX_KEYMAP_ENTRIES_PER_OP.
+                    let _ = keycodes.push(stored);
+                }
+                (Status::Ok, ResponsePayload::KeymapWritten { keycodes })
+            }
+        }
+        // Non-keymap requests never reach here (see [`is_keymap_request`]).
         _ => (Status::UnknownCommand, ResponsePayload::Empty),
     };
     HostResponse {

@@ -313,6 +313,21 @@ Capabilities now advertise feature bit 6 with
 `max_config_blob_len = 7148`. All of this runs inside the lighting task —
 the compositor, split state, store, and session keep exactly one owner.
 
+## Keymap over the host protocol (v1.2, Phase 6)
+
+`KEYMAP_READ` (0x50) / `KEYMAP_WRITE` (0x51) edit the keymap over both our
+transports (USB and BLE — the thing Vial cannot do on Linux). Actions travel
+as VIA/Vial 16-bit keycodes over the 6×14 grid
+(`key = row * 14 + col`; the four holes read back as `KC_NO`). The lighting
+task routes these requests through the vendored keymap-ops pipe
+(`rmk::keymap_ops_pipe`, GLOVE80 PATCH) to RMK's Vial service task — the
+keymap's single owner — which converts with the exact
+`from_via_keycode`/`to_via_keycode` pair Vial uses, updates the live keymap,
+and persists each key through the same `FLASH_CHANNEL` path as a Vial edit.
+Vial-made edits and host-protocol edits are therefore fully interchangeable.
+Capabilities advertise feature bit 7 with the keymap extension
+(`keymap_rows = 6`, `keymap_cols = 14`, `max_keymap_entries_per_op = 84`).
+
 ## Building
 
 ```sh
