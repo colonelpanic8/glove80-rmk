@@ -328,6 +328,28 @@ Vial-made edits and host-protocol edits are therefore fully interchangeable.
 Capabilities advertise feature bit 7 with the keymap extension
 (`keymap_rows = 6`, `keymap_cols = 14`, `max_keymap_entries_per_op = 84`).
 
+## Build identity over the host protocol (v1.3)
+
+`GET_VERSION` (0x03, feature bit 8) reports both halves' firmware build
+identity in one exchange: crate semver, git short hash, and a dirty flag,
+embedded at build time by `build.rs` (`version_embedding()` — `git
+rev-parse --short=8 HEAD` plus `git status --porcelain`, falling back to
+the literal `unknown0`/clean when git is unavailable; the flag reflects
+the whole repo's working tree, so any uncommitted change — not just to
+firmware sources — marks the build dirty). `src/version.rs` exposes the
+embedded constants to both halves.
+
+The peripheral announces its identity to the central once per split
+link-up edge, as a `PeripheralVersion` sync message over the vendored
+split app pipe (peripheral → central direction, `SPLIT_APP_PERIPH_TX` —
+a generic opaque-payload channel, GLOVE80 PATCH; retried briefly if the
+bounded queue is momentarily full). The central caches the announcement
+in `CentralSplit`: while the link is down the last-known version is
+retained and reported with `present = 0`; all-zero fields mean the
+peripheral has not been seen since the central booted. The firmware also
+computes `halves_mismatch` (both present, hash or semver differ) so hosts
+can warn about a half-flashed keyboard.
+
 ## Building
 
 ```sh

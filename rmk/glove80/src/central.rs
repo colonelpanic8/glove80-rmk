@@ -7,6 +7,7 @@ mod host_pump;
 mod lighting;
 mod lighting_config;
 mod split_lighting;
+mod version;
 
 use rmk::macros::rmk_central;
 

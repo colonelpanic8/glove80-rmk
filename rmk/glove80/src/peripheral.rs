@@ -11,6 +11,7 @@ mod host_proto;
 mod lighting;
 mod lighting_config;
 mod split_lighting;
+mod version;
 
 use rmk::macros::rmk_peripheral;
 

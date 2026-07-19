@@ -32,10 +32,10 @@ use glove80_host_protocol::config::{
     ConfigError as BlobError, MAX_CONFIG_BLOB_LEN, crc32, validate_lighting_config,
 };
 use glove80_host_protocol::{
-    BOOTLOADER_MAGIC, BootTarget, Capabilities, CellState, Effect, EffectKind,
+    BOOTLOADER_MAGIC, BootTarget, Capabilities, CellState, Effect, EffectKind, HalfVersion,
     MAX_CELLS_PER_MESSAGE, MAX_CONFIG_DATA_PER_MESSAGE, MAX_KEYMAP_ENTRIES_PER_MESSAGE,
     MAX_MESSAGE_LEN, PROTOCOL_VERSION_MAJOR, PROTOCOL_VERSION_MINOR, Request, Response,
-    ResponsePayload, Status, feature,
+    ResponsePayload, Status, VersionInfo, feature,
 };
 use rmk::RawMutex;
 
@@ -131,7 +131,8 @@ fn capabilities() -> Capabilities {
             | feature::OVERLAY_READBACK
             | feature::PARTIAL_APPLY
             | feature::PERSISTENT_CONFIG
-            | feature::KEYMAP,
+            | feature::KEYMAP
+            | feature::VERSION_REPORT,
         // The storage slots hold more (config_store::CONFIG_BLOB_MAX), so
         // the protocol's own maximum is the binding limit.
         max_config_blob_len: MAX_CONFIG_BLOB_LEN as u32,
@@ -141,6 +142,43 @@ fn capabilities() -> Capabilities {
     }
 }
 const _: () = assert!(MAX_CONFIG_BLOB_LEN <= crate::config_store::CONFIG_BLOB_MAX);
+
+/// GET_VERSION payload (v1.3): this build for the central entry, the split
+/// link's cached announcement for the peripheral entry. The peripheral keeps
+/// its last-known fields with `present = false` while the link is down;
+/// all-zero fields = never seen since boot (PROTOCOL.md "GET_VERSION").
+fn version_info(role: &crate::split_lighting::SplitRole) -> VersionInfo {
+    let own = crate::split_lighting::own_version();
+    let central = HalfVersion {
+        present: true,
+        fw_major: own.major,
+        fw_minor: own.minor,
+        fw_patch: own.patch,
+        git_hash: own.git_hash,
+        dirty: own.dirty,
+    };
+    // The pumps only run on the central; answered defensively ("never seen")
+    // if this were ever reached on the peripheral.
+    let (last_seen, link_up) =
+        role.as_central().map(|c| c.peripheral_version()).unwrap_or((None, false));
+    let peripheral = match last_seen {
+        Some(v) => HalfVersion {
+            present: link_up,
+            fw_major: v.major,
+            fw_minor: v.minor,
+            fw_patch: v.patch,
+            git_hash: v.git_hash,
+            dirty: v.dirty,
+        },
+        None => HalfVersion::default(),
+    };
+    let halves_mismatch = central.present
+        && peripheral.present
+        && (central.git_hash != peripheral.git_hash
+            || (central.fw_major, central.fw_minor, central.fw_patch)
+                != (peripheral.fw_major, peripheral.fw_minor, peripheral.fw_patch));
+    VersionInfo { central, peripheral, halves_mismatch }
+}
 
 /// Wire effect -> compositor cell. Every wire kind is representable. Shared
 /// with the persistent-config apply path (`lighting_config.rs`).
@@ -247,6 +285,7 @@ pub fn apply(
             }
         }
         Request::Ping { data } => (Status::Ok, ResponsePayload::Echo { data: data.clone() }),
+        Request::GetVersion => (Status::Ok, ResponsePayload::Version(version_info(role))),
         Request::SetCells { ttl_ms, cells } => {
             match pending_right_half_keys(cells.iter().map(|c| &c.key)) {
                 Err(()) => (Status::OutOfRange, ResponsePayload::Empty),

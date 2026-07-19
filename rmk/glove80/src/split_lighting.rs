@@ -25,10 +25,11 @@
 //!   like the synced layer state.
 
 use glove80_compositor::sync::{
-    ConfigPush, ConfigStage, MAX_SYNC_PAYLOAD, RemoteOverlay, SyncCells, SyncKeys, SyncMessage,
+    ConfigPush, ConfigStage, MAX_SYNC_PAYLOAD, PeripheralVersion, RemoteOverlay, SyncCells,
+    SyncKeys, SyncMessage,
 };
 use glove80_compositor::{Cell, Compositor, MAX_RECORDS, Record};
-use rmk::split_app_pipe::{SPLIT_APP_MSG_MAX, SPLIT_APP_TX, SplitAppData};
+use rmk::split_app_pipe::{SPLIT_APP_MSG_MAX, SPLIT_APP_PERIPH_TX, SPLIT_APP_TX, SplitAppData};
 
 use crate::lighting::NUM_LEDS;
 
@@ -52,7 +53,8 @@ const RESYNC_RETRY_MS: u64 = 50;
 const PUSH_MSGS_PER_TICK: usize = 4;
 const PUSH_TICK_MS: u64 = 20;
 
-/// Encode and queue one message; `false` if the (bounded) queue is full.
+/// Encode and queue one central → peripheral message; `false` if the
+/// (bounded) queue is full.
 fn try_queue(msg: &SyncMessage) -> bool {
     let mut buf = [0u8; MAX_SYNC_PAYLOAD];
     let len = msg.encode(&mut buf);
@@ -61,6 +63,29 @@ fn try_queue(msg: &SyncMessage) -> bool {
         return false;
     };
     SPLIT_APP_TX.try_send(data).is_ok()
+}
+
+/// Encode and queue one peripheral → central message; `false` if the
+/// (bounded) queue is full.
+fn try_queue_to_central(msg: &SyncMessage) -> bool {
+    let mut buf = [0u8; MAX_SYNC_PAYLOAD];
+    let len = msg.encode(&mut buf);
+    let Some(data) = SplitAppData::new(&buf[..len]) else {
+        return false;
+    };
+    SPLIT_APP_PERIPH_TX.try_send(data).is_ok()
+}
+
+/// This build's identity as the peripheral announces it over the split link
+/// (and as the central reports itself over the host protocol).
+pub fn own_version() -> PeripheralVersion {
+    PeripheralVersion {
+        major: crate::version::FW_MAJOR,
+        minor: crate::version::FW_MINOR,
+        patch: crate::version::FW_PATCH,
+        git_hash: crate::version::GIT_HASH,
+        dirty: crate::version::GIT_DIRTY,
+    }
 }
 
 /// Central-side split lighting state. Owned by the lighting task alongside
@@ -78,6 +103,10 @@ pub struct CentralSplit {
     /// pushed and the peripheral renders its own identical compiled
     /// defaults.
     persist: Option<PersistState>,
+    /// The peripheral's build identity, announced once per link-up (host
+    /// protocol v1.3 GET_VERSION). Kept across link-down as the last-known
+    /// version; `None` = never seen since this central booted.
+    peripheral_version: Option<PeripheralVersion>,
 }
 
 /// Streaming state for the peripheral's persistent record set.
@@ -96,7 +125,39 @@ impl CentralSplit {
     // calls; the peripheral binary compiles this as dead code.
     #[allow(dead_code)]
     pub const fn new() -> Self {
-        Self { remote: RemoteOverlay::new(), link_up: false, resync_at_ms: None, persist: None }
+        Self {
+            remote: RemoteOverlay::new(),
+            link_up: false,
+            resync_at_ms: None,
+            persist: None,
+            peripheral_version: None,
+        }
+    }
+
+    /// The peripheral's build identity for GET_VERSION: `(last-known
+    /// version, currently connected)`. `None` = never seen since boot.
+    pub fn peripheral_version(&self) -> (Option<PeripheralVersion>, bool) {
+        (self.peripheral_version, self.link_up)
+    }
+
+    /// Apply one application message received FROM the peripheral (today
+    /// only its build-identity announcement).
+    fn apply_from_peripheral(&mut self, payload: &[u8]) {
+        match SyncMessage::decode(payload) {
+            Ok(SyncMessage::PeripheralVersion(v)) => {
+                defmt::info!(
+                    "split-lighting: peripheral is v{}.{}.{} ({=[u8]:a}{})",
+                    v.major,
+                    v.minor,
+                    v.patch,
+                    v.git_hash,
+                    if v.dirty { "-dirty" } else { "" }
+                );
+                self.peripheral_version = Some(v);
+            }
+            Ok(_) => defmt::warn!("split-lighting: unexpected app message on the central"),
+            Err(e) => defmt::warn!("split-lighting: dropped message: {}", defmt::Debug2Format(&e)),
+        }
     }
 
     /// Live right-half cells as `(local key, cell, absolute expiry)`.
@@ -380,30 +441,46 @@ pub struct PeripheralSplit {
     /// set is NOT persisted here: the central is authoritative and
     /// re-streams it on every link-up.
     stage: ConfigStage,
+    /// `Some(t)` = this half's build identity is owed to the central at/after
+    /// `t` (set on every link-up edge; host protocol v1.3 GET_VERSION).
+    /// Retried while the bounded peripheral → central queue is full.
+    announce_at_ms: Option<u64>,
 }
 
 impl PeripheralSplit {
     // See CentralSplit::new: only the peripheral binary constructs this.
     #[allow(dead_code)]
     pub const fn new() -> Self {
-        Self { clear_at_ms: None, stage: ConfigStage::new() }
+        Self { clear_at_ms: None, stage: ConfigStage::new(), announce_at_ms: None }
     }
 
     pub fn on_link_change(&mut self, up: bool, now_ms: u64) {
         self.clear_at_ms = if up { None } else { Some(now_ms + LINK_LOSS_GRACE_MS) };
+        // Announce the build identity once per link-up edge; a stale owed
+        // announcement is dropped on link-down (the next link-up re-arms it).
+        self.announce_at_ms = up.then_some(now_ms);
     }
 
     pub fn next_deadline(&self) -> Option<u64> {
-        self.clear_at_ms
+        [self.clear_at_ms, self.announce_at_ms].into_iter().flatten().min()
     }
 
     /// Deadline housekeeping: drop the authority-less host overlay once the
-    /// link-loss grace expires.
+    /// link-loss grace expires, and send the owed build-identity
+    /// announcement.
     pub fn service(&mut self, comp: &mut Compositor<NUM_LEDS>, now_ms: u64) {
         if matches!(self.clear_at_ms, Some(at) if at <= now_ms) {
             defmt::info!("split-lighting: central link lost, clearing host overlay");
             comp.host_clear();
             self.clear_at_ms = None;
+        }
+        if matches!(self.announce_at_ms, Some(at) if at <= now_ms) {
+            if try_queue_to_central(&SyncMessage::PeripheralVersion(own_version())) {
+                self.announce_at_ms = None;
+            } else {
+                // Queue momentarily full: retry shortly.
+                self.announce_at_ms = Some(now_ms + RESYNC_RETRY_MS);
+            }
         }
     }
 
@@ -469,6 +546,10 @@ impl PeripheralSplit {
                 // set_ceiling re-clamps to this half's compiled CHANNEL_CEILING.
                 comp.set_ceiling(ceiling);
                 comp.set_toggles_mask(toggles);
+            }
+            // Peripheral → central only; a central would never echo it back.
+            Ok(SyncMessage::PeripheralVersion(_)) => {
+                defmt::warn!("split-lighting: unexpected version announcement from the central");
             }
             // Unknown version/tag: a newer central talking to an older
             // peripheral — ignore by contract. Anything else is a framing
@@ -543,13 +624,12 @@ impl SplitRole {
         }
     }
 
-    /// Apply one received split application message (peripheral only; the
-    /// central's inbox never fills, so this is unreachable there).
+    /// Apply one received split application message: the central receives
+    /// the peripheral's build-identity announcement, the peripheral receives
+    /// forwarded overlay/config/state traffic.
     pub fn apply_message(&mut self, comp: &mut Compositor<NUM_LEDS>, payload: &[u8], now_ms: u64) {
         match self {
-            SplitRole::Central(_) => {
-                defmt::warn!("split-lighting: unexpected app message on the central");
-            }
+            SplitRole::Central(c) => c.apply_from_peripheral(payload),
             SplitRole::Peripheral(p) => p.apply(comp, payload, now_ms),
         }
     }
