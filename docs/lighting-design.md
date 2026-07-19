@@ -33,6 +33,23 @@ The contract for the Glove80 lighting system. General system goals live in
   predicate (always / layer / toggle / host session / firmware state).
 - Within a class, priority plus stable order decide composition.
 
+## Conditions and gates
+
+- Condition kinds: layer-active(n), toggle(id), plus firmware-state
+  conditions: usb-connected (central only — the right half's port is
+  charge-only), charging (per half), split-link-up.
+- Every record may carry one optional **gate**: a second condition that
+  must also hold for the record to activate. Carried in the record
+  header's reserved bytes, so old configs decode unchanged (no gate).
+- This one primitive covers status displays: layer-indicator records
+  (one per layer, painting the live layer bitmap) shown permanently when
+  ungated, or press-and-hold when gated on the Magic layer — the stock
+  Glove80 "Magic shows status" behavior, rebuilt from general parts.
+- Deliberately NOT in firmware: scripted/arbitrary-logic lighting. The
+  host overlay is the escape hatch for unbounded logic — a host process
+  computes anything and paints the result. Firmware conditions stay
+  simple and verifiable.
+
 ## Host overlay
 
 - Sparse and RAM-only; never persisted.
