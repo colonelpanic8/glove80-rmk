@@ -52,6 +52,9 @@ const TAG_CONFIG_RECORD: u8 = 0x06;
 const TAG_CONFIG_CELLS: u8 = 0x07;
 const TAG_CONFIG_COMMIT: u8 = 0x08;
 const TAG_ENTER_BOOTLOADER: u8 = 0x09;
+// Peripheral → central build identity, announced once per link-up (host
+// protocol v1.3 GET_VERSION). Additive: an old central ignores it.
+const TAG_PERIPHERAL_VERSION: u8 = 0x0A;
 
 /// Wire magic carried by [`SyncMessage::EnterBootloader`] so a corrupted or
 /// truncated payload can never reboot the peripheral (same value as the
@@ -143,8 +146,10 @@ impl SyncKeys {
     }
 }
 
-/// One central → peripheral lighting sync message. All state is absolute and
-/// idempotent; keys are local chain indices on the receiving half.
+/// One split application sync message. All but
+/// [`SyncMessage::PeripheralVersion`] flow central → peripheral; that one
+/// flows peripheral → central. All state is absolute and idempotent; keys
+/// are local chain indices on the receiving half.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum SyncMessage {
     /// Set (or, for [`Cell::Transparent`], unset) host-overlay cells. Cells
@@ -176,6 +181,24 @@ pub enum SyncMessage {
     /// Reboot the peripheral into its UF2 bootloader. Guarded by
     /// [`BOOTLOADER_SYNC_MAGIC`] on the wire (checked at decode).
     EnterBootloader,
+    /// The peripheral's build identity, sent peripheral → central once per
+    /// link-up edge. The central caches it and serves it through the host
+    /// protocol's GET_VERSION.
+    PeripheralVersion(PeripheralVersion),
+}
+
+/// Build identity of the peripheral half, as carried by
+/// [`SyncMessage::PeripheralVersion`] (14 wire bytes including the header).
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub struct PeripheralVersion {
+    /// Firmware crate semver.
+    pub major: u8,
+    pub minor: u8,
+    pub patch: u8,
+    /// ASCII git short hash, zero-padded on the right.
+    pub git_hash: [u8; 8],
+    /// Built from a tree with uncommitted changes.
+    pub dirty: bool,
 }
 
 /// Wire encoding of an [`Activation`] for config-record transfer: matches
@@ -327,6 +350,15 @@ impl SyncMessage {
                 out[2..6].copy_from_slice(&BOOTLOADER_SYNC_MAGIC.to_le_bytes());
                 6
             }
+            SyncMessage::PeripheralVersion(v) => {
+                out[1] = TAG_PERIPHERAL_VERSION;
+                out[2] = v.major;
+                out[3] = v.minor;
+                out[4] = v.patch;
+                out[5..13].copy_from_slice(&v.git_hash);
+                out[13] = v.dirty as u8;
+                14
+            }
         }
     }
 
@@ -432,6 +464,20 @@ impl SyncMessage {
                     return Err(SyncDecodeError::BadMagic);
                 }
                 Ok(SyncMessage::EnterBootloader)
+            }
+            TAG_PERIPHERAL_VERSION => {
+                if bytes.len() != 14 {
+                    return Err(SyncDecodeError::BadLength);
+                }
+                let mut git_hash = [0u8; 8];
+                git_hash.copy_from_slice(&bytes[5..13]);
+                Ok(SyncMessage::PeripheralVersion(PeripheralVersion {
+                    major: bytes[2],
+                    minor: bytes[3],
+                    patch: bytes[4],
+                    git_hash,
+                    dirty: bytes[13] != 0,
+                }))
             }
             tag => Err(SyncDecodeError::UnknownTag(tag)),
         }
@@ -820,6 +866,13 @@ mod tests {
         roundtrip(SyncMessage::ConfigCells { record_index: 5, cells });
         roundtrip(SyncMessage::ConfigCommit { record_count: 7 });
         roundtrip(SyncMessage::EnterBootloader);
+        roundtrip(SyncMessage::PeripheralVersion(PeripheralVersion {
+            major: 0,
+            minor: 1,
+            patch: 0,
+            git_hash: *b"1a2b3c4d",
+            dirty: true,
+        }));
 
         // Bootloader entry without the wire magic is rejected.
         let mut buf = [0u8; MAX_SYNC_PAYLOAD];

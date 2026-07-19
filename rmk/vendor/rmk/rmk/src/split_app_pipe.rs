@@ -21,6 +21,13 @@
 //!   into [`SPLIT_APP_RX`] with `try_send` (drop-on-full keeps the split read
 //!   loop responsive; the application is expected to tolerate loss, e.g. by
 //!   resyncing on reconnect).
+//! - Peripheral → central: the peripheral application queues
+//!   [`SplitAppData`] into [`SPLIT_APP_PERIPH_TX`] (bounded, `try_send`
+//!   only); `SplitPeripheral` drains it as one more outgoing arm of its
+//!   select, behind key events. The central's `PeripheralManager` forwards
+//!   received `Application` messages into [`SPLIT_APP_RX`] the same way the
+//!   peripheral does — the inbox is symmetric ("this side's received
+//!   application messages"), only the senders differ.
 //! - Both sides: [`SPLIT_APP_LINK`] carries the split-link state (central:
 //!   "peripheral link up"; peripheral: "central link up"), set by the split
 //!   driver at session start/end. Applications use the `false → true` edge to
@@ -99,9 +106,16 @@ impl MaxSize for SplitAppData {
 /// sized so one full application resync burst fits with headroom.
 pub static SPLIT_APP_TX: Channel<RawMutex, SplitAppData, 26> = Channel::new();
 
-/// Peripheral-side inbox of received application messages. Filled with
-/// `try_send` (drop-on-full) by the split read loop.
+/// This side's inbox of received application messages (peripheral: from the
+/// central's `SPLIT_APP_TX`; central: from the peripheral's
+/// `SPLIT_APP_PERIPH_TX`). Filled with `try_send` (drop-on-full) by the
+/// split read loops.
 pub static SPLIT_APP_RX: Channel<RawMutex, SplitAppData, 8> = Channel::new();
+
+/// Peripheral → central queue, drained by `SplitPeripheral` while the link
+/// is up. Producers MUST use `try_send`. Small: the application announces
+/// tiny, rare state (e.g. its build identity once per link-up).
+pub static SPLIT_APP_PERIPH_TX: Channel<RawMutex, SplitAppData, 2> = Channel::new();
 
 /// Split-link state for the application: on the central, "peripheral link
 /// up"; on the peripheral, "central link up". Written by the split driver at

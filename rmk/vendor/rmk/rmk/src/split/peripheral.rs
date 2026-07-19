@@ -114,6 +114,10 @@ impl<S: SplitWriter + SplitReader> SplitPeripheral<S> {
                     },
                     e = pointing_sub.next_message_pure().fuse() => SplitMessage::Pointing(e),
                     with_feature("_ble"): e = battery_sub.next_event().fuse() => SplitMessage::BatteryStatus(e),
+                    // GLOVE80 PATCH: peripheral → central application
+                    // messages, deliberately the last (lowest-priority)
+                    // outgoing arm behind key events.
+                    m = crate::split_app_pipe::SPLIT_APP_PERIPH_TX.receive().fuse() => SplitMessage::Application(m),
                 }
             };
 

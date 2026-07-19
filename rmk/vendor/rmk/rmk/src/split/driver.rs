@@ -220,6 +220,14 @@ impl<const ROW: usize, const COL: usize, const ROW_OFFSET: usize, const COL_OFFS
             },
             // Non-key events are drop-on-full to keep the split read loop responsive.
             SplitMessage::Pointing(e) => publish_event(e),
+            // GLOVE80 PATCH: forward peripheral → central application
+            // payloads into the (symmetric) inbox; drop-on-full so a slow
+            // consumer can never stall the split read loop.
+            SplitMessage::Application(data) => {
+                if crate::split_app_pipe::SPLIT_APP_RX.try_send(data).is_err() {
+                    warn!("split app message dropped (inbox full)");
+                }
+            }
             #[cfg(feature = "_ble")]
             SplitMessage::BatteryStatus(state) => {
                 publish_event(crate::event::PeripheralBatteryEvent { id: self.id, state })
