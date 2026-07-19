@@ -535,6 +535,7 @@ mod tests {
             overlay_cell_capacity: 80,
             max_message_len: MAX_MESSAGE_LEN as u16,
             feature_bits: 0x3F,
+            max_config_blob_len: 0,
         }
     }
 

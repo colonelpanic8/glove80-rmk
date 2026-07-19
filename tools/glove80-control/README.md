@@ -59,6 +59,43 @@ validated against what the device advertises.
   host protocol (asks for confirmation unless `--yes`). With a positional
   `left`/`right` target it uses the legacy Studio serial path instead.
 
+## Persistent lighting config (host protocol v1.1)
+
+The canonical lighting configuration is a human-editable TOML file
+(`examples/lighting-default.toml` approximates the compiled-in defaults and
+is the recommended starting point). It encodes to the protocol's config
+blob, which the firmware applies **transactionally**: after a successful
+apply the new config is active and survives reboots; any failure leaves the
+previous config untouched.
+
+- Workflow: edit the TOML → `config validate` (offline) → `config apply`
+  → reboot the keyboard and the config persists. `config export` makes a
+  backup of whatever is active.
+- `config validate FILE` — offline parse + the exact validation the
+  firmware runs before commit (`.json` files keep the legacy canonical
+  keymap-schema check). No device needed.
+- `config apply FILE [--dry-run]` — parse and validate client-side (also
+  against the advertised feature bit and `max_config_blob_len`), then run
+  the CONFIG_BEGIN → chunked CONFIG_DATA → CONFIG_COMMIT session, reporting
+  each stage. `FILE` is canonical TOML or a raw blob (detected by the
+  `G80L` magic or a `.bin` extension). `--dry-run` stops before touching
+  the device.
+- `config export FILE [--raw]` — read the active blob back
+  (byte-stable) and write canonical TOML, or the raw blob with `--raw`.
+  A device still on compiled defaults reports that clearly instead of
+  exporting anything.
+- `config show` — summary table of the active config: records,
+  activations, cell counts/keys, effects, and toggle persistence.
+- TOML format: optional `[[toggle]]` entries (`id`, optional `name`,
+  `persist`, `initial_on`) plus ordered `[[record]]` entries with
+  `activation = "always" | { layer = N } | { toggle = N }` and
+  `cells = [{ keys = "0-5,12", color = "#RRGGBB"|named, effect =
+  "solid|blink|breathe", period_ms, phase_ms, duty_pct }]` (`keys` uses the
+  same list/range syntax as `lighting set`).
+- Comments and toggle names live only in the file — they never enter the
+  blob, so they are absent from a later export. Keep your edited TOML in
+  version control; the device round-trips the semantics, not the prose.
+
 Partial application (peripheral half offline) is reported, never hidden:
 overlay writes print the keys still pending on the peripheral.
 

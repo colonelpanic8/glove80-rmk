@@ -13,8 +13,9 @@ use anyhow::{anyhow, bail, Context, Result};
 use glove80_host_protocol::frame::{frame_count, write_frame, Reassembler};
 use glove80_host_protocol::{
     encode_request, feature, BootTarget, Capabilities, CellState, CellWrite, EffectKind, Request,
-    Response, ResponsePayload, Status, BOOTLOADER_MAGIC, MAX_CELLS_PER_MESSAGE, MAX_MESSAGE_LEN,
-    MAX_PING_LEN, PROTOCOL_VERSION_MAJOR, PROTOCOL_VERSION_MINOR,
+    Response, ResponsePayload, Status, BOOTLOADER_MAGIC, MAX_CELLS_PER_MESSAGE,
+    MAX_CONFIG_DATA_PER_MESSAGE, MAX_MESSAGE_LEN, MAX_PING_LEN, PROTOCOL_VERSION_MAJOR,
+    PROTOCOL_VERSION_MINOR, REQUEST_HEADER_LEN,
 };
 
 use crate::transport::Transport;
@@ -31,6 +32,17 @@ impl fmt::Display for NoResponse {
 }
 
 impl std::error::Error for NoResponse {}
+
+/// Progress milestones of a transactional config apply session.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ApplyStage {
+    /// CONFIG_BEGIN accepted.
+    Begun { total_len: usize, blob_crc32: u32 },
+    /// A CONFIG_DATA chunk was accepted; `bytes` of `total` transferred.
+    Sent { bytes: usize, total: usize },
+    /// CONFIG_COMMIT accepted: the new config is active and durable.
+    Committed,
+}
 
 /// Result of an overlay write, batches merged.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -53,6 +65,16 @@ pub fn status_name(status: Status) -> &'static str {
         Status::UnknownToggle => "UNKNOWN_TOGGLE (toggle id not configured)",
         Status::BadMagic => "BAD_MAGIC (bootloader entry without the magic constant)",
         Status::UnsupportedVersion => "UNSUPPORTED_VERSION (client protocol major not supported)",
+        Status::NoSession => "NO_SESSION (no config transfer session is open)",
+        Status::BadOffset => {
+            "BAD_OFFSET (config chunk out of sequence or past the announced length; \
+             the session was aborted)"
+        }
+        Status::ConfigIncomplete => {
+            "CONFIG_INCOMPLETE (commit before all announced bytes arrived)"
+        }
+        Status::CrcMismatch => "CRC_MISMATCH (assembled config blob failed its CRC check)",
+        Status::InvalidConfig => "INVALID_CONFIG (the blob failed structural validation)",
     }
 }
 
@@ -334,6 +356,131 @@ impl HostClient {
         match (response.status, response.payload) {
             (Status::Ok, ResponsePayload::Toggle { id, state }) => Ok((id, state)),
             (status, _) => Err(status_error("the toggle request", status)),
+        }
+    }
+
+    /// Capability gate for the persistent-config commands: feature bit 6
+    /// must be advertised, and the advertised blob ceiling is returned.
+    pub fn config_capabilities(&mut self) -> Result<Capabilities> {
+        let capabilities =
+            self.require_feature(feature::PERSISTENT_CONFIG, "persistent configuration")?;
+        if capabilities.max_config_blob_len == 0 {
+            bail!("keyboard advertised persistent configuration but max_config_blob_len = 0");
+        }
+        Ok(capabilities)
+    }
+
+    /// Largest CONFIG_DATA chunk that fits both the protocol bound and the
+    /// device's advertised max message length.
+    fn config_chunk_len(&mut self) -> Result<usize> {
+        let capabilities = self.config_capabilities()?;
+        // CONFIG_DATA payload = offset u32 + data; the whole message also
+        // carries the request header.
+        let by_message = (capabilities.max_message_len as usize)
+            .min(MAX_MESSAGE_LEN)
+            .saturating_sub(REQUEST_HEADER_LEN + 4);
+        let chunk = by_message.min(MAX_CONFIG_DATA_PER_MESSAGE);
+        if chunk == 0 {
+            bail!("keyboard advertised a max message length too small for CONFIG_DATA");
+        }
+        Ok(chunk)
+    }
+
+    /// One CONFIG_* exchange that answers with an empty OK payload.
+    fn config_call(&mut self, operation: &str, request: &Request) -> Result<()> {
+        let response = self.call(request)?;
+        match response.status {
+            Status::Ok => Ok(()),
+            status => Err(status_error(operation, status)),
+        }
+    }
+
+    /// Run one full transactional apply session:
+    /// CONFIG_BEGIN → chunked CONFIG_DATA → CONFIG_COMMIT.
+    ///
+    /// `stage` is called as each stage completes, for progress reporting.
+    /// On any failure after BEGIN a best-effort CONFIG_ABORT is sent; either
+    /// way the device keeps its previous configuration.
+    pub fn apply_config(
+        &mut self,
+        blob: &[u8],
+        mut stage: impl FnMut(ApplyStage),
+    ) -> Result<()> {
+        let capabilities = self.config_capabilities()?;
+        if blob.len() > capabilities.max_config_blob_len as usize {
+            bail!(
+                "config blob is {} bytes but the keyboard accepts at most {}",
+                blob.len(),
+                capabilities.max_config_blob_len
+            );
+        }
+        let chunk_len = self.config_chunk_len()?;
+        let crc = glove80_host_protocol::crc32(blob);
+        self.config_call(
+            "the config session open (CONFIG_BEGIN)",
+            &Request::ConfigBegin { total_len: blob.len() as u32, blob_crc32: crc },
+        )?;
+        stage(ApplyStage::Begun { total_len: blob.len(), blob_crc32: crc });
+
+        let mut sent = 0usize;
+        for chunk in blob.chunks(chunk_len) {
+            let data = heapless::Vec::from_slice(chunk).expect("chunk fits codec capacity");
+            let result = self.config_call(
+                "the config data transfer (CONFIG_DATA)",
+                &Request::ConfigData { offset: sent as u32, data },
+            );
+            if let Err(error) = result {
+                // Leave no half-open session behind; BAD_OFFSET already
+                // aborted it device-side, ABORT is idempotent regardless.
+                let _ = self.config_call("the config abort", &Request::ConfigAbort);
+                return Err(error);
+            }
+            sent += chunk.len();
+            stage(ApplyStage::Sent { bytes: sent, total: blob.len() });
+        }
+
+        self.config_call("the config commit (CONFIG_COMMIT)", &Request::ConfigCommit)?;
+        stage(ApplyStage::Committed);
+        Ok(())
+    }
+
+    /// CONFIG_READ loop: fetch the active blob `0..total_len`. Returns an
+    /// empty vector when the device runs on compiled defaults (no stored
+    /// config, `total_len = 0`).
+    pub fn read_config(&mut self) -> Result<Vec<u8>> {
+        let capabilities = self.config_capabilities()?;
+        // CONFIG_READ response payload = total_len u32 + data.
+        let max_len = (capabilities.max_message_len as usize)
+            .min(MAX_MESSAGE_LEN)
+            .saturating_sub(glove80_host_protocol::RESPONSE_HEADER_LEN + 4)
+            .min(MAX_CONFIG_DATA_PER_MESSAGE)
+            .min(u16::MAX as usize) as u16;
+        let mut blob = Vec::new();
+        loop {
+            let response = self.call(&Request::ConfigRead {
+                offset: blob.len() as u32,
+                max_len,
+            })?;
+            let (total_len, data) = match (response.status, response.payload) {
+                (Status::Ok, ResponsePayload::ConfigData { total_len, data }) => {
+                    (total_len as usize, data)
+                }
+                (status, _) => return Err(status_error("the config read", status)),
+            };
+            if blob.len() + data.len() > total_len {
+                bail!("CONFIG_READ returned more bytes than the announced total length");
+            }
+            blob.extend_from_slice(&data);
+            if blob.len() == total_len {
+                return Ok(blob);
+            }
+            if data.is_empty() {
+                bail!(
+                    "CONFIG_READ stalled at {} of {} bytes (empty chunk before the end)",
+                    blob.len(),
+                    total_len
+                );
+            }
         }
     }
 

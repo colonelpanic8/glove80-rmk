@@ -12,6 +12,7 @@ crc32fast = "1.4"
 serialport = { version = "4.7", default-features = false }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+toml = "0.8"
 # RMK host protocol (Phase 2): shared wire codec + transports.
 glove80-host-protocol = { path = "../../protocol/glove80-host-protocol", features = ["std"] }
 heapless = { version = "0.8", default-features = false }

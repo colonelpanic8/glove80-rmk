@@ -9,6 +9,7 @@ use clap::{Parser, Subcommand, ValueEnum};
 
 mod config;
 mod hostproto;
+mod lightcfg;
 mod lighting;
 pub mod runtime_manifest;
 mod transport;
@@ -43,7 +44,9 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    /// Manage canonical runtime configuration.
+    /// Manage canonical configuration: keymap schema validation, and the
+    /// persistent lighting config (apply/export/show/validate over the
+    /// host protocol v1.1).
     Config {
         #[command(subcommand)]
         command: ConfigCommand,
@@ -110,13 +113,46 @@ enum Command {
 
 #[derive(Subcommand)]
 enum ConfigCommand {
-    /// Parse and semantically validate a canonical configuration file.
+    /// Parse and semantically validate a configuration file, offline.
+    ///
+    /// A `.json` file is checked against the canonical runtime keymap
+    /// schema. Anything else is treated as a persistent *lighting* config:
+    /// canonical TOML (see `examples/lighting-default.toml`) or a raw
+    /// config blob, validated with the exact checks the firmware runs.
     Validate {
         path: PathBuf,
-        /// Validate against a target firmware's total layer capacity.
+        /// Validate against a target firmware's total layer capacity
+        /// (canonical keymap JSON only).
         #[arg(long, value_name = "COUNT")]
         layer_capacity: Option<usize>,
     },
+    /// Transactionally apply a persistent lighting config to the keyboard
+    /// (host protocol v1.1: CONFIG_BEGIN → CONFIG_DATA… → CONFIG_COMMIT).
+    ///
+    /// FILE is canonical TOML (start from `examples/lighting-default.toml`)
+    /// or a raw config blob (detected by content or a `.bin` extension).
+    /// The device activates and persists either the complete new config or
+    /// keeps the old one — never a hybrid. Comments in the TOML are lost
+    /// if you later re-export from the device.
+    Apply {
+        file: PathBuf,
+        /// Validate and print the summary without touching the device.
+        #[arg(long)]
+        dry_run: bool,
+    },
+    /// Export the keyboard's active lighting config to a file.
+    ///
+    /// Writes canonical TOML by default (comments and toggle names from
+    /// your original file are not stored on the device and will be
+    /// absent), or the raw byte-stable blob with --raw.
+    Export {
+        file: PathBuf,
+        /// Write the raw config blob instead of TOML.
+        #[arg(long)]
+        raw: bool,
+    },
+    /// Read the keyboard's active lighting config and print a summary.
+    Show,
 }
 
 #[derive(Clone, Copy, ValueEnum)]
@@ -825,22 +861,43 @@ fn hostproto_selector(cli: &Cli) -> transport::Selector {
 }
 
 fn run(cli: Cli) -> Result<()> {
-    if let Command::Config {
-        command: ConfigCommand::Validate {
-            path,
-            layer_capacity,
-        },
-    } = &cli.command
-    {
-        let configuration = config::read_and_validate(path, *layer_capacity)?;
-        println!(
-            "Valid schema v{} configuration: {} layers, {} lighting layers, {} toggles",
-            configuration.schema_version,
-            configuration.layers.len(),
-            configuration.lighting_layers.len(),
-            configuration.toggles.len()
-        );
-        return Ok(());
+    if let Command::Config { command } = &cli.command {
+        match command {
+            ConfigCommand::Validate {
+                path,
+                layer_capacity,
+            } => {
+                // Canonical keymap JSON keeps the legacy path; everything
+                // else is a persistent lighting config (TOML or raw blob).
+                let is_json = path
+                    .extension()
+                    .is_some_and(|extension| extension.eq_ignore_ascii_case("json"));
+                if is_json {
+                    let configuration = config::read_and_validate(path, *layer_capacity)?;
+                    println!(
+                        "Valid schema v{} configuration: {} layers, {} lighting layers, {} toggles",
+                        configuration.schema_version,
+                        configuration.layers.len(),
+                        configuration.lighting_layers.len(),
+                        configuration.toggles.len()
+                    );
+                    return Ok(());
+                }
+                if layer_capacity.is_some() {
+                    bail!("--layer-capacity applies only to canonical keymap JSON files");
+                }
+                return lightcfg::run_validate(path);
+            }
+            ConfigCommand::Apply { file, dry_run } => {
+                return lightcfg::run_apply(&hostproto_selector(&cli), file, *dry_run);
+            }
+            ConfigCommand::Export { file, raw } => {
+                return lightcfg::run_export(&hostproto_selector(&cli), file, *raw);
+            }
+            ConfigCommand::Show => {
+                return lightcfg::run_show(&hostproto_selector(&cli));
+            }
+        }
     }
 
     if let Command::Lighting { command } = &cli.command {
