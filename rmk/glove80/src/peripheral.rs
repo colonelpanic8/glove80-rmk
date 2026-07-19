@@ -1,6 +1,11 @@
 #![no_main]
 #![no_std]
 
+// `lighting` selects on the host-request channel, so the module is compiled
+// on both halves; the peripheral registers no transport pump, so the channel
+// never fires here (host transports are Phase 2 central-only, and Phase 3
+// split forwarding will reuse this seam).
+mod host_proto;
 mod lighting;
 
 use rmk::macros::rmk_peripheral;

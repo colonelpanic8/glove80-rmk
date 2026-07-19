@@ -1,6 +1,8 @@
 #![no_main]
 #![no_std]
 
+mod host_proto;
+mod host_pump;
 mod lighting;
 
 use rmk::macros::rmk_central;
@@ -15,5 +17,16 @@ mod keyboard_central {
     #[register_processor(event)]
     fn lighting_processor() {
         crate::lighting::init(p.SPI3, p.P0_27, p.P0_31, p.PWM0, p.P1_15)
+    }
+
+    /// Host-protocol transport pumps (Phase 2, central only): reassemble and
+    /// decode protocol messages from the USB vendor raw-HID interface and the
+    /// custom GATT service, hand them to the lighting task (which owns the
+    /// compositor), and frame the responses back out. Its overridden
+    /// `process_loop` never subscribes to events, so no `layer_change`
+    /// subscriber slot is consumed.
+    #[register_processor(event)]
+    fn host_transport_pump() {
+        crate::host_pump::TransportPump
     }
 }

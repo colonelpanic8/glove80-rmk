@@ -30,7 +30,7 @@
 //! encode time. Callers cannot bypass the clamp; the compositor's runtime
 //! ceiling can only lower the limit further, never raise it.
 
-use embassy_futures::select::{Either, select};
+use embassy_futures::select::{Either, Either3, select, select3};
 use embassy_nrf::gpio::{Level, Output, OutputDrive, Pin};
 use embassy_nrf::peripherals::{PWM0, SPI3};
 use embassy_nrf::pwm::{DutyCycle, Prescaler, SimpleConfig, SimplePwm};
@@ -174,9 +174,11 @@ const LAYER_ACCENT_KEYS: [u8; 7] = [0, 1, 2, 6, 7, 8, 9];
 ///   replacing the base on keys 0-2 while the bottom thumb row (3-5) keeps
 ///   showing the base through — composition and reveal are both visible on
 ///   hardware.
-/// - Two host-overlay cells exercising animation and TTL before the host
-///   protocol exists (see below).
-fn default_compositor(now_ms: u64) -> Compositor<NUM_LEDS> {
+///
+/// The host overlay starts empty: it is fed live by the host protocol
+/// (`src/host_proto.rs` on the central; the Phase 1 hardcoded placeholder
+/// cells are gone).
+fn default_compositor() -> Compositor<NUM_LEDS> {
     let mut c = Compositor::new();
 
     let mut base = Record::new(Activation::Always);
@@ -193,28 +195,6 @@ fn default_compositor(now_ms: u64) -> Compositor<NUM_LEDS> {
         }
         c.add_record(accents).unwrap();
     }
-
-    // PHASE 2 PLACEHOLDERS -- delete when the host protocol feeds the
-    // overlay. Hardcoded host-overlay cells so hardware testing exercises
-    // composition, animation, and TTL expiry before any host exists:
-    // - chain index 10 (innermost top-row grid key): amber 1 Hz blink at 50%
-    //   duty, no TTL (survives until reboot).
-    // - chain index 34 (outermost top-row grid key): purple 3 s breathe that
-    //   expires -- and goes dark -- 30 s after boot.
-    c.host_set(
-        10,
-        Cell::Blink { color: Rgb::new(255, 128, 0), period_ms: 1000, phase_ms: 0, duty_pct: 50 },
-        None,
-        now_ms,
-    )
-    .unwrap();
-    c.host_set(
-        34,
-        Cell::Breathe { color: Rgb::new(128, 0, 255), period_ms: 3000, phase_ms: 0 },
-        Some(30_000),
-        now_ms,
-    )
-    .unwrap();
 
     c
 }
@@ -278,7 +258,7 @@ pub fn init(
 
     LightingProcessor {
         chain: Ws2812Chain::new(spi, data_pin),
-        compositor: default_compositor(now_ms()),
+        compositor: default_compositor(),
         next_wake_ms: None,
         power_ready_at,
         _chain_power: chain_power,
@@ -295,6 +275,18 @@ impl LightingProcessor {
         if out.changed {
             self.chain.write(&out.frame).await;
         }
+    }
+
+    /// Apply one host-protocol request. This task owns the compositor, so
+    /// ALL host mutation funnels through here; the pure request semantics
+    /// live in [`crate::host_proto::apply`]. The response is routed back to
+    /// the requesting transport, then the frame re-renders immediately so a
+    /// host write is visible without waiting for another event.
+    async fn process_host_request(&mut self, req: crate::host_proto::HostRequest) {
+        let response =
+            crate::host_proto::apply(&mut self.compositor, req.request_id, &req.request, now_ms());
+        crate::host_proto::respond(req.transport, response).await;
+        self.render_at(now_ms()).await;
     }
 }
 
@@ -317,18 +309,30 @@ impl Processor for LightingProcessor {
     }
 
     /// Overrides the default loop: one initial frame after the chain rail
-    /// settles, then sleep on `select(next_wake deadline, next event)`. The
-    /// subscriber is created first so no early layer change is lost; when
-    /// the compositor reports nothing upcoming, no timer is armed at all.
+    /// settles, then sleep on `select(next_wake deadline, next event, next
+    /// host request)`. The subscriber is created first so no early layer
+    /// change is lost; when the compositor reports nothing upcoming, no
+    /// timer is armed at all. Host requests arrive from the transport pumps
+    /// (`src/host_proto.rs`) and are the only path that mutates the host
+    /// overlay, brightness, or toggles — this task stays the compositor's
+    /// single owner. (On the peripheral no pump runs, so that select arm
+    /// simply never fires.)
     async fn process_loop(&mut self) -> ! {
         let mut sub = Self::subscriber();
         Timer::at(self.power_ready_at).await;
         self.render_at(now_ms()).await;
+        let requests = crate::host_proto::HOST_REQUESTS.receiver();
         loop {
             match self.next_wake_ms {
                 Some(wake) => {
-                    match select(Timer::at(Instant::from_millis(wake)), sub.next_event()).await {
-                        Either::First(()) => {
+                    match select3(
+                        Timer::at(Instant::from_millis(wake)),
+                        sub.next_event(),
+                        requests.receive(),
+                    )
+                    .await
+                    {
+                        Either3::First(()) => {
                             // Tick-to-ms floor rounding can fire a hair
                             // early; clamp so the compositor sees the
                             // requested boundary as reached and always makes
@@ -336,13 +340,14 @@ impl Processor for LightingProcessor {
                             let now = now_ms().max(wake);
                             self.render_at(now).await;
                         }
-                        Either::Second(event) => self.process(event).await,
+                        Either3::Second(event) => self.process(event).await,
+                        Either3::Third(req) => self.process_host_request(req).await,
                     }
                 }
-                None => {
-                    let event = sub.next_event().await;
-                    self.process(event).await;
-                }
+                None => match select(sub.next_event(), requests.receive()).await {
+                    Either::First(event) => self.process(event).await,
+                    Either::Second(req) => self.process_host_request(req).await,
+                },
             }
         }
     }

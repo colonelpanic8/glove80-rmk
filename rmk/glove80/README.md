@@ -119,17 +119,64 @@ What to observe when flashing (per half, in order):
    (right half after the layer sync): 1 Lower green, 2 Magic (held)
    magenta, 3 Games (toggle) red, 4 Mac Hyper (toggle) cyan; returning to
    base restores blue and the bottom thumb row never changes.
-4. Host-overlay placeholders (hardcoded Phase 2 stand-ins, marked in
-   `default_compositor`): the innermost top-row grid key blinks amber at
-   1 Hz / 50% duty for as long as the half is powered, and the outermost
-   top-row grid key breathes purple on a 3 s period until it expires — goes
-   dark — 30 s after boot (per-cell TTL). Together they prove composition,
-   animation timing, and firmware-side TTL expiry with no host attached.
+4. The host overlay starts empty (the Phase 1 hardcoded amber-blink /
+   purple-breathe placeholders are gone): any blink/breathe/TTL behavior on
+   top of the base + layer accents now comes from a live host writing the
+   overlay through the Phase 2 protocol (see "Host protocol transports").
 5. All other key LEDs stay dark (the frame drives them off explicitly, so
    no stale bootloader colors persist).
 6. Typing latency/split behavior should be unchanged; lighting renders only
    on layer events and self-scheduled animation deadlines, and unchanged
    frames are not even written to the chain.
+
+## Host protocol transports (Phase 2)
+
+The host protocol (`protocol/glove80-host-protocol/PROTOCOL.md`, including
+its "Transports" addendum) is exposed on the **central (left) half** over
+both USB and BLE. Protocol work is split three ways:
+
+- **Vendored RMK patches** (`../vendor/rmk`, every site marked
+  `GLOVE80 PATCH`): a vendor raw-HID interface on the USB composite
+  (`HostProtocolReport`, usage page `0xFF88` / usage `0x01`, 32-byte IN/OUT
+  reports — deliberately not multiplexed onto Vial's `0xFF60` interface,
+  whose opcodes collide) and a custom GATT service
+  (`fc550001-f8e0-459f-b421-c254fc42b138`; request characteristic
+  `fc550002-…` write-without-response, response characteristic `fc550003-…`
+  notify — not a HID service, so Web Bluetooth can reach it via
+  `optionalServices`). The patches contain zero protocol knowledge: they
+  only shuttle opaque chunks through `rmk::host_proto_pipe` channels and
+  publish the negotiated ATT payload size.
+- **Transport pumps** (`src/host_pump.rs`, central only, registered as one
+  extra RMK processor): reassemble chunks (`Reassembler<1536>` per
+  transport), decode with the shared codec crate, hand the request to the
+  lighting task, then encode + frame the response back out (32-byte padded
+  reports on USB, ATT-payload-sized notifications on BLE). One message in
+  flight per transport by construction; malformed/unknown requests still get
+  their one response (status `MALFORMED` / `UNKNOWN_COMMAND` /
+  `CAPACITY_EXCEEDED`).
+- **Semantics** (`src/host_proto.rs`, shared): `apply()` runs inside the
+  `LightingProcessor` select loop, so the compositor keeps exactly one owner.
+  Capabilities advertise 40+40 keys, 8 layers, effects solid/blink/breathe,
+  `max_cells_per_op` 80, overlay capacity 80, and feature bits
+  TTL/toggles/bootloader/atomic-replace/read-back/partial-apply — all backed
+  by working code paths.
+
+Phase 2 split scope (documented in the PROTOCOL.md addendum): keys 0-39
+apply locally; keys 40-79 are accepted and reported pending via
+`PARTIAL_APPLY` but then dropped until Phase 3 forwards them (they never
+render and are absent from `READ_OVERLAY`; `CLEAR_OVERLAY` answers `OK`).
+Toggle ids 0-31 are accepted (the compositor's toggle bitmask; no default
+records reference them yet, so they have no visual effect until lighting
+config gains toggle records). `ENTER_BOOTLOADER` on target central answers
+OK, waits ~300 ms for the response to flush, then reboots via the Adafruit
+bootloader GPREGRET magic; target peripheral answers `OUT_OF_RANGE` until
+Phase 3.
+
+RMK is now consumed as a **vendored git subtree** at the previously pinned
+revision `1156f82` (`rmk/vendor/rmk`; implementation-plan.md expected this at
+Phase 3) because both the USB composite and the trouble-host GATT server are
+assembled inside RMK with no extension hook. `git log --grep=git-subtree-dir`
+shows the subtree provenance; keep patches minimal and marked.
 
 ## Building
 
@@ -138,8 +185,10 @@ What to observe when flashing (per half, in order):
 ```
 
 produces `glove80_lh_rmk.uf2` and `glove80_rh_rmk.uf2`. The toolchain is
-pinned in `rust-toolchain.toml`; RMK and nrf-sdc are pinned to exact revisions
-in `Cargo.toml`.
+pinned in `rust-toolchain.toml`; RMK is consumed from the vendored subtree at
+`../vendor/rmk` (frozen at the previously pinned upstream revision, plus the
+marked Glove80 patches) and nrf-sdc stays pinned to an exact revision in
+`Cargo.toml`.
 
 The compositor's contract tests run on the host:
 
@@ -186,10 +235,18 @@ uses the explicit `start_addr = 0xec000`. The warnings are cosmetic.
       right `0x26000`-`0x6dde4`.
 - [ ] Phase 1: sparse lighting compositor (built, awaiting hardware test).
       Pure-logic compositor crate (28 host tests passing) replaces the
-      stage-5 frame source on both halves: base + layer accents + hardcoded
-      host-overlay blink/breathe/TTL placeholders (see "Lighting" above).
+      stage-5 frame source on both halves: base + layer accents (the
+      hardcoded host-overlay placeholders it shipped with were replaced by
+      the real Phase 2 host protocol; see "Lighting" above).
       UF2 ranges after the change: left `0x26000`-`0x959f4`, right
       `0x26000`-`0x6ea7c`.
+- [ ] Phase 2: host protocol transports (built, awaiting hardware test).
+      Central exposes the host protocol over a USB vendor raw-HID interface
+      and a custom GATT service, feeding the compositor's host overlay (see
+      "Host protocol transports" above); the Phase 1 hardcoded overlay
+      placeholders are removed. RMK vendored as a subtree under
+      `rmk/vendor/rmk` with marked patches. UF2 ranges after the change:
+      left `0x26000`-`0x98da4`, right `0x26000`-`0x6f89c`.
 
 ## Safety rules for flashing
 

@@ -233,6 +233,60 @@ Every transport chunk (one HID report / one ATT write or notification):
 - The message header's `payload_len` cross-checks reassembly: total
   reassembled length must equal header length + `payload_len`.
 
+## Transports
+
+How the frame layer maps onto the physical transports the Glove80 RMK
+firmware exposes (Phase 2). Both transports terminate on the **central (left)
+half**; the peripheral has no host-facing transport. One request/response
+exchange is in flight per transport at a time (enforced device-side: the next
+request frame is not consumed until the previous response is fully framed
+out).
+
+### USB raw HID
+
+- A dedicated vendor raw-HID interface on the keyboard's composite USB
+  device (VID `0x16C0`, PID `0x27DB`), separate from the keyboard, composite
+  and Vial interfaces.
+- Match it by HID usage page **`0xFF88`**, usage **`0x01`** (Vial's raw-HID
+  interface is usage page `0xFF60`/usage `0x61` — do not confuse them; the
+  opcode spaces collide).
+- Reports: 32-byte IN and 32-byte OUT, no report IDs. Every report is one
+  frame-layer chunk, zero-padded to 32 bytes (≤ 30 payload bytes/report).
+
+### BLE GATT
+
+- A custom primary service (deliberately **not** a HID service, so Web
+  Bluetooth can reach it; it is not in the advertising payload — Web
+  Bluetooth clients must list it in `optionalServices`):
+
+| role | UUID |
+| --- | --- |
+| service | `fc550001-f8e0-459f-b421-c254fc42b138` |
+| request characteristic (host → keyboard) | `fc550002-f8e0-459f-b421-c254fc42b138` |
+| response characteristic (keyboard → host) | `fc550003-f8e0-459f-b421-c254fc42b138` |
+
+- Requests: **write-without-response** to the request characteristic, one
+  frame-layer chunk per write, unpadded. Chunk size ≤
+  `min(negotiated ATT payload, 257)` (257 = 2-byte frame header + the
+  255-byte max chunk payload).
+- Responses: **notifications** on the response characteristic (subscribe via
+  CCCD first), one chunk per notification, unpadded, sized to
+  `min(negotiated ATT payload, 257)` as observed when the request arrived.
+- Like the rest of the GATT database, the service requires an encrypted
+  (bonded) connection.
+
+### Phase 2 device status
+
+- Key indices `0..40` (left half) apply immediately on the central. Indices
+  `40..80` (right half) are accepted and acknowledged as pending via
+  `PARTIAL_APPLY`, but until split forwarding lands (Phase 3) the pending
+  cells are **dropped**: they never render, do not appear in `READ_OVERLAY`,
+  and `CLEAR_OVERLAY` answers plain `OK` (the right half can hold no host
+  cells yet, so a clear is trivially complete).
+- `ENTER_BOOTLOADER` target 1 (peripheral) is not yet reachable and answers
+  `OUT_OF_RANGE` (the protocol has no dedicated "unsupported" status);
+  target 0 (central) works via the Adafruit bootloader.
+
 ## Constants
 
 | name | value |
