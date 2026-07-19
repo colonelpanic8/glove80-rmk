@@ -110,7 +110,15 @@ fn vial_config_generation() {
 /// rebuild that runs this script anyway.
 fn version_embedding() {
     // Two levels up: <repo root>/.git/HEAD (this crate is rmk/glove80).
+    // HEAD only changes on checkout/branch switch; ordinary commits move the
+    // branch ref file instead, so watch that too or the embedded hash goes
+    // stale until an unrelated rebuild.
     println!("cargo:rerun-if-changed=../../.git/HEAD");
+    if let Ok(head) = fs::read_to_string("../../.git/HEAD")
+        && let Some(refpath) = head.trim().strip_prefix("ref: ")
+    {
+        println!("cargo:rerun-if-changed=../../.git/{refpath}");
+    }
 
     let hash = Command::new("git")
         .args(["rev-parse", "--short=8", "HEAD"])

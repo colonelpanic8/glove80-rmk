@@ -81,6 +81,20 @@ impl<S: SplitWriter + SplitReader> SplitPeripheral<S> {
         // GLOVE80 PATCH: expose the split-link state to the application.
         // `run` executes exactly while a central session is up (for BLE it is
         // invoked per connection and returns on disconnect).
+        //
+        // As on the central side (split/driver.rs), the link-down edge MUST
+        // come from a drop guard: this future can be cancelled from outside
+        // when the session dies, so no in-line `send(false)` is guaranteed to
+        // run. Without the false edge, reconnects look like true->true and
+        // link-up-triggered behavior (e.g. the version announcement) never
+        // re-arms.
+        struct LinkDownGuard;
+        impl Drop for LinkDownGuard {
+            fn drop(&mut self) {
+                crate::split_app_pipe::SPLIT_APP_LINK.sender().send(false);
+            }
+        }
+        let _link_guard = LinkDownGuard;
         let app_link = crate::split_app_pipe::SPLIT_APP_LINK.sender();
         app_link.send(true);
 
