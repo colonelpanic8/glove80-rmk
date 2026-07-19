@@ -7,7 +7,7 @@ import {
   type LightingConfig,
   type Request,
 } from "./host-protocol";
-import { MockKeyboard, MOCK_CAPABILITIES } from "./mock-device";
+import { MockKeyboard, MOCK_CAPABILITIES, MOCK_CENTRAL_VERSION, NEVER_SEEN_VERSION } from "./mock-device";
 
 const SOLID_RED: Effect = { kind: "solid", r: 255, g: 0, b: 0, periodMs: 0, phaseMs: 0, dutyPercent: 0 };
 const BLINK_BLUE: Effect = { kind: "blink", r: 0, g: 0, b: 255, periodMs: 1000, phaseMs: 0, dutyPercent: 50 };
@@ -216,5 +216,110 @@ describe("MockKeyboard config session", () => {
   it("rejects a blob beyond max_config_blob_len at BEGIN", () => {
     const keyboard = new MockKeyboard({ capabilities: { maxConfigBlobLen: 64 } });
     expect(send(keyboard, { command: "configBegin", totalLen: 65, blobCrc32: 0 }).status).toBe("capacityExceeded");
+  });
+});
+
+describe("MockKeyboard keymap", () => {
+  it("reads the seeded base layer in chunks with the spec count rule", () => {
+    const keyboard = new MockKeyboard();
+    const first = send(keyboard, { command: "keymapRead", layer: 0, startKey: 0, maxCount: 84 });
+    expect(first.status).toBe("ok");
+    const payload = first.payload as { type: "keymapActions"; keycodes: number[] };
+    expect(payload.keycodes).toHaveLength(84);
+    expect(payload.keycodes[0]).toBe(0x003a); // KC_F1 at r0,c0
+    // Holes read back KC_NO.
+    for (const hole of [5, 8, 75, 78]) expect(payload.keycodes[hole]).toBe(0x0000);
+    // Count clamps to the end of the grid.
+    const tail = send(keyboard, { command: "keymapRead", layer: 0, startKey: 80, maxCount: 84 });
+    expect((tail.payload as { keycodes: number[] }).keycodes).toHaveLength(4);
+    // maxCount 0 answers count 0.
+    const empty = send(keyboard, { command: "keymapRead", layer: 3, startKey: 0, maxCount: 0 });
+    expect((empty.payload as { keycodes: number[] }).keycodes).toHaveLength(0);
+    // Upper layers default to transparent.
+    const upper = send(keyboard, { command: "keymapRead", layer: 1, startKey: 0, maxCount: 4 });
+    expect((upper.payload as { keycodes: number[] }).keycodes).toEqual([1, 1, 1, 1]);
+  });
+
+  it("rejects out-of-range reads", () => {
+    const keyboard = new MockKeyboard();
+    expect(send(keyboard, { command: "keymapRead", layer: 8, startKey: 0, maxCount: 1 }).status).toBe("outOfRange");
+    expect(send(keyboard, { command: "keymapRead", layer: 0, startKey: 84, maxCount: 1 }).status).toBe("outOfRange");
+  });
+
+  it("writes are all-or-nothing and echo the canonical read-back", () => {
+    const keyboard = new MockKeyboard();
+    const before = keyboard.keycodeAt(0, 0);
+    // One bad entry rejects the whole batch; nothing changes.
+    const rejected = send(keyboard, {
+      command: "keymapWrite",
+      entries: [
+        { layer: 0, key: 0, keycode: 0x0004 },
+        { layer: 0, key: 84, keycode: 0x0004 },
+      ],
+    });
+    expect(rejected.status).toBe("outOfRange");
+    expect(keyboard.keycodeAt(0, 0)).toBe(before);
+
+    // A good batch applies in order (later entries win) and reads back what
+    // was actually stored: TT(3) has no RMK representation → KC_NO (LOSSY).
+    const written = send(keyboard, {
+      command: "keymapWrite",
+      entries: [
+        { layer: 0, key: 0, keycode: 0x0004 }, // KC_A
+        { layer: 0, key: 0, keycode: 0x0005 }, // KC_B wins
+        { layer: 2, key: 10, keycode: 0x52c3 }, // TT(3) → KC_NO
+      ],
+    });
+    expect(written.status).toBe("ok");
+    expect(written.payload).toEqual({ type: "keymapWritten", keycodes: [0x0005, 0x0005, 0x0000] });
+    expect(keyboard.keycodeAt(0, 0)).toBe(0x0005);
+    expect(keyboard.keycodeAt(2, 10)).toBe(0x0000);
+    // Reads reflect the live keymap.
+    const read = send(keyboard, { command: "keymapRead", layer: 0, startKey: 0, maxCount: 1 });
+    expect((read.payload as { keycodes: number[] }).keycodes).toEqual([0x0005]);
+  });
+
+  it("rejects oversized batches with CAPACITY_EXCEEDED", () => {
+    const keyboard = new MockKeyboard();
+    const entries = Array.from({ length: 85 }, (_, i) => ({ layer: 0, key: i % 84, keycode: 4 }));
+    expect(send(keyboard, { command: "keymapWrite", entries }).status).toBe("capacityExceeded");
+  });
+
+  it("answers UNKNOWN_COMMAND when the keymap feature bit is off", () => {
+    const keyboard = new MockKeyboard({
+      capabilities: { featureBits: MOCK_CAPABILITIES.featureBits & ~(1 << 7) },
+    });
+    expect(send(keyboard, { command: "keymapRead", layer: 0, startKey: 0, maxCount: 1 }).status).toBe("unknownCommand");
+    expect(send(keyboard, { command: "keymapWrite", entries: [] }).status).toBe("unknownCommand");
+  });
+});
+
+describe("MockKeyboard version", () => {
+  it("answers GET_VERSION with a matching pair by default", () => {
+    const response = send(new MockKeyboard(), { command: "getVersion" });
+    expect(response.status).toBe("ok");
+    expect(response.payload).toEqual({
+      type: "version",
+      central: MOCK_CENTRAL_VERSION,
+      peripheral: MOCK_CENTRAL_VERSION,
+      halvesMismatch: false,
+    });
+  });
+
+  it("supports the mismatch and never-seen modes for UI testing", () => {
+    const mismatched = new MockKeyboard({ versionMode: "mismatch" });
+    const response = send(mismatched, { command: "getVersion" });
+    expect(response.payload).toMatchObject({ halvesMismatch: true, central: { dirty: true } });
+
+    const neverSeen = new MockKeyboard({ versionMode: "peripheralNeverSeen" });
+    const payload = send(neverSeen, { command: "getVersion" }).payload;
+    expect(payload).toMatchObject({ halvesMismatch: false, peripheral: NEVER_SEEN_VERSION });
+  });
+
+  it("answers UNKNOWN_COMMAND when the version feature bit is off", () => {
+    const keyboard = new MockKeyboard({
+      capabilities: { featureBits: MOCK_CAPABILITIES.featureBits & ~(1 << 8) },
+    });
+    expect(send(keyboard, { command: "getVersion" }).status).toBe("unknownCommand");
   });
 });

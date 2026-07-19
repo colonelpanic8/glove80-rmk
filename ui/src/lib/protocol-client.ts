@@ -8,8 +8,10 @@ import {
   BOOTLOADER_MAGIC,
   decodeResponse,
   encodeRequest,
+  FEATURE_KEYMAP,
   FEATURE_PERSISTENT_CONFIG,
   MAX_CONFIG_DATA_PER_MESSAGE,
+  MAX_KEYMAP_ENTRIES_PER_MESSAGE,
   PROTOCOL_VERSION_MAJOR,
   PROTOCOL_VERSION_MINOR,
   ProtocolError,
@@ -22,9 +24,11 @@ import {
   type Capabilities,
   type CellState,
   type CellWrite,
+  type KeymapEntry,
   type Request,
   type Response,
   type StatusName,
+  type VersionInfo,
 } from "./host-protocol";
 import type { Transport } from "./transport";
 
@@ -290,6 +294,74 @@ export class ProtocolClient {
     const response = await this.requestOk({ command: "setToggle", id, state });
     if (response.payload.type !== "toggle") throw new ProtocolError("bad toggle payload");
     return response.payload.state;
+  }
+
+  /** GET_VERSION (v1.3): both halves' build identity in one exchange. */
+  async getVersion(): Promise<VersionInfo> {
+    const response = await this.requestOk({ command: "getVersion" });
+    if (response.payload.type !== "version") throw new ProtocolError("bad version payload");
+    const { type: _type, ...info } = response.payload;
+    return info;
+  }
+
+  private keymapChunkLen(): number {
+    const advertised = this.capabilities?.maxKeymapEntriesPerOp ?? 0;
+    return advertised > 0
+      ? Math.min(advertised, MAX_KEYMAP_ENTRIES_PER_MESSAGE)
+      : MAX_KEYMAP_ENTRIES_PER_MESSAGE;
+  }
+
+  private requireKeymapSupport(): void {
+    const caps = this.capabilities;
+    if (caps && (caps.featureBits & FEATURE_KEYMAP) === 0) {
+      throw new ProtocolError("this keyboard does not support keymap editing");
+    }
+  }
+
+  /** Read one whole layer (or the leading `keyCount` positions) as VIA
+   * keycodes, chunking KEYMAP_READ per the advertised per-op limit. */
+  async readKeymapLayer(layer: number, keyCount?: number): Promise<number[]> {
+    this.requireKeymapSupport();
+    const caps = this.capabilities;
+    const gridSize = caps ? caps.keymapRows * caps.keymapCols : 0;
+    const wanted = keyCount ?? gridSize;
+    if (wanted <= 0) throw new ProtocolError("keymap grid size unknown; connect first");
+    const chunk = this.keymapChunkLen();
+    const keycodes: number[] = [];
+    while (keycodes.length < wanted) {
+      const startKey = keycodes.length;
+      const response = await this.requestOk({
+        command: "keymapRead",
+        layer,
+        startKey,
+        maxCount: Math.min(chunk, wanted - startKey),
+      });
+      if (response.payload.type !== "keymapActions") throw new ProtocolError("bad keymap payload");
+      if (response.payload.startKey !== startKey || response.payload.keycodes.length === 0) {
+        throw new ProtocolError("keyboard answered an unexpected keymap chunk");
+      }
+      keycodes.push(...response.payload.keycodes);
+    }
+    return keycodes.slice(0, wanted);
+  }
+
+  /** Write entries in advertised-size batches (each batch all-or-nothing on
+   * the device). Returns the canonical read-back keycodes, request order —
+   * compare with what you sent to surface lossy mappings. */
+  async writeKeymap(entries: KeymapEntry[]): Promise<number[]> {
+    this.requireKeymapSupport();
+    const chunk = this.keymapChunkLen();
+    const readback: number[] = [];
+    for (let at = 0; at < entries.length; at += chunk) {
+      const batch = entries.slice(at, at + chunk);
+      const response = await this.requestOk({ command: "keymapWrite", entries: batch });
+      if (response.payload.type !== "keymapWritten") throw new ProtocolError("bad keymap payload");
+      if (response.payload.keycodes.length !== batch.length) {
+        throw new ProtocolError("keymap read-back length mismatch");
+      }
+      readback.push(...response.payload.keycodes);
+    }
+    return readback;
   }
 
   async enterBootloader(target: BootTarget): Promise<void> {

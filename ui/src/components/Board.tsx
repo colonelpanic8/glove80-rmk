@@ -27,18 +27,33 @@ export interface BoardCell {
 interface BoardProps {
   /** Lit cells by protocol key index (= LED chain index, right half 40–79). */
   cells: ReadonlyMap<number, BoardCell>;
-  /** Keys accepted on the central but pending on the offline right half. */
+  /** Keys accepted on the central but pending on the offline right half —
+   * or, on the keymap panel, staged edits not yet written. */
   pendingKeys?: ReadonlySet<number>;
   /** Called on click and drag-over. Absent = board is read-only. */
   onPaintKey?: (ledIndex: number) => void;
   caption?: string;
+  /** Replace the printed key legends (e.g. keymap bindings), by LED index. */
+  keyLabels?: ReadonlyMap<number, string>;
+  /** Highlight one key as the current selection. */
+  selectedKey?: number | null;
+  /** Mark keys whose last write was lossy (stored ≠ requested). */
+  flaggedKeys?: ReadonlySet<number>;
 }
 
 /**
  * The shared Glove80 visualization. Both panels paint through this board;
  * the protocol key space is the LED chain order from glove80-layout.ts.
  */
-export function Board({ cells, pendingKeys, onPaintKey, caption }: BoardProps) {
+export function Board({
+  cells,
+  pendingKeys,
+  onPaintKey,
+  caption,
+  keyLabels,
+  selectedKey,
+  flaggedKeys,
+}: BoardProps) {
   const painting = useRef(false);
 
   useEffect(() => {
@@ -64,21 +79,27 @@ export function Board({ cells, pendingKeys, onPaintKey, caption }: BoardProps) {
         {GLOVE80_KEYS.map((keySpec) => {
           const cell = cells.get(keySpec.ledIndex);
           const pending = pendingKeys?.has(keySpec.ledIndex) ?? false;
+          const flagged = flaggedKeys?.has(keySpec.ledIndex) ?? false;
+          const customLabel = keyLabels?.get(keySpec.ledIndex);
           const color = cell ? effectColor(cell.effect) : "#000000";
           const classes = [
             "keycap",
             keySpec.kind,
             cell ? `effect-${cell.effect.kind}` : "unlit",
             pending ? "pending" : "",
+            flagged ? "flagged" : "",
+            selectedKey === keySpec.ledIndex ? "selected" : "",
             onPaintKey ? "" : "readonly",
           ]
             .filter(Boolean)
             .join(" ");
           const title = [
             `${keySpec.label} · key ${keySpec.ledIndex}`,
-            cell ? `${color} · ${effectTitle(cell.effect)}` : "transparent",
+            customLabel,
+            keyLabels ? undefined : cell ? `${color} · ${effectTitle(cell.effect)}` : "transparent",
             cell?.note,
-            pending ? "pending on the right half" : undefined,
+            pending ? (keyLabels ? "staged — not written yet" : "pending on the right half") : undefined,
+            flagged ? "LOSSY — the firmware stored a different keycode" : undefined,
           ]
             .filter(Boolean)
             .join("\n");
@@ -110,7 +131,7 @@ export function Board({ cells, pendingKeys, onPaintKey, caption }: BoardProps) {
               aria-label={title.replaceAll("\n", ", ")}
             >
               <span className="key-light" aria-hidden="true" />
-              <span className="key-label">{keySpec.label}</span>
+              <span className="key-label">{customLabel ?? keySpec.label}</span>
               <small>{keySpec.ledIndex}</small>
             </button>
           );

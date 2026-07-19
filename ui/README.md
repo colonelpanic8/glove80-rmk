@@ -8,7 +8,9 @@ keyboard — no daemon, no Studio, no install — and drives two things:
   board, with TTL and brightness control;
 - the **persistent config**: the ordered lighting records the keyboard boots
   with, edited offline and applied through the transactional v1.1 config
-  session.
+  session;
+- the **keymap**: the live key bindings, read and written over the v1.2
+  KEYMAP_READ/KEYMAP_WRITE commands.
 
 The ZMK-era Studio path (`@zmkfirmware/zmk-studio-ts-client`, the protobuf
 lighting protocol) has been retired from the app; Lightbench now speaks only
@@ -37,13 +39,23 @@ Chromium browser; `localhost` counts as a secure context).
   link and is claimed via `optionalServices`. Requests go out as
   write-without-response chunks; responses arrive as notifications.
 - **Demo mode** — an in-memory keyboard (`src/lib/mock-device.ts`)
-  implementing the full protocol, including the config transfer session and
-  partial-apply semantics. Everything in the UI can be exercised with no
-  hardware; a banner makes the mode unmistakable.
+  implementing the full protocol, including the config transfer session,
+  partial-apply semantics, a live keymap (seeded with a QWERTY base layer,
+  all-or-nothing writes, canonical read-back) and a GET_VERSION answer.
+  Everything in the UI can be exercised with no hardware; a banner makes the
+  mode unmistakable.
 
 The first exchange on any connection is `GET_CAPABILITIES`; the connection
 readout shows the protocol version and advertised features, and every panel
 gates itself on what the keyboard actually advertises.
+
+When the firmware advertises build-identity reporting (feature bit 8),
+Lightbench also issues `GET_VERSION` and shows both halves' firmware version
+and short git hash next to the connection readout. A **halves mismatch**
+(different hash or semver on the two halves — flashed one, forgot the other)
+is flagged prominently. A peripheral that has not reported a version since
+the central booted shows as "no version reported since boot" — a real state
+while the split link has not synced, not an error.
 
 ## Live overlay panel
 
@@ -86,11 +98,45 @@ gates itself on what the keyboard actually advertises.
   kept in browser local storage; client-side validation (the same rules the
   firmware enforces) runs on every edit.
 
+## Keymap editor
+
+Available when the firmware advertises keymap editing (protocol v1.2,
+feature bit 7).
+
+- Pick a **layer** (0–7); the board shows that layer's bindings as key
+  legends, read live from the keyboard (`KEYMAP_READ`, chunked to the
+  advertised per-op limit). **Reload from keyboard** re-reads the layer —
+  Vial edits, host-protocol writes and compiled defaults all read back
+  through the same runtime state.
+- **Click a key** to edit its binding. Enter a keycode by name (`KC_A`,
+  `MO(2)`, `LT(1, KC_A)`, `LSFT_T(KC_ESC)`, …), as raw hex (`0x0004`), or
+  via the built-in search — the same name table and spellings as
+  `glove80-control keymap` (`src/lib/keycodes.ts` mirrors the CLI's
+  `keycodes.rs`).
+- Edits are **staged** (dashed outline on the board) and sent in one batched
+  `KEYMAP_WRITE`. Each batch is all-or-nothing on the device; a rejected
+  batch leaves the staged edits staged. Writes change the live keymap
+  **immediately** — no reboot — and are persisted per key in RMK storage.
+- The firmware echoes the keycode it actually stored (canonical read-back).
+  A stored value that differs from the request is flagged **LOSSY** on the
+  board and listed with both values — some nameable keycodes (e.g. `TT(n)`)
+  have no RMK representation and store as `KC_NO`.
+- **Vial interop**: bindings travel as VIA/Vial 16-bit keycodes and hit the
+  same store Vial edits over its own protocol. Lightbench, the CLI and Vial
+  always agree — each sees the others' writes verbatim.
+- The four grid holes (positions 5, 8, 75, 78 of the 6×14 matrix) have no
+  physical key and are not shown; they always read `KC_NO`.
+
 ## Architecture
 
 - `src/lib/host-protocol.ts` — the TypeScript codec (messages, frame layer,
   config blob), locked to the Rust codec by shared golden vectors under
-  `protocol/vectors/`.
+  `protocol/vectors/` (v1.0 through v1.3).
+- `src/lib/keycodes.ts` — the VIA keycode name table (format, parse,
+  search), mirroring `tools/glove80-control/src/keycodes.rs` so the web UI
+  and the CLI speak the same names.
+- `src/lib/glove80-layout.ts` — the LED chain order, plus the 6×14 keymap
+  grid ↔ physical key mapping (from `rmk/glove80/vial.json`).
 - `src/lib/transport.ts` + `webhid-transport.ts` / `webbluetooth-transport.ts`
   — one chunk-level `Transport` interface and the two browser transports.
 - `src/lib/protocol-client.ts` — frame split/reassembly, request-id
@@ -99,7 +145,8 @@ gates itself on what the keyboard actually advertises.
 - `src/lib/mock-device.ts` — the in-memory keyboard used by both the test
   suite and demo mode.
 - `src/components/` — `Board` (the shared keyboard rendering, protocol key
-  space = LED chain order), `BrushControls`, `OverlayPanel`, `ConfigPanel`.
+  space = LED chain order), `BrushControls`, `OverlayPanel`, `ConfigPanel`,
+  `KeymapPanel`.
 
 `npm test` covers the codec against the golden vectors, the frame layer, the
 mock device's protocol semantics (including the config session state

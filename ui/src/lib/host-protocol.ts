@@ -1,13 +1,14 @@
-// Glove80 host protocol v1.1 — TypeScript codec.
+// Glove80 host protocol v1.3 — TypeScript codec.
 //
 // Byte-level spec: protocol/glove80-host-protocol/PROTOCOL.md.
 // This mirrors the Rust codec (protocol/glove80-host-protocol); both are
 // pinned to the shared golden vectors in protocol/vectors/
-// (host-protocol-v1.json, frozen, plus host-protocol-v1.1.json).
+// (host-protocol-v1.json, frozen, plus host-protocol-v1.1.json,
+// host-protocol-v1.2.json and host-protocol-v1.3.json).
 // All integers little-endian.
 
 export const PROTOCOL_VERSION_MAJOR = 1;
-export const PROTOCOL_VERSION_MINOR = 1;
+export const PROTOCOL_VERSION_MINOR = 3;
 export const RESPONSE_FLAG = 0x80;
 export const REQUEST_HEADER_LEN = 4;
 export const RESPONSE_HEADER_LEN = 5;
@@ -17,10 +18,16 @@ export const MAX_PING_LEN = 64;
 export const BOOTLOADER_MAGIC = 0xb00710ad;
 /** Max config bytes in one CONFIG_DATA request / CONFIG_READ response. */
 export const MAX_CONFIG_DATA_PER_MESSAGE = 1024;
+/** Codec-side cap on entries in one KEYMAP_READ/WRITE (devices advertise
+ * their own, smaller `maxKeymapEntriesPerOp`). Mirrors the Rust codec. */
+export const MAX_KEYMAP_ENTRIES_PER_MESSAGE = 128;
+/** GET_VERSION git hash: ASCII short commit hash, zero-padded to 8 bytes. */
+export const GIT_HASH_LEN = 8;
 
 export type CommandName =
   | "getCapabilities"
   | "ping"
+  | "getVersion"
   | "setCells"
   | "unsetCells"
   | "clearOverlay"
@@ -35,11 +42,14 @@ export type CommandName =
   | "configCommit"
   | "configAbort"
   | "configRead"
+  | "keymapRead"
+  | "keymapWrite"
   | "enterBootloader";
 
 export const OPCODES: Record<CommandName, number> = {
   getCapabilities: 0x01,
   ping: 0x02,
+  getVersion: 0x03,
   setCells: 0x10,
   unsetCells: 0x11,
   clearOverlay: 0x12,
@@ -54,6 +64,8 @@ export const OPCODES: Record<CommandName, number> = {
   configCommit: 0x42,
   configAbort: 0x43,
   configRead: 0x44,
+  keymapRead: 0x50,
+  keymapWrite: 0x51,
   enterBootloader: 0x7f,
 };
 
@@ -155,6 +167,13 @@ export interface Capabilities {
   /** Largest config blob the device accepts (v1.1). On the wire this u32 is
    * present iff FEATURE_PERSISTENT_CONFIG is set; otherwise it decodes as 0. */
   maxConfigBlobLen: number;
+  /** Keymap grid rows (v1.2). With the next two fields, on the wire exactly
+   * when FEATURE_KEYMAP is set; an absent extension decodes as 0. */
+  keymapRows: number;
+  /** Keymap grid columns (v1.2); key = row * keymapCols + col. */
+  keymapCols: number;
+  /** Max entries in one KEYMAP_READ/KEYMAP_WRITE (v1.2). */
+  maxKeymapEntriesPerOp: number;
 }
 
 export const FEATURE_TTL = 1 << 0;
@@ -164,12 +183,58 @@ export const FEATURE_ATOMIC_REPLACE = 1 << 3;
 export const FEATURE_OVERLAY_READBACK = 1 << 4;
 export const FEATURE_PARTIAL_APPLY = 1 << 5;
 export const FEATURE_PERSISTENT_CONFIG = 1 << 6;
+export const FEATURE_KEYMAP = 1 << 7;
+export const FEATURE_VERSION = 1 << 8;
 
 export type BootTarget = "central" | "peripheral";
+
+/** One KEYMAP_WRITE entry: a VIA 16-bit keycode at (layer, grid key). */
+export interface KeymapEntry {
+  layer: number;
+  key: number;
+  /** VIA/Vial 16-bit keycode (0x0000 = KC_NO, 0x0001 = KC_TRNS). */
+  keycode: number;
+}
+
+/** One half's build identity (GET_VERSION, v1.3). */
+export interface HalfVersion {
+  /** Central: always true in its own response. Peripheral: false while the
+   * split link is down (all-zero fields ⇔ never seen since boot). */
+  present: boolean;
+  fwMajor: number;
+  fwMinor: number;
+  fwPatch: number;
+  /** The 8 git-hash bytes as 16 hex digits (ASCII short hash, zero-padded
+   * on the right); "unknown0" when the build had no git. */
+  gitHashHex: string;
+  /** Built from a tree with uncommitted changes. */
+  dirty: boolean;
+}
+
+/** GET_VERSION's answer: both halves plus the firmware-computed mismatch. */
+export interface VersionInfo {
+  central: HalfVersion;
+  peripheral: HalfVersion;
+  /** True exactly when both halves are present and their git hash or
+   * firmware semver differ — a flash-one-half-and-forgot-the-other state. */
+  halvesMismatch: boolean;
+}
+
+/** Decode a HalfVersion git hash to display text (trailing NULs dropped). */
+export function gitHashText(gitHashHex: string): string {
+  let out = "";
+  for (let i = 0; i + 1 < gitHashHex.length; i += 2) {
+    const byte = parseInt(gitHashHex.slice(i, i + 2), 16);
+    if (Number.isNaN(byte) || byte === 0) break;
+    out += String.fromCharCode(byte);
+  }
+  return out;
+}
 
 export type Request =
   | { command: "getCapabilities"; clientMajor: number; clientMinor: number }
   | { command: "ping"; data: Uint8Array }
+  | { command: "getVersion" }
   | { command: "setCells"; ttlMs: number; cells: CellWrite[] }
   | { command: "unsetCells"; keys: number[] }
   | { command: "clearOverlay" }
@@ -184,6 +249,8 @@ export type Request =
   | { command: "configCommit" }
   | { command: "configAbort" }
   | { command: "configRead"; offset: number; maxLen: number }
+  | { command: "keymapRead"; layer: number; startKey: number; maxCount: number }
+  | { command: "keymapWrite"; entries: KeymapEntry[] }
   | { command: "enterBootloader"; magic: number; target: BootTarget };
 
 export type ResponsePayload =
@@ -194,7 +261,10 @@ export type ResponsePayload =
   | { type: "overlayState"; cells: CellState[] }
   | { type: "brightness"; level: number }
   | { type: "toggle"; id: number; state: boolean }
-  | { type: "configData"; totalLen: number; data: Uint8Array };
+  | { type: "configData"; totalLen: number; data: Uint8Array }
+  | ({ type: "version" } & VersionInfo)
+  | { type: "keymapActions"; layer: number; startKey: number; keycodes: number[] }
+  | { type: "keymapWritten"; keycodes: number[] };
 
 export interface Response {
   requestId: number;
@@ -350,6 +420,42 @@ function readCells(r: ReaderCursor): { ttlMs: number; cells: CellWrite[] } {
   return { ttlMs, cells };
 }
 
+// --- version records (GET_VERSION, v1.3) ----------------------------------
+
+function readBit(r: ReaderCursor, what: string): boolean {
+  const byte = r.u8();
+  if (byte > 1) throw new ProtocolError(`${what} must be 0 or 1, got ${byte}`);
+  return byte === 1;
+}
+
+function writeHalfVersion(w: Writer, half: HalfVersion): void {
+  if (half.gitHashHex.length !== GIT_HASH_LEN * 2 || /[^0-9a-fA-F]/.test(half.gitHashHex)) {
+    throw new ProtocolError(`gitHashHex must be ${GIT_HASH_LEN * 2} hex digits`);
+  }
+  w.u8(half.present ? 1 : 0);
+  w.u8(half.fwMajor);
+  w.u8(half.fwMinor);
+  w.u8(half.fwPatch);
+  for (let i = 0; i < GIT_HASH_LEN; i++) {
+    w.u8(parseInt(half.gitHashHex.slice(i * 2, i * 2 + 2), 16));
+  }
+  w.u8(half.dirty ? 1 : 0);
+  w.bytes([0, 0, 0]); // reserved
+}
+
+function readHalfVersion(r: ReaderCursor): HalfVersion {
+  const present = readBit(r, "present");
+  const fwMajor = r.u8();
+  const fwMinor = r.u8();
+  const fwPatch = r.u8();
+  const gitHashHex = [...r.bytes(GIT_HASH_LEN)]
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+  const dirty = readBit(r, "dirty");
+  r.bytes(3); // reserved, ignored
+  return { present, fwMajor, fwMinor, fwPatch, gitHashHex, dirty };
+}
+
 // --- request codec --------------------------------------------------------
 
 export function encodeRequest(requestId: number, request: Request): Uint8Array {
@@ -367,6 +473,8 @@ export function encodeRequest(requestId: number, request: Request): Uint8Array {
         throw new ProtocolError(`ping payload exceeds ${MAX_PING_LEN} bytes`);
       }
       w.bytes(request.data);
+      break;
+    case "getVersion":
       break;
     case "setCells":
     case "replaceOverlay":
@@ -411,6 +519,22 @@ export function encodeRequest(requestId: number, request: Request): Uint8Array {
       w.u32(request.offset);
       w.u16(request.maxLen);
       break;
+    case "keymapRead":
+      w.u8(request.layer);
+      w.u8(request.startKey);
+      w.u8(request.maxCount);
+      break;
+    case "keymapWrite":
+      if (request.entries.length > MAX_KEYMAP_ENTRIES_PER_MESSAGE) {
+        throw new ProtocolError(`too many keymap entries (max ${MAX_KEYMAP_ENTRIES_PER_MESSAGE})`);
+      }
+      w.u8(request.entries.length);
+      for (const entry of request.entries) {
+        w.u8(entry.layer);
+        w.u8(entry.key);
+        w.u16(entry.keycode);
+      }
+      break;
     case "enterBootloader":
       w.u32(request.magic);
       w.u8(request.target === "peripheral" ? 1 : 0);
@@ -445,6 +569,9 @@ export function decodeRequest(bytes: Uint8Array): DecodedRequest {
     case "ping":
       if (payloadLen > MAX_PING_LEN) throw new ProtocolError("ping payload too long");
       request = { command, data: r.bytes(payloadLen) };
+      break;
+    case "getVersion":
+      request = { command };
       break;
     case "setCells":
     case "replaceOverlay":
@@ -492,6 +619,21 @@ export function decodeRequest(bytes: Uint8Array): DecodedRequest {
     case "configRead":
       request = { command, offset: r.u32(), maxLen: r.u16() };
       break;
+    case "keymapRead":
+      request = { command, layer: r.u8(), startKey: r.u8(), maxCount: r.u8() };
+      break;
+    case "keymapWrite": {
+      const count = r.u8();
+      if (count > MAX_KEYMAP_ENTRIES_PER_MESSAGE) {
+        throw new ProtocolError("count exceeds codec capacity");
+      }
+      const entries: KeymapEntry[] = [];
+      for (let i = 0; i < count; i++) {
+        entries.push({ layer: r.u8(), key: r.u8(), keycode: r.u16() });
+      }
+      request = { command, entries };
+      break;
+    }
     case "enterBootloader": {
       const magic = r.u32();
       const targetByte = r.u8();
@@ -523,6 +665,12 @@ function payloadMatches(command: CommandName, status: StatusName, payload: Respo
         return command === "getToggle" || command === "setToggle";
       case "configData":
         return command === "configRead";
+      case "version":
+        return command === "getVersion";
+      case "keymapActions":
+        return command === "keymapRead";
+      case "keymapWritten":
+        return command === "keymapWrite";
       case "empty":
         return (
           command === "enterBootloader" ||
@@ -563,8 +711,15 @@ export function encodeResponse(response: Response): Uint8Array {
       w.u16(payload.overlayCellCapacity);
       w.u16(payload.maxMessageLen);
       w.u32(payload.featureBits);
+      // Extensions append in feature-bit order (PROTOCOL.md "Versioning").
       if ((payload.featureBits & FEATURE_PERSISTENT_CONFIG) !== 0) {
         w.u32(payload.maxConfigBlobLen);
+      }
+      if ((payload.featureBits & FEATURE_KEYMAP) !== 0) {
+        w.u8(payload.keymapRows);
+        w.u8(payload.keymapCols);
+        w.u8(payload.maxKeymapEntriesPerOp);
+        w.u8(0); // reserved
       }
       break;
     case "echo":
@@ -604,6 +759,27 @@ export function encodeResponse(response: Response): Uint8Array {
       }
       w.u32(payload.totalLen);
       w.bytes(payload.data);
+      break;
+    case "version":
+      writeHalfVersion(w, payload.central);
+      writeHalfVersion(w, payload.peripheral);
+      w.u8(payload.halvesMismatch ? 1 : 0);
+      break;
+    case "keymapActions":
+      if (payload.keycodes.length > MAX_KEYMAP_ENTRIES_PER_MESSAGE) {
+        throw new ProtocolError(`too many keycodes (max ${MAX_KEYMAP_ENTRIES_PER_MESSAGE})`);
+      }
+      w.u8(payload.layer);
+      w.u8(payload.startKey);
+      w.u8(payload.keycodes.length);
+      for (const keycode of payload.keycodes) w.u16(keycode);
+      break;
+    case "keymapWritten":
+      if (payload.keycodes.length > MAX_KEYMAP_ENTRIES_PER_MESSAGE) {
+        throw new ProtocolError(`too many keycodes (max ${MAX_KEYMAP_ENTRIES_PER_MESSAGE})`);
+      }
+      w.u8(payload.keycodes.length);
+      for (const keycode of payload.keycodes) w.u16(keycode);
       break;
   }
   w.patchU16(3, w.pos - RESPONSE_HEADER_LEN);
@@ -647,12 +823,21 @@ export function decodeResponse(bytes: Uint8Array): Response {
           maxMessageLen: r.u16(),
           featureBits: r.u32(),
           maxConfigBlobLen: 0,
+          keymapRows: 0,
+          keymapCols: 0,
+          maxKeymapEntriesPerOp: 0,
         };
         if ((caps.featureBits & FEATURE_PERSISTENT_CONFIG) !== 0) {
           caps.maxConfigBlobLen = r.u32();
         }
+        if ((caps.featureBits & FEATURE_KEYMAP) !== 0) {
+          caps.keymapRows = r.u8();
+          caps.keymapCols = r.u8();
+          caps.maxKeymapEntriesPerOp = r.u8();
+          r.u8(); // reserved
+        }
         // Newer protocol minors append further extensions in feature-bit
-        // order (PROTOCOL.md "Versioning"). A v1.1 client skips what it
+        // order (PROTOCOL.md "Versioning"). A v1.3 client skips what it
         // does not understand rather than rejecting the handshake.
         r.bytes(r.remaining);
         payload = caps;
@@ -662,6 +847,13 @@ export function decodeResponse(bytes: Uint8Array): Response {
         if (payloadLen > MAX_PING_LEN) throw new ProtocolError("echo payload too long");
         payload = { type: "echo", data: r.bytes(payloadLen) };
         break;
+      case "getVersion": {
+        const central = readHalfVersion(r);
+        const peripheral = readHalfVersion(r);
+        const halvesMismatch = readBit(r, "halves_mismatch");
+        payload = { type: "version", central, peripheral, halvesMismatch };
+        break;
+      }
       case "setCells":
       case "unsetCells":
       case "clearOverlay":
@@ -703,6 +895,28 @@ export function decodeResponse(bytes: Uint8Array): Response {
           throw new ProtocolError("config chunk exceeds codec capacity");
         }
         payload = { type: "configData", totalLen, data: r.bytes(r.remaining) };
+        break;
+      }
+      case "keymapRead": {
+        const layer = r.u8();
+        const startKey = r.u8();
+        const count = r.u8();
+        if (count > MAX_KEYMAP_ENTRIES_PER_MESSAGE) {
+          throw new ProtocolError("count exceeds codec capacity");
+        }
+        const keycodes: number[] = [];
+        for (let i = 0; i < count; i++) keycodes.push(r.u16());
+        payload = { type: "keymapActions", layer, startKey, keycodes };
+        break;
+      }
+      case "keymapWrite": {
+        const count = r.u8();
+        if (count > MAX_KEYMAP_ENTRIES_PER_MESSAGE) {
+          throw new ProtocolError("count exceeds codec capacity");
+        }
+        const keycodes: number[] = [];
+        for (let i = 0; i < count; i++) keycodes.push(r.u16());
+        payload = { type: "keymapWritten", keycodes };
         break;
       }
     }
