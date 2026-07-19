@@ -15,6 +15,7 @@ mod lightcfg;
 mod lighting;
 pub mod runtime_manifest;
 mod transport;
+mod version;
 
 const SOF: u8 = 0xab;
 const ESC: u8 = 0xac;
@@ -118,6 +119,9 @@ enum Command {
         #[command(subcommand)]
         command: keymap::KeymapCommand,
     },
+    /// Show this CLI's and both keyboard halves' firmware build identity
+    /// (RMK host protocol v1.3, GET_VERSION) and warn on mismatched halves.
+    Version,
 }
 
 #[derive(Subcommand)]
@@ -917,6 +921,10 @@ fn run(cli: Cli) -> Result<()> {
         return keymap::run(&hostproto_selector(&cli), command);
     }
 
+    if let Command::Version = &cli.command {
+        return version::run(&hostproto_selector(&cli));
+    }
+
     let serial_device = cli
         .device
         .clone()
@@ -1052,6 +1060,7 @@ fn run(cli: Cli) -> Result<()> {
         Command::Config { .. } => unreachable!(),
         Command::Lighting { .. } => unreachable!(),
         Command::Keymap { .. } => unreachable!(),
+        Command::Version => unreachable!(),
     }
     Ok(())
 }

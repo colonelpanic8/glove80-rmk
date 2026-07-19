@@ -266,6 +266,19 @@ impl HostClient {
         }
     }
 
+    /// GET_VERSION (protocol v1.3): both halves' firmware build identity.
+    pub fn version(&mut self) -> Result<glove80_host_protocol::VersionInfo> {
+        self.require_feature(
+            feature::VERSION_REPORT,
+            "build-identity reporting (host protocol v1.3)",
+        )?;
+        let response = self.call(&Request::GetVersion)?;
+        match (response.status, response.payload) {
+            (Status::Ok, ResponsePayload::Version(info)) => Ok(info),
+            (status, _) => Err(status_error("the version query", status)),
+        }
+    }
+
     /// SET_CELLS, batched by the advertised `max_cells_per_op`.
     pub fn set_cells(&mut self, ttl_ms: u32, cells: &[CellWrite]) -> Result<ApplyOutcome> {
         self.validate_cells(cells, ttl_ms)?;
