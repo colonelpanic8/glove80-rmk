@@ -99,6 +99,36 @@ previous config untouched.
 Partial application (peripheral half offline) is reported, never hidden:
 overlay writes print the keys still pending on the peripheral.
 
+## Keymap editing (host protocol v1.2)
+
+- `keymap read` dumps layer 0 as a 6x14 grid of QMK-style keycode names;
+  `--layer N` picks another layer, `--all` dumps every layer, `--raw`
+  prints hex u16 VIA keycodes instead of names. The four grid positions
+  with no physical key (5, 8, 75, 78) render as `--`.
+- `keymap set LAYER KEY KEYCODE [...]` writes one or more keys; triples
+  repeat. `KEY` is a flat grid index (`key = row*14 + col`) or `row,col`.
+  `KEYCODE` is hex (`0x0004`), a QMK name (`KC_A`, `KC_MPLY`), or a
+  composite (`MO(2)`, `TG(3)`, `LT(1, KC_A)`, `LSFT_T(KC_ESC)`,
+  `OSM(MOD_LSFT)`, `HYPR(KC_Z)`, `TD(4)`, `MACRO(0)`, `USER(7)`).
+  Examples:
+  - `glove80-control keymap set 0 28 KC_A`
+  - `glove80-control keymap set 0 2,0 LCTL_T(KC_ESC) 1 2,0 KC_TRNS`
+- Writes are validated all-or-nothing per batch, applied to the live
+  keymap immediately (no reboot), and persisted per key. The firmware
+  echoes what it actually stored; the CLI prints that canonical read-back
+  and flags any entry stored differently than requested (`LOSSY`) — some
+  actions have no exact VIA encoding.
+- `keymap find FRAGMENT` searches the keycode name table (names and
+  aliases, case-insensitive), e.g. `keymap find vol`.
+- Unknown/unnameable codes always print as hex (`0x1234`) and can be
+  entered the same way; nothing round-trips through the CLI lossily.
+- Vial interop: these commands and Vial edit the same runtime keymap and
+  the same storage — an edit made in either is immediately visible to the
+  other, byte-for-byte (the wire format is the VIA 16-bit keycode
+  encoding Vial itself uses).
+- Gated on capability feature bit 7; the CLI refuses cleanly when the
+  firmware does not advertise keymap editing.
+
 ## Development
 
 - Build/test from the repo root: `cargo build -p glove80-control`,

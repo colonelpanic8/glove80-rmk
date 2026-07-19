@@ -12,10 +12,11 @@ use std::time::{Duration, Instant};
 use anyhow::{anyhow, bail, Context, Result};
 use glove80_host_protocol::frame::{frame_count, write_frame, Reassembler};
 use glove80_host_protocol::{
-    encode_request, feature, BootTarget, Capabilities, CellState, CellWrite, EffectKind, Request,
-    Response, ResponsePayload, Status, BOOTLOADER_MAGIC, MAX_CELLS_PER_MESSAGE,
-    MAX_CONFIG_DATA_PER_MESSAGE, MAX_MESSAGE_LEN, MAX_PING_LEN, PROTOCOL_VERSION_MAJOR,
-    PROTOCOL_VERSION_MINOR, REQUEST_HEADER_LEN,
+    encode_request, feature, BootTarget, Capabilities, CellState, CellWrite, EffectKind,
+    KeymapEntry, Request, Response, ResponsePayload, Status, BOOTLOADER_MAGIC,
+    MAX_CELLS_PER_MESSAGE, MAX_CONFIG_DATA_PER_MESSAGE, MAX_KEYMAP_ENTRIES_PER_MESSAGE,
+    MAX_MESSAGE_LEN, MAX_PING_LEN, PROTOCOL_VERSION_MAJOR, PROTOCOL_VERSION_MINOR,
+    REQUEST_HEADER_LEN,
 };
 
 use crate::transport::Transport;
@@ -482,6 +483,125 @@ impl HostClient {
                 );
             }
         }
+    }
+
+    /// Capability gate for the keymap commands (protocol v1.2): feature
+    /// bit 7 must be advertised with a sane keymap extension.
+    pub fn keymap_capabilities(&mut self) -> Result<Capabilities> {
+        let capabilities =
+            self.require_feature(feature::KEYMAP, "keymap editing (host protocol v1.2)")?;
+        if capabilities.keymap_rows == 0
+            || capabilities.keymap_cols == 0
+            || capabilities.max_keymap_entries_per_op == 0
+        {
+            bail!("keyboard advertised keymap editing but an empty keymap extension");
+        }
+        Ok(capabilities)
+    }
+
+    fn keymap_grid_size(capabilities: &Capabilities) -> u16 {
+        u16::from(capabilities.keymap_rows) * u16::from(capabilities.keymap_cols)
+    }
+
+    /// KEYMAP_READ loop: fetch one whole layer as VIA keycodes, chunked by
+    /// the advertised `max_keymap_entries_per_op`.
+    pub fn read_keymap_layer(&mut self, layer: u8) -> Result<Vec<u16>> {
+        let capabilities = self.keymap_capabilities()?;
+        if layer >= capabilities.layer_capacity {
+            bail!(
+                "layer {layer} is out of range (device has layers 0..{})",
+                capabilities.layer_capacity - 1
+            );
+        }
+        let total = Self::keymap_grid_size(&capabilities);
+        let per_op = usize::from(capabilities.max_keymap_entries_per_op)
+            .min(MAX_KEYMAP_ENTRIES_PER_MESSAGE);
+        let mut keycodes: Vec<u16> = Vec::with_capacity(usize::from(total));
+        while (keycodes.len() as u16) < total {
+            let start = keycodes.len() as u16;
+            let remaining = usize::from(total - start);
+            let max_count = per_op.min(remaining).min(u8::MAX as usize) as u8;
+            let response = self.call(&Request::KeymapRead {
+                layer,
+                start_key: start as u8,
+                max_count,
+            })?;
+            let chunk = match (response.status, response.payload) {
+                (
+                    Status::Ok,
+                    ResponsePayload::KeymapActions { layer: echoed_layer, start_key, keycodes },
+                ) => {
+                    if echoed_layer != layer || u16::from(start_key) != start {
+                        bail!("KEYMAP_READ answered for a different layer or start position");
+                    }
+                    keycodes
+                }
+                (status, _) => return Err(status_error("the keymap read", status)),
+            };
+            if chunk.is_empty() {
+                bail!(
+                    "KEYMAP_READ stalled at key {start} of {total} (empty chunk before the end)"
+                );
+            }
+            if usize::from(start) + chunk.len() > usize::from(total) {
+                bail!("KEYMAP_READ returned more keycodes than the grid holds");
+            }
+            keycodes.extend_from_slice(&chunk);
+        }
+        Ok(keycodes)
+    }
+
+    /// KEYMAP_WRITE, batched by the advertised `max_keymap_entries_per_op`.
+    /// Returns the canonical per-entry read-back, in request order — compare
+    /// it with what you sent to detect lossy mappings.
+    ///
+    /// Device-side validation is all-or-nothing per batch; entries are also
+    /// validated client-side first so a rejected batch is unexpected.
+    pub fn write_keymap(&mut self, entries: &[KeymapEntry]) -> Result<Vec<u16>> {
+        let capabilities = self.keymap_capabilities()?;
+        let total = Self::keymap_grid_size(&capabilities);
+        for entry in entries {
+            if entry.layer >= capabilities.layer_capacity {
+                bail!(
+                    "layer {} is out of range (device has layers 0..{})",
+                    entry.layer,
+                    capabilities.layer_capacity - 1
+                );
+            }
+            if u16::from(entry.key) >= total {
+                bail!(
+                    "key {} is out of range (grid has positions 0..{})",
+                    entry.key,
+                    total - 1
+                );
+            }
+        }
+        let batch_size = usize::from(capabilities.max_keymap_entries_per_op)
+            .min(MAX_KEYMAP_ENTRIES_PER_MESSAGE);
+        let mut readback = Vec::with_capacity(entries.len());
+        for batch in entries.chunks(batch_size) {
+            let entries = heapless::Vec::from_slice(batch).expect("batch fits codec capacity");
+            let response = self.call(&Request::KeymapWrite { entries })?;
+            match (response.status, response.payload) {
+                (Status::Ok, ResponsePayload::KeymapWritten { keycodes }) => {
+                    if keycodes.len() != batch.len() {
+                        bail!(
+                            "KEYMAP_WRITE acknowledged {} entries but {} were sent",
+                            keycodes.len(),
+                            batch.len()
+                        );
+                    }
+                    readback.extend_from_slice(&keycodes);
+                }
+                (status, _) => {
+                    return Err(status_error(
+                        "the keymap write (all-or-nothing: no entry in the batch was applied)",
+                        status,
+                    ))
+                }
+            }
+        }
+        Ok(readback)
     }
 
     /// ENTER_BOOTLOADER. Returns `true` if the device acknowledged, `false`

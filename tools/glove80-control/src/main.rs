@@ -9,6 +9,8 @@ use clap::{Parser, Subcommand, ValueEnum};
 
 mod config;
 mod hostproto;
+mod keycodes;
+mod keymap;
 mod lightcfg;
 mod lighting;
 pub mod runtime_manifest;
@@ -21,7 +23,8 @@ const DEFAULT_DEVICE: &str = "/dev/ttyACM0";
 
 #[derive(Parser)]
 #[command(about = "Control Glove80 host extensions (ZMK Studio serial, or the RMK host \
-                   protocol over USB raw HID / BLE for `lighting` and `bootloader`)")]
+                   protocol over USB raw HID / BLE for `lighting`, `keymap`, and \
+                   `bootloader`)")]
 struct Cli {
     /// Device to talk to. Legacy commands: a serial port (default
     /// /dev/ttyACM0). `lighting`/host-protocol `bootloader`: a
@@ -108,6 +111,12 @@ enum Command {
     Lighting {
         #[command(subcommand)]
         command: lighting::LightingCommand,
+    },
+    /// Read and edit the live keymap over USB raw HID or BLE (RMK host
+    /// protocol v1.2). Uses the same store Vial edits.
+    Keymap {
+        #[command(subcommand)]
+        command: keymap::KeymapCommand,
     },
 }
 
@@ -904,6 +913,10 @@ fn run(cli: Cli) -> Result<()> {
         return lighting::run(&hostproto_selector(&cli), command);
     }
 
+    if let Command::Keymap { command } = &cli.command {
+        return keymap::run(&hostproto_selector(&cli), command);
+    }
+
     let serial_device = cli
         .device
         .clone()
@@ -1038,6 +1051,7 @@ fn run(cli: Cli) -> Result<()> {
         Command::Bootloader { .. } => unreachable!(),
         Command::Config { .. } => unreachable!(),
         Command::Lighting { .. } => unreachable!(),
+        Command::Keymap { .. } => unreachable!(),
     }
     Ok(())
 }

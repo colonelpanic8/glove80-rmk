@@ -538,6 +538,9 @@ mod tests {
             max_message_len: MAX_MESSAGE_LEN as u16,
             feature_bits: 0x7F, // includes PERSISTENT_CONFIG (bit 6)
             max_config_blob_len: MAX_CONFIG_BLOB_LEN as u32,
+            keymap_rows: 0,
+            keymap_cols: 0,
+            max_keymap_entries_per_op: 0,
         }
     }
 
