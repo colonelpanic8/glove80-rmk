@@ -46,12 +46,6 @@ pub struct Selector {
     pub device: Option<String>,
 }
 
-/// True if `device` names a host-protocol endpoint (hidraw path or BLE
-/// address) rather than the legacy Studio serial port.
-pub fn is_hostproto_device(device: &str) -> bool {
-    device.starts_with("/dev/hidraw") || is_ble_address(device)
-}
-
 pub fn is_ble_address(device: &str) -> bool {
     let bytes: Vec<&str> = device.split(':').collect();
     bytes.len() == 6
@@ -212,12 +206,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn recognizes_hostproto_devices() {
-        assert!(is_hostproto_device("/dev/hidraw3"));
-        assert!(is_hostproto_device("DC:2C:26:00:12:34"));
+    fn recognizes_ble_addresses() {
+        assert!(is_ble_address("DC:2C:26:00:12:34"));
         assert!(is_ble_address("dc:2c:26:00:12:34"));
-        assert!(!is_hostproto_device("/dev/ttyACM0"));
-        assert!(!is_hostproto_device("glove80"));
+        assert!(!is_ble_address("/dev/hidraw3"));
         assert!(!is_ble_address("DC:2C:26:00:12"));
         assert!(!is_ble_address("DC:2C:26:00:12:GG"));
     }

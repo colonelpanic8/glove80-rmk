@@ -91,13 +91,13 @@ pub enum LightingCommand {
     },
 }
 
-/// Shared flags for the host-protocol bootloader path.
+/// Flags for the bootloader verb.
 #[derive(Args, Clone, Copy)]
 pub struct BootloaderArgs {
-    /// Reboot the peripheral half instead of the central (host protocol).
-    #[arg(long, conflicts_with = "target")]
+    /// Reboot the peripheral half instead of the central.
+    #[arg(long)]
     pub peripheral: bool,
-    /// Skip the confirmation prompt (host protocol).
+    /// Skip the confirmation prompt.
     #[arg(long)]
     pub yes: bool,
 }

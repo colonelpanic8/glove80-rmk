@@ -1,13 +1,10 @@
 # glove80-control
 
-CLI for the Glove80 host extensions. It speaks two protocols:
-
-- Legacy ZMK Studio serial (`capabilities`, `all`, `set`, `effect`, `clear`,
-  `bootloader left|right`, `config validate`) — unchanged, kept until the
-  RMK cutover.
-- The RMK host protocol v1 (`PROTOCOL.md` in
-  `protocol/glove80-host-protocol/`) over USB raw HID or BLE — the
-  `lighting` family and the host-protocol `bootloader` path.
+CLI for the Glove80. It speaks the RMK host protocol (`PROTOCOL.md` in
+`protocol/glove80-host-protocol/`) over USB raw HID or BLE: lighting,
+keymap editing, persistent config, build identity, and bootloader entry.
+(The legacy ZMK Studio serial commands were retired after the RMK
+cutover.)
 
 ## Transports
 
@@ -18,8 +15,7 @@ CLI for the Glove80 host extensions. It speaks two protocols:
   requests go via write-without-response, responses via notifications.
 - Default is auto: USB when present, otherwise BLE.
 - `--device` disambiguates: a `/dev/hidraw*` path or a BLE address
-  (`AA:BB:CC:DD:EE:FF`). For legacy serial commands it stays the serial
-  port (default `/dev/ttyACM0`).
+  (`AA:BB:CC:DD:EE:FF`).
 - Device-identification constants (vendor usage page/usage, GATT UUIDs)
   live in `src/transport/ids.rs`, the single place to keep in sync with
   the firmware's transport definitions.
@@ -56,8 +52,8 @@ validated against what the device advertises.
   brightness scalar.
 - `lighting toggle <ID> [on|off]` — get or set a toggle overlay's state.
 - `bootloader [--peripheral] [--yes]` — send `ENTER_BOOTLOADER` over the
-  host protocol (asks for confirmation unless `--yes`). With a positional
-  `left`/`right` target it uses the legacy Studio serial path instead.
+  host protocol (asks for confirmation unless `--yes`). Targets the
+  central half unless `--peripheral`.
 
 ## Persistent lighting config (host protocol v1.1)
 
@@ -72,8 +68,8 @@ previous config untouched.
   → reboot the keyboard and the config persists. `config export` makes a
   backup of whatever is active.
 - `config validate FILE` — offline parse + the exact validation the
-  firmware runs before commit (`.json` files keep the legacy canonical
-  keymap-schema check). No device needed.
+  firmware runs before commit (`.json` files are checked against the
+  canonical keymap schema instead). No device needed.
 - `config apply FILE [--dry-run]` — parse and validate client-side (also
   against the advertised feature bit and `max_config_blob_len`), then run
   the CONFIG_BEGIN → chunked CONFIG_DATA → CONFIG_COMMIT session, reporting
