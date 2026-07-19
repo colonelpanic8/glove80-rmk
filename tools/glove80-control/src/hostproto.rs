@@ -98,7 +98,7 @@ impl HostClient {
             next_request_id: 1,
             capabilities: None,
             reassembler: Reassembler::new(),
-            response_timeout: Duration::from_secs(3),
+            response_timeout: Duration::from_secs(10),
         }
     }
 

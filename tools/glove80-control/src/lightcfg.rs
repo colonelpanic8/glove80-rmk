@@ -1608,9 +1608,10 @@ activation = { layer = 7 }
         let loaded = load_file(&unified_file());
         let mock = MockTransport::new();
         let requests = mock.requests_handle();
-        // 84 positions per layer at 32/op = 3 batches per layer.
+        // 84 positions per layer at the CLI's 21-entry hardware-friendly
+        // batch cap = 4 batches per layer.
         let mut mock = mock.expect(caps_handler(unified_capabilities()));
-        for _ in 0..6 {
+        for _ in 0..8 {
             mock = mock.expect(keymap_write_ok);
         }
         let mock = mock
@@ -1621,11 +1622,11 @@ activation = { layer = 7 }
         apply_loaded(&mut client, &loaded).unwrap();
 
         let requests = requests.lock().unwrap();
-        // Order: caps, 6 keymap batches, then the lighting session.
-        assert_eq!(requests.len(), 10);
+        // Order: caps, 8 keymap batches, then the lighting session.
+        assert_eq!(requests.len(), 12);
         let mut layer0 = Vec::new();
         let mut layer1 = Vec::new();
-        for request in &requests[1..7] {
+        for request in &requests[1..9] {
             let Request::KeymapWrite { entries } = request else {
                 panic!("expected KeymapWrite, got {request:?}");
             };
@@ -1642,8 +1643,8 @@ activation = { layer = 7 }
         assert_eq!(layer1.len(), GRID_SIZE);
         assert!(layer0.iter().enumerate().all(|(i, &(k, c))| k as usize == i && c == 0x0004));
         assert!(layer1.iter().enumerate().all(|(i, &(k, c))| k as usize == i && c == 0x0005));
-        assert!(matches!(requests[7], Request::ConfigBegin { .. }));
-        assert!(matches!(requests[9], Request::ConfigCommit));
+        assert!(matches!(requests[9], Request::ConfigBegin { .. }));
+        assert!(matches!(requests[11], Request::ConfigCommit));
     }
 
     /// A failed keymap batch aborts everything after it — the remaining
@@ -1656,10 +1657,11 @@ activation = { layer = 7 }
         let requests = mock.requests_handle();
         let mock = mock
             .expect(caps_handler(unified_capabilities()))
-            .expect(keymap_write_ok) // layer 0, keys 0-31
-            .expect(keymap_write_ok) // layer 0, keys 32-63
-            .expect(keymap_write_ok) // layer 0, keys 64-83
-            .expect(keymap_write_ok) // layer 1, keys 0-31
+            .expect(keymap_write_ok) // layer 0, keys 0-20
+            .expect(keymap_write_ok) // layer 0, keys 21-41
+            .expect(keymap_write_ok) // layer 0, keys 42-62
+            .expect(keymap_write_ok) // layer 0, keys 63-83
+            .expect(keymap_write_ok) // layer 1, keys 0-20
             .expect(|request_id, _| {
                 vec![empty_err(request_id, Command::KeymapWrite, Status::Busy)]
             });
@@ -1668,8 +1670,8 @@ activation = { layer = 7 }
         let chain = format!("{error:#}");
         assert!(chain.contains("keymap apply interrupted"), "{chain}");
         assert!(chain.contains("layer \"lower\" (slot 1)"), "{chain}");
-        assert!(chain.contains("keys 0..32 written"), "{chain}");
-        assert!(chain.contains("keys 32..84 untouched"), "{chain}");
+        assert!(chain.contains("keys 0..21 written"), "{chain}");
+        assert!(chain.contains("keys 21..84 untouched"), "{chain}");
         assert!(chain.contains("layer(s) base"), "{chain}");
         assert!(chain.contains("NOT rolled back"), "{chain}");
         assert!(chain.contains("BUSY"), "{chain}");
@@ -1694,6 +1696,7 @@ activation = { layer = 7 }
         assert!(!loaded.apply_lighting);
         let mock = MockTransport::new()
             .expect(caps_handler(unified_capabilities()))
+            .expect(keymap_write_ok)
             .expect(keymap_write_ok)
             .expect(keymap_write_ok)
             .expect(keymap_write_ok);

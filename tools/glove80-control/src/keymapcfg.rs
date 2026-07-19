@@ -334,8 +334,14 @@ pub fn apply_keymap(
 ) -> Result<KeymapReport> {
     let capabilities = client.keymap_capabilities()?;
     check_device_grid(&capabilities, plans)?;
+    // Cap batches well below the advertised per-op limit: every entry costs
+    // the firmware a per-key flash persist before it answers, and a full
+    // 84-entry layer reliably blows past the response timeout on hardware
+    // (single writes are fine). 21 entries = a quarter layer per exchange.
+    const MAX_HW_FRIENDLY_BATCH: usize = 21;
     let batch_size = usize::from(capabilities.max_keymap_entries_per_op)
-        .min(glove80_host_protocol::MAX_KEYMAP_ENTRIES_PER_MESSAGE);
+        .min(glove80_host_protocol::MAX_KEYMAP_ENTRIES_PER_MESSAGE)
+        .min(MAX_HW_FRIENDLY_BATCH);
     let mut report = KeymapReport::default();
     let mut done: Vec<&str> = Vec::new();
     for plan in plans {
