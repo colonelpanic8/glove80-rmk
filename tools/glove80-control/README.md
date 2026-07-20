@@ -182,8 +182,10 @@ overlay writes print the keys still pending on the peripheral.
   version, the application-defined firmware build label, and the structured
   RMK crate version.
 - Glove80's default firmware label is
-  `glove80-rmk v<semver> (<git-hash>[-dirty]) / RMK v<semver>`. Downstream
-  firmware can replace the whole bounded label with
+  `config <git-hash>[-dirty] / glove80-rmk v<semver> (<git-hash>[-dirty]) / RMK v<semver>`.
+  Direct product-repository builds use `config standalone`; downstream builds
+  supply `GLOVE80_CONFIG_GIT_COMMIT` and `GLOVE80_CONFIG_GIT_DIRTY`. Firmware
+  can replace the whole bounded label with
   `HostService::with_build_label` without changing protocol compatibility.
 - The current Rynk endpoint describes the central/application build. Split
   target identity and half-mismatch detection need a future routed or

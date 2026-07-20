@@ -33,6 +33,8 @@ protocol_version="$(sed -nE 's/^version[[:space:]]*=[[:space:]]*"([^"]+)"/\1/p' 
 rust_toolchain="$(sed -nE 's/^channel[[:space:]]*=[[:space:]]*"([^"]+)"/\1/p' rust-toolchain.toml | head -1)"
 source_commit="$(git rev-parse HEAD)"
 rmk_version="$(git -C dependencies/rmk describe --tags --always)"
+config_commit="${GLOVE80_CONFIG_GIT_COMMIT:-standalone}"
+config_dirty="${GLOVE80_CONFIG_GIT_DIRTY:-false}"
 
 (
   cd firmware/glove80-rmk
@@ -59,6 +61,8 @@ node scripts/package-release.mjs \
   --version "$version" \
   --source-commit "$source_commit" \
   --dirty "$dirty" \
+  --config-commit "$config_commit" \
+  --config-dirty "$config_dirty" \
   --rmk-commit "$rmk_commit" \
   --rmk-version "$rmk_version" \
   --rust-toolchain "$rust_toolchain" \

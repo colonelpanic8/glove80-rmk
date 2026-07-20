@@ -77,13 +77,14 @@ RMK. Run from the repository root on branch `codex/rmk-evaluation`.
     ```text
     glove80-control v{semver} ({git-hash}{-dirty})
     Rynk protocol: v0.3
-    firmware: glove80-rmk v{semver} ({git-hash}{-dirty}) / RMK v{semver}
+    firmware: config {git-hash}{-dirty} / glove80-rmk v{semver} ({git-hash}{-dirty}) / RMK v{semver}
     RMK: v{semver}
     device: {manufacturer} {product} (USB {vid}:{pid})
     serial: {serial}
     ```
 
-  - The firmware label and structured RMK line must name the intended versions.
+  - The firmware label must name the intended configuration and product
+    commits; the structured RMK line must name the intended RMK version.
   - A dirty suffix is acceptable only for an intentionally retained local build.
   - This query currently identifies the central/application image; verify the
     peripheral artifact separately until Rynk exposes routed split build info.
@@ -158,7 +159,8 @@ RMK. Run from the repository root on branch `codex/rmk-evaluation`.
    - Expected bootloader output: `central half acknowledged the bootloader
      request` or `no response — the central half most likely reset into its
      bootloader`.
-   - Final `version` must show the expected application and RMK build identity.
+   - Final `version` must show the expected configuration, application, and RMK
+     build identity.
 
 ## 1. USB typing (left-local) — HANDS
 

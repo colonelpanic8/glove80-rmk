@@ -96,19 +96,29 @@ fn vial_config_generation() {
 /// Embed this application build's identity for Rynk `GetBuildInfo`.
 ///
 /// The firmware reports its crate semver plus the git state of the build tree.
-/// These `rustc-env` values are composed with RMK's version in `central.rs`:
+/// A downstream configuration repository may also provide its full commit and
+/// dirty state through `GLOVE80_CONFIG_GIT_COMMIT` and
+/// `GLOVE80_CONFIG_GIT_DIRTY`. These `rustc-env` values are composed with RMK's
+/// version in `central.rs`:
 ///
 /// - `GLOVE80_GIT_HASH`: `git rev-parse --short=8 HEAD`, exactly 8 ASCII
 ///   chars (padded with '0' on the right if git ever yields fewer). The
 ///   literal `unknown0` when git is unavailable.
 /// - `GLOVE80_GIT_DIRTY`: `1` if `git status --porcelain` reports any
 ///   uncommitted change, else `0` (also `0` on the no-git fallback).
+/// - `GLOVE80_CONFIG_GIT_HASH`: the first eight hexadecimal characters of the
+///   downstream configuration commit, or `standalone` when this repository is
+///   built directly.
+/// - `GLOVE80_CONFIG_GIT_DIRTY`: normalized to `1` or `0`.
 ///
 /// The semver travels via Cargo's own `CARGO_PKG_VERSION_*` envs; nothing to
 /// emit here. Re-run when the repo's HEAD moves (commit/checkout); a
 /// dirty-flag change without a HEAD move is only picked up by the next
 /// rebuild that runs this script anyway.
 fn version_embedding() {
+    println!("cargo:rerun-if-env-changed=GLOVE80_CONFIG_GIT_COMMIT");
+    println!("cargo:rerun-if-env-changed=GLOVE80_CONFIG_GIT_DIRTY");
+
     // Two levels up: <repo root>/.git/HEAD (this crate is firmware/glove80-rmk).
     // HEAD only changes on checkout/branch switch; ordinary commits move the
     // branch ref file instead, so watch that too or the embedded hash goes
@@ -146,4 +156,25 @@ fn version_embedding() {
     };
     println!("cargo:rustc-env=GLOVE80_GIT_HASH={hash}");
     println!("cargo:rustc-env=GLOVE80_GIT_DIRTY={}", dirty as u8);
+
+    let config_commit = env::var("GLOVE80_CONFIG_GIT_COMMIT").unwrap_or_default();
+    let config_hash = if config_commit.is_empty() {
+        "standalone".to_owned()
+    } else {
+        assert!(
+            config_commit.len() >= 8 && config_commit.bytes().all(|byte| byte.is_ascii_hexdigit()),
+            "GLOVE80_CONFIG_GIT_COMMIT must contain at least eight hexadecimal characters"
+        );
+        config_commit[..8].to_ascii_lowercase()
+    };
+    let config_dirty = match env::var("GLOVE80_CONFIG_GIT_DIRTY").as_deref() {
+        Ok("1" | "true") => true,
+        Ok("0" | "false") | Err(_) => false,
+        Ok(value) => panic!("GLOVE80_CONFIG_GIT_DIRTY must be true/false or 1/0, got {value}"),
+    };
+    println!("cargo:rustc-env=GLOVE80_CONFIG_GIT_HASH={config_hash}");
+    println!(
+        "cargo:rustc-env=GLOVE80_CONFIG_GIT_DIRTY={}",
+        config_dirty as u8
+    );
 }

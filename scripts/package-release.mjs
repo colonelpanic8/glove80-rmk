@@ -78,6 +78,8 @@ for (const required of [
   "version",
   "source-commit",
   "dirty",
+  "config-commit",
+  "config-dirty",
   "rmk-commit",
   "rmk-version",
   "rust-toolchain",
@@ -110,6 +112,10 @@ const manifest = {
   project: "glove80-rmk",
   version: args.version,
   source: { commit: args["source-commit"], dirty: args.dirty === "true" },
+  configuration:
+    args["config-commit"] === "standalone"
+      ? null
+      : { commit: args["config-commit"], dirty: args["config-dirty"] === "true" },
   rmk: { commit: args["rmk-commit"], version: args["rmk-version"] },
   rustToolchain: args["rust-toolchain"],
   productProtocolVersion: args["protocol-version"],

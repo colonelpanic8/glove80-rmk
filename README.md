@@ -43,11 +43,17 @@ submodule. It produces ignored release artifacts:
   `0x9808B007`;
 - retained `.elf` files for both halves;
 - `dist/SHA256SUMS`; and
-- `dist/manifest.json`, including source/RMK/toolchain/protocol provenance,
-  checksums, targets, families, and validated flash ranges.
+- `dist/manifest.json`, including product source, optional downstream
+  configuration source, RMK, toolchain, and protocol provenance plus checksums,
+  targets, families, and validated flash ranges.
 
 The packager rejects wrong UF2 family IDs and images outside the application
 range `0x00026000..0x000dc000`.
+
+Downstream configuration repositories can embed their own provenance in the
+Rynk build label and release manifest by setting `GLOVE80_CONFIG_GIT_COMMIT` to
+their full hexadecimal commit and `GLOVE80_CONFIG_GIT_DIRTY` to `true` or
+`false` before running `make firmware`.
 
 ## Control CLI
 

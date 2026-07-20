@@ -21,10 +21,17 @@ mod keyboard_central {
         } else {
             ""
         };
+        let config_dirty = if env!("GLOVE80_CONFIG_GIT_DIRTY") == "1" {
+            "-dirty"
+        } else {
+            ""
+        };
         let mut build_label = ::rmk::heapless::String::<128>::new();
         let _ = write!(
             build_label,
-            "{} v{} ({}{}) / RMK v{}",
+            "config {}{} / {} v{} ({}{}) / RMK v{}",
+            env!("GLOVE80_CONFIG_GIT_HASH"),
+            config_dirty,
             env!("CARGO_PKG_NAME"),
             env!("CARGO_PKG_VERSION"),
             env!("GLOVE80_GIT_HASH"),
