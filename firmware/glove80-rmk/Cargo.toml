@@ -10,12 +10,6 @@ description = "RMK firmware spike for the MoErgo Glove80 (see docs/rmk-evaluatio
 [workspace]
 
 [dependencies]
-# The sparse lighting compositor (docs/lighting-design.md): pure no_std
-# logic, unit-tested on the host in its own workspace.
-glove80-compositor = { path = "../../crates/glove80-compositor" }
-# The host protocol codec (crates/glove80-host-protocol/PROTOCOL.md),
-# shared read-only with the CLI and (via golden vectors) Lightbench.
-glove80-host-protocol = { path = "../../crates/glove80-host-protocol" }
 # RMK, pinned by the dependencies/rmk submodule to the Glove80 integration fork
 # branch. The branch carries the generic extension APIs this firmware uses.
 rmk = { path = "../../dependencies/rmk/rmk", default-features = false, features = [
@@ -26,7 +20,7 @@ rmk = { path = "../../dependencies/rmk/rmk", default-features = false, features 
     "nrf52840_ble",
     "split",
     "async_matrix",
-    "shared_flash",
+    "lighting",
     "adafruit_bl",
 ] }
 nrf-sdc = { git = "https://github.com/alexmoon/nrf-sdc", rev = "abe49d22ebfc85fae134eb082fbfddf752016a55", features = [

@@ -22,7 +22,7 @@ impl RemoteBootloaderKey {
         {
             // A second release while one request is pending is equivalent to
             // the first. Never block the keyboard task on split traffic.
-            let _ = crate::lighting::REMOTE_BOOT_REQUESTS.try_send(());
+            let _ = crate::central_lighting::REMOTE_BOOT_REQUESTS.try_send(());
         }
     }
 }

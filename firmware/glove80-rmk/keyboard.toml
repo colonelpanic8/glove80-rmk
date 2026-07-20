@@ -165,3 +165,1170 @@ matrix_type = "normal"
 # From glove80_rh.dts kscan0. Column 0 is the right thumb cluster.
 row_pins = ["P0_26", "P0_05", "P0_07", "P1_08", "P0_11", "P0_12"]
 col_pins = ["P1_06", "P1_04", "P0_02", "P1_07", "P1_05", "P1_03", "P1_01"]
+
+# RMK-native board-wide lighting topology. Stable LED ids preserve the former
+# host-overlay numbering: 0-39 are the left chain and 40-79 the right chain.
+[lighting]
+topology_revision = 1
+
+[[lighting.zone]]
+id = 1
+name = "per-key"
+
+[[lighting.output]]
+node = 0
+id = 0
+pixel_count = 40
+capabilities = ["rgb", "addressable"]
+
+[[lighting.output]]
+node = 1
+id = 0
+pixel_count = 40
+capabilities = ["rgb", "addressable"]
+
+[lighting.background]
+# Keep every key visibly lit; sparse per-layer scenes below override this dim
+# white base with their accent colors.
+enabled = true
+hue = 0
+saturation = 0
+value = 32
+speed = 128
+mode = "solid"
+
+[[lighting.emitter]]
+id = 0
+key = [0, 6]
+zones = [1]
+node = 0
+output = 0
+physical_index = 0
+
+[[lighting.emitter]]
+id = 1
+key = [1, 6]
+zones = [1]
+node = 0
+output = 0
+physical_index = 1
+
+[[lighting.emitter]]
+id = 2
+key = [2, 6]
+zones = [1]
+node = 0
+output = 0
+physical_index = 2
+
+[[lighting.emitter]]
+id = 3
+key = [3, 6]
+zones = [1]
+node = 0
+output = 0
+physical_index = 3
+
+[[lighting.emitter]]
+id = 4
+key = [4, 6]
+zones = [1]
+node = 0
+output = 0
+physical_index = 4
+
+[[lighting.emitter]]
+id = 5
+key = [5, 6]
+zones = [1]
+node = 0
+output = 0
+physical_index = 5
+
+[[lighting.emitter]]
+id = 6
+key = [1, 5]
+zones = [1]
+node = 0
+output = 0
+physical_index = 6
+
+[[lighting.emitter]]
+id = 7
+key = [2, 5]
+zones = [1]
+node = 0
+output = 0
+physical_index = 7
+
+[[lighting.emitter]]
+id = 8
+key = [3, 5]
+zones = [1]
+node = 0
+output = 0
+physical_index = 8
+
+[[lighting.emitter]]
+id = 9
+key = [4, 5]
+zones = [1]
+node = 0
+output = 0
+physical_index = 9
+
+[[lighting.emitter]]
+id = 10
+key = [0, 4]
+zones = [1]
+node = 0
+output = 0
+physical_index = 10
+
+[[lighting.emitter]]
+id = 11
+key = [1, 4]
+zones = [1]
+node = 0
+output = 0
+physical_index = 11
+
+[[lighting.emitter]]
+id = 12
+key = [2, 4]
+zones = [1]
+node = 0
+output = 0
+physical_index = 12
+
+[[lighting.emitter]]
+id = 13
+key = [3, 4]
+zones = [1]
+node = 0
+output = 0
+physical_index = 13
+
+[[lighting.emitter]]
+id = 14
+key = [4, 4]
+zones = [1]
+node = 0
+output = 0
+physical_index = 14
+
+[[lighting.emitter]]
+id = 15
+key = [5, 4]
+zones = [1]
+node = 0
+output = 0
+physical_index = 15
+
+[[lighting.emitter]]
+id = 16
+key = [0, 3]
+zones = [1]
+node = 0
+output = 0
+physical_index = 16
+
+[[lighting.emitter]]
+id = 17
+key = [1, 3]
+zones = [1]
+node = 0
+output = 0
+physical_index = 17
+
+[[lighting.emitter]]
+id = 18
+key = [2, 3]
+zones = [1]
+node = 0
+output = 0
+physical_index = 18
+
+[[lighting.emitter]]
+id = 19
+key = [3, 3]
+zones = [1]
+node = 0
+output = 0
+physical_index = 19
+
+[[lighting.emitter]]
+id = 20
+key = [4, 3]
+zones = [1]
+node = 0
+output = 0
+physical_index = 20
+
+[[lighting.emitter]]
+id = 21
+key = [5, 3]
+zones = [1]
+node = 0
+output = 0
+physical_index = 21
+
+[[lighting.emitter]]
+id = 22
+key = [0, 2]
+zones = [1]
+node = 0
+output = 0
+physical_index = 22
+
+[[lighting.emitter]]
+id = 23
+key = [1, 2]
+zones = [1]
+node = 0
+output = 0
+physical_index = 23
+
+[[lighting.emitter]]
+id = 24
+key = [2, 2]
+zones = [1]
+node = 0
+output = 0
+physical_index = 24
+
+[[lighting.emitter]]
+id = 25
+key = [3, 2]
+zones = [1]
+node = 0
+output = 0
+physical_index = 25
+
+[[lighting.emitter]]
+id = 26
+key = [4, 2]
+zones = [1]
+node = 0
+output = 0
+physical_index = 26
+
+[[lighting.emitter]]
+id = 27
+key = [5, 2]
+zones = [1]
+node = 0
+output = 0
+physical_index = 27
+
+[[lighting.emitter]]
+id = 28
+key = [0, 1]
+zones = [1]
+node = 0
+output = 0
+physical_index = 28
+
+[[lighting.emitter]]
+id = 29
+key = [1, 1]
+zones = [1]
+node = 0
+output = 0
+physical_index = 29
+
+[[lighting.emitter]]
+id = 30
+key = [2, 1]
+zones = [1]
+node = 0
+output = 0
+physical_index = 30
+
+[[lighting.emitter]]
+id = 31
+key = [3, 1]
+zones = [1]
+node = 0
+output = 0
+physical_index = 31
+
+[[lighting.emitter]]
+id = 32
+key = [4, 1]
+zones = [1]
+node = 0
+output = 0
+physical_index = 32
+
+[[lighting.emitter]]
+id = 33
+key = [5, 1]
+zones = [1]
+node = 0
+output = 0
+physical_index = 33
+
+[[lighting.emitter]]
+id = 34
+key = [0, 0]
+zones = [1]
+node = 0
+output = 0
+physical_index = 34
+
+[[lighting.emitter]]
+id = 35
+key = [1, 0]
+zones = [1]
+node = 0
+output = 0
+physical_index = 35
+
+[[lighting.emitter]]
+id = 36
+key = [2, 0]
+zones = [1]
+node = 0
+output = 0
+physical_index = 36
+
+[[lighting.emitter]]
+id = 37
+key = [3, 0]
+zones = [1]
+node = 0
+output = 0
+physical_index = 37
+
+[[lighting.emitter]]
+id = 38
+key = [4, 0]
+zones = [1]
+node = 0
+output = 0
+physical_index = 38
+
+[[lighting.emitter]]
+id = 39
+key = [5, 0]
+zones = [1]
+node = 0
+output = 0
+physical_index = 39
+
+[[lighting.emitter]]
+id = 40
+key = [0, 7]
+zones = [1]
+node = 1
+output = 0
+physical_index = 0
+
+[[lighting.emitter]]
+id = 41
+key = [1, 7]
+zones = [1]
+node = 1
+output = 0
+physical_index = 1
+
+[[lighting.emitter]]
+id = 42
+key = [2, 7]
+zones = [1]
+node = 1
+output = 0
+physical_index = 2
+
+[[lighting.emitter]]
+id = 43
+key = [3, 7]
+zones = [1]
+node = 1
+output = 0
+physical_index = 3
+
+[[lighting.emitter]]
+id = 44
+key = [4, 7]
+zones = [1]
+node = 1
+output = 0
+physical_index = 4
+
+[[lighting.emitter]]
+id = 45
+key = [5, 7]
+zones = [1]
+node = 1
+output = 0
+physical_index = 5
+
+[[lighting.emitter]]
+id = 46
+key = [1, 8]
+zones = [1]
+node = 1
+output = 0
+physical_index = 6
+
+[[lighting.emitter]]
+id = 47
+key = [2, 8]
+zones = [1]
+node = 1
+output = 0
+physical_index = 7
+
+[[lighting.emitter]]
+id = 48
+key = [3, 8]
+zones = [1]
+node = 1
+output = 0
+physical_index = 8
+
+[[lighting.emitter]]
+id = 49
+key = [4, 8]
+zones = [1]
+node = 1
+output = 0
+physical_index = 9
+
+[[lighting.emitter]]
+id = 50
+key = [0, 9]
+zones = [1]
+node = 1
+output = 0
+physical_index = 10
+
+[[lighting.emitter]]
+id = 51
+key = [1, 9]
+zones = [1]
+node = 1
+output = 0
+physical_index = 11
+
+[[lighting.emitter]]
+id = 52
+key = [2, 9]
+zones = [1]
+node = 1
+output = 0
+physical_index = 12
+
+[[lighting.emitter]]
+id = 53
+key = [3, 9]
+zones = [1]
+node = 1
+output = 0
+physical_index = 13
+
+[[lighting.emitter]]
+id = 54
+key = [4, 9]
+zones = [1]
+node = 1
+output = 0
+physical_index = 14
+
+[[lighting.emitter]]
+id = 55
+key = [5, 9]
+zones = [1]
+node = 1
+output = 0
+physical_index = 15
+
+[[lighting.emitter]]
+id = 56
+key = [0, 10]
+zones = [1]
+node = 1
+output = 0
+physical_index = 16
+
+[[lighting.emitter]]
+id = 57
+key = [1, 10]
+zones = [1]
+node = 1
+output = 0
+physical_index = 17
+
+[[lighting.emitter]]
+id = 58
+key = [2, 10]
+zones = [1]
+node = 1
+output = 0
+physical_index = 18
+
+[[lighting.emitter]]
+id = 59
+key = [3, 10]
+zones = [1]
+node = 1
+output = 0
+physical_index = 19
+
+[[lighting.emitter]]
+id = 60
+key = [4, 10]
+zones = [1]
+node = 1
+output = 0
+physical_index = 20
+
+[[lighting.emitter]]
+id = 61
+key = [5, 10]
+zones = [1]
+node = 1
+output = 0
+physical_index = 21
+
+[[lighting.emitter]]
+id = 62
+key = [0, 11]
+zones = [1]
+node = 1
+output = 0
+physical_index = 22
+
+[[lighting.emitter]]
+id = 63
+key = [1, 11]
+zones = [1]
+node = 1
+output = 0
+physical_index = 23
+
+[[lighting.emitter]]
+id = 64
+key = [2, 11]
+zones = [1]
+node = 1
+output = 0
+physical_index = 24
+
+[[lighting.emitter]]
+id = 65
+key = [3, 11]
+zones = [1]
+node = 1
+output = 0
+physical_index = 25
+
+[[lighting.emitter]]
+id = 66
+key = [4, 11]
+zones = [1]
+node = 1
+output = 0
+physical_index = 26
+
+[[lighting.emitter]]
+id = 67
+key = [5, 11]
+zones = [1]
+node = 1
+output = 0
+physical_index = 27
+
+[[lighting.emitter]]
+id = 68
+key = [0, 12]
+zones = [1]
+node = 1
+output = 0
+physical_index = 28
+
+[[lighting.emitter]]
+id = 69
+key = [1, 12]
+zones = [1]
+node = 1
+output = 0
+physical_index = 29
+
+[[lighting.emitter]]
+id = 70
+key = [2, 12]
+zones = [1]
+node = 1
+output = 0
+physical_index = 30
+
+[[lighting.emitter]]
+id = 71
+key = [3, 12]
+zones = [1]
+node = 1
+output = 0
+physical_index = 31
+
+[[lighting.emitter]]
+id = 72
+key = [4, 12]
+zones = [1]
+node = 1
+output = 0
+physical_index = 32
+
+[[lighting.emitter]]
+id = 73
+key = [5, 12]
+zones = [1]
+node = 1
+output = 0
+physical_index = 33
+
+[[lighting.emitter]]
+id = 74
+key = [0, 13]
+zones = [1]
+node = 1
+output = 0
+physical_index = 34
+
+[[lighting.emitter]]
+id = 75
+key = [1, 13]
+zones = [1]
+node = 1
+output = 0
+physical_index = 35
+
+[[lighting.emitter]]
+id = 76
+key = [2, 13]
+zones = [1]
+node = 1
+output = 0
+physical_index = 36
+
+[[lighting.emitter]]
+id = 77
+key = [3, 13]
+zones = [1]
+node = 1
+output = 0
+physical_index = 37
+
+[[lighting.emitter]]
+id = 78
+key = [4, 13]
+zones = [1]
+node = 1
+output = 0
+physical_index = 38
+
+[[lighting.emitter]]
+id = 79
+key = [5, 13]
+zones = [1]
+node = 1
+output = 0
+physical_index = 39
+
+[[lighting.layer_scene]]
+layer = 0
+
+[[lighting.layer_scene.cell]]
+target = { led = 3 }
+effect = { kind = "solid", color = [24, 24, 24] }
+
+[[lighting.layer_scene.cell]]
+target = { led = 43 }
+effect = { kind = "solid", color = [24, 24, 24] }
+
+[[lighting.layer_scene.cell]]
+target = { led = 4 }
+effect = { kind = "solid", color = [24, 24, 24] }
+
+[[lighting.layer_scene.cell]]
+target = { led = 44 }
+effect = { kind = "solid", color = [24, 24, 24] }
+
+[[lighting.layer_scene.cell]]
+target = { led = 5 }
+effect = { kind = "solid", color = [24, 24, 24] }
+
+[[lighting.layer_scene.cell]]
+target = { led = 45 }
+effect = { kind = "solid", color = [24, 24, 24] }
+
+[[lighting.layer_scene.cell]]
+target = { led = 0 }
+effect = { kind = "solid", color = [0, 0, 255] }
+
+[[lighting.layer_scene.cell]]
+target = { led = 40 }
+effect = { kind = "solid", color = [0, 0, 255] }
+
+[[lighting.layer_scene.cell]]
+target = { led = 1 }
+effect = { kind = "solid", color = [0, 0, 255] }
+
+[[lighting.layer_scene.cell]]
+target = { led = 41 }
+effect = { kind = "solid", color = [0, 0, 255] }
+
+[[lighting.layer_scene.cell]]
+target = { led = 2 }
+effect = { kind = "solid", color = [0, 0, 255] }
+
+[[lighting.layer_scene.cell]]
+target = { led = 42 }
+effect = { kind = "solid", color = [0, 0, 255] }
+
+[[lighting.layer_scene.cell]]
+target = { led = 6 }
+effect = { kind = "solid", color = [0, 0, 255] }
+
+[[lighting.layer_scene.cell]]
+target = { led = 46 }
+effect = { kind = "solid", color = [0, 0, 255] }
+
+[[lighting.layer_scene.cell]]
+target = { led = 7 }
+effect = { kind = "solid", color = [0, 0, 255] }
+
+[[lighting.layer_scene.cell]]
+target = { led = 47 }
+effect = { kind = "solid", color = [0, 0, 255] }
+
+[[lighting.layer_scene.cell]]
+target = { led = 8 }
+effect = { kind = "solid", color = [0, 0, 255] }
+
+[[lighting.layer_scene.cell]]
+target = { led = 48 }
+effect = { kind = "solid", color = [0, 0, 255] }
+
+[[lighting.layer_scene.cell]]
+target = { led = 9 }
+effect = { kind = "solid", color = [0, 0, 255] }
+
+[[lighting.layer_scene.cell]]
+target = { led = 49 }
+effect = { kind = "solid", color = [0, 0, 255] }
+
+[[lighting.layer_scene]]
+layer = 1
+
+[[lighting.layer_scene.cell]]
+target = { led = 0 }
+effect = { kind = "solid", color = [0, 255, 0] }
+
+[[lighting.layer_scene.cell]]
+target = { led = 40 }
+effect = { kind = "solid", color = [0, 255, 0] }
+
+[[lighting.layer_scene.cell]]
+target = { led = 1 }
+effect = { kind = "solid", color = [0, 255, 0] }
+
+[[lighting.layer_scene.cell]]
+target = { led = 41 }
+effect = { kind = "solid", color = [0, 255, 0] }
+
+[[lighting.layer_scene.cell]]
+target = { led = 2 }
+effect = { kind = "solid", color = [0, 255, 0] }
+
+[[lighting.layer_scene.cell]]
+target = { led = 42 }
+effect = { kind = "solid", color = [0, 255, 0] }
+
+[[lighting.layer_scene.cell]]
+target = { led = 6 }
+effect = { kind = "solid", color = [0, 255, 0] }
+
+[[lighting.layer_scene.cell]]
+target = { led = 46 }
+effect = { kind = "solid", color = [0, 255, 0] }
+
+[[lighting.layer_scene.cell]]
+target = { led = 7 }
+effect = { kind = "solid", color = [0, 255, 0] }
+
+[[lighting.layer_scene.cell]]
+target = { led = 47 }
+effect = { kind = "solid", color = [0, 255, 0] }
+
+[[lighting.layer_scene.cell]]
+target = { led = 8 }
+effect = { kind = "solid", color = [0, 255, 0] }
+
+[[lighting.layer_scene.cell]]
+target = { led = 48 }
+effect = { kind = "solid", color = [0, 255, 0] }
+
+[[lighting.layer_scene.cell]]
+target = { led = 9 }
+effect = { kind = "solid", color = [0, 255, 0] }
+
+[[lighting.layer_scene.cell]]
+target = { led = 49 }
+effect = { kind = "solid", color = [0, 255, 0] }
+
+[[lighting.layer_scene]]
+layer = 2
+
+[[lighting.layer_scene.cell]]
+target = { led = 0 }
+effect = { kind = "solid", color = [255, 0, 255] }
+
+[[lighting.layer_scene.cell]]
+target = { led = 40 }
+effect = { kind = "solid", color = [255, 0, 255] }
+
+[[lighting.layer_scene.cell]]
+target = { led = 1 }
+effect = { kind = "solid", color = [255, 0, 255] }
+
+[[lighting.layer_scene.cell]]
+target = { led = 41 }
+effect = { kind = "solid", color = [255, 0, 255] }
+
+[[lighting.layer_scene.cell]]
+target = { led = 2 }
+effect = { kind = "solid", color = [255, 0, 255] }
+
+[[lighting.layer_scene.cell]]
+target = { led = 42 }
+effect = { kind = "solid", color = [255, 0, 255] }
+
+[[lighting.layer_scene.cell]]
+target = { led = 6 }
+effect = { kind = "solid", color = [255, 0, 255] }
+
+[[lighting.layer_scene.cell]]
+target = { led = 46 }
+effect = { kind = "solid", color = [255, 0, 255] }
+
+[[lighting.layer_scene.cell]]
+target = { led = 7 }
+effect = { kind = "solid", color = [255, 0, 255] }
+
+[[lighting.layer_scene.cell]]
+target = { led = 47 }
+effect = { kind = "solid", color = [255, 0, 255] }
+
+[[lighting.layer_scene.cell]]
+target = { led = 8 }
+effect = { kind = "solid", color = [255, 0, 255] }
+
+[[lighting.layer_scene.cell]]
+target = { led = 48 }
+effect = { kind = "solid", color = [255, 0, 255] }
+
+[[lighting.layer_scene.cell]]
+target = { led = 9 }
+effect = { kind = "solid", color = [255, 0, 255] }
+
+[[lighting.layer_scene.cell]]
+target = { led = 49 }
+effect = { kind = "solid", color = [255, 0, 255] }
+
+[[lighting.layer_scene]]
+layer = 3
+
+[[lighting.layer_scene.cell]]
+target = { led = 0 }
+effect = { kind = "solid", color = [255, 0, 0] }
+
+[[lighting.layer_scene.cell]]
+target = { led = 40 }
+effect = { kind = "solid", color = [255, 0, 0] }
+
+[[lighting.layer_scene.cell]]
+target = { led = 1 }
+effect = { kind = "solid", color = [255, 0, 0] }
+
+[[lighting.layer_scene.cell]]
+target = { led = 41 }
+effect = { kind = "solid", color = [255, 0, 0] }
+
+[[lighting.layer_scene.cell]]
+target = { led = 2 }
+effect = { kind = "solid", color = [255, 0, 0] }
+
+[[lighting.layer_scene.cell]]
+target = { led = 42 }
+effect = { kind = "solid", color = [255, 0, 0] }
+
+[[lighting.layer_scene.cell]]
+target = { led = 6 }
+effect = { kind = "solid", color = [255, 0, 0] }
+
+[[lighting.layer_scene.cell]]
+target = { led = 46 }
+effect = { kind = "solid", color = [255, 0, 0] }
+
+[[lighting.layer_scene.cell]]
+target = { led = 7 }
+effect = { kind = "solid", color = [255, 0, 0] }
+
+[[lighting.layer_scene.cell]]
+target = { led = 47 }
+effect = { kind = "solid", color = [255, 0, 0] }
+
+[[lighting.layer_scene.cell]]
+target = { led = 8 }
+effect = { kind = "solid", color = [255, 0, 0] }
+
+[[lighting.layer_scene.cell]]
+target = { led = 48 }
+effect = { kind = "solid", color = [255, 0, 0] }
+
+[[lighting.layer_scene.cell]]
+target = { led = 9 }
+effect = { kind = "solid", color = [255, 0, 0] }
+
+[[lighting.layer_scene.cell]]
+target = { led = 49 }
+effect = { kind = "solid", color = [255, 0, 0] }
+
+[[lighting.layer_scene]]
+layer = 4
+
+[[lighting.layer_scene.cell]]
+target = { led = 0 }
+effect = { kind = "solid", color = [0, 255, 255] }
+
+[[lighting.layer_scene.cell]]
+target = { led = 40 }
+effect = { kind = "solid", color = [0, 255, 255] }
+
+[[lighting.layer_scene.cell]]
+target = { led = 1 }
+effect = { kind = "solid", color = [0, 255, 255] }
+
+[[lighting.layer_scene.cell]]
+target = { led = 41 }
+effect = { kind = "solid", color = [0, 255, 255] }
+
+[[lighting.layer_scene.cell]]
+target = { led = 2 }
+effect = { kind = "solid", color = [0, 255, 255] }
+
+[[lighting.layer_scene.cell]]
+target = { led = 42 }
+effect = { kind = "solid", color = [0, 255, 255] }
+
+[[lighting.layer_scene.cell]]
+target = { led = 6 }
+effect = { kind = "solid", color = [0, 255, 255] }
+
+[[lighting.layer_scene.cell]]
+target = { led = 46 }
+effect = { kind = "solid", color = [0, 255, 255] }
+
+[[lighting.layer_scene.cell]]
+target = { led = 7 }
+effect = { kind = "solid", color = [0, 255, 255] }
+
+[[lighting.layer_scene.cell]]
+target = { led = 47 }
+effect = { kind = "solid", color = [0, 255, 255] }
+
+[[lighting.layer_scene.cell]]
+target = { led = 8 }
+effect = { kind = "solid", color = [0, 255, 255] }
+
+[[lighting.layer_scene.cell]]
+target = { led = 48 }
+effect = { kind = "solid", color = [0, 255, 255] }
+
+[[lighting.layer_scene.cell]]
+target = { led = 9 }
+effect = { kind = "solid", color = [0, 255, 255] }
+
+[[lighting.layer_scene.cell]]
+target = { led = 49 }
+effect = { kind = "solid", color = [0, 255, 255] }
+
+[[lighting.layer_scene]]
+layer = 5
+
+[[lighting.layer_scene.cell]]
+target = { led = 0 }
+effect = { kind = "solid", color = [255, 128, 0] }
+
+[[lighting.layer_scene.cell]]
+target = { led = 40 }
+effect = { kind = "solid", color = [255, 128, 0] }
+
+[[lighting.layer_scene.cell]]
+target = { led = 1 }
+effect = { kind = "solid", color = [255, 128, 0] }
+
+[[lighting.layer_scene.cell]]
+target = { led = 41 }
+effect = { kind = "solid", color = [255, 128, 0] }
+
+[[lighting.layer_scene.cell]]
+target = { led = 2 }
+effect = { kind = "solid", color = [255, 128, 0] }
+
+[[lighting.layer_scene.cell]]
+target = { led = 42 }
+effect = { kind = "solid", color = [255, 128, 0] }
+
+[[lighting.layer_scene.cell]]
+target = { led = 6 }
+effect = { kind = "solid", color = [255, 128, 0] }
+
+[[lighting.layer_scene.cell]]
+target = { led = 46 }
+effect = { kind = "solid", color = [255, 128, 0] }
+
+[[lighting.layer_scene.cell]]
+target = { led = 7 }
+effect = { kind = "solid", color = [255, 128, 0] }
+
+[[lighting.layer_scene.cell]]
+target = { led = 47 }
+effect = { kind = "solid", color = [255, 128, 0] }
+
+[[lighting.layer_scene.cell]]
+target = { led = 8 }
+effect = { kind = "solid", color = [255, 128, 0] }
+
+[[lighting.layer_scene.cell]]
+target = { led = 48 }
+effect = { kind = "solid", color = [255, 128, 0] }
+
+[[lighting.layer_scene.cell]]
+target = { led = 9 }
+effect = { kind = "solid", color = [255, 128, 0] }
+
+[[lighting.layer_scene.cell]]
+target = { led = 49 }
+effect = { kind = "solid", color = [255, 128, 0] }
+
+[[lighting.layer_scene]]
+layer = 6
+
+[[lighting.layer_scene.cell]]
+target = { led = 0 }
+effect = { kind = "solid", color = [128, 255, 0] }
+
+[[lighting.layer_scene.cell]]
+target = { led = 40 }
+effect = { kind = "solid", color = [128, 255, 0] }
+
+[[lighting.layer_scene.cell]]
+target = { led = 1 }
+effect = { kind = "solid", color = [128, 255, 0] }
+
+[[lighting.layer_scene.cell]]
+target = { led = 41 }
+effect = { kind = "solid", color = [128, 255, 0] }
+
+[[lighting.layer_scene.cell]]
+target = { led = 2 }
+effect = { kind = "solid", color = [128, 255, 0] }
+
+[[lighting.layer_scene.cell]]
+target = { led = 42 }
+effect = { kind = "solid", color = [128, 255, 0] }
+
+[[lighting.layer_scene.cell]]
+target = { led = 6 }
+effect = { kind = "solid", color = [128, 255, 0] }
+
+[[lighting.layer_scene.cell]]
+target = { led = 46 }
+effect = { kind = "solid", color = [128, 255, 0] }
+
+[[lighting.layer_scene.cell]]
+target = { led = 7 }
+effect = { kind = "solid", color = [128, 255, 0] }
+
+[[lighting.layer_scene.cell]]
+target = { led = 47 }
+effect = { kind = "solid", color = [128, 255, 0] }
+
+[[lighting.layer_scene.cell]]
+target = { led = 8 }
+effect = { kind = "solid", color = [128, 255, 0] }
+
+[[lighting.layer_scene.cell]]
+target = { led = 48 }
+effect = { kind = "solid", color = [128, 255, 0] }
+
+[[lighting.layer_scene.cell]]
+target = { led = 9 }
+effect = { kind = "solid", color = [128, 255, 0] }
+
+[[lighting.layer_scene.cell]]
+target = { led = 49 }
+effect = { kind = "solid", color = [128, 255, 0] }
+
+[[lighting.layer_scene]]
+layer = 7
+
+[[lighting.layer_scene.cell]]
+target = { led = 0 }
+effect = { kind = "solid", color = [255, 255, 255] }
+
+[[lighting.layer_scene.cell]]
+target = { led = 40 }
+effect = { kind = "solid", color = [255, 255, 255] }
+
+[[lighting.layer_scene.cell]]
+target = { led = 1 }
+effect = { kind = "solid", color = [255, 255, 255] }
+
+[[lighting.layer_scene.cell]]
+target = { led = 41 }
+effect = { kind = "solid", color = [255, 255, 255] }
+
+[[lighting.layer_scene.cell]]
+target = { led = 2 }
+effect = { kind = "solid", color = [255, 255, 255] }
+
+[[lighting.layer_scene.cell]]
+target = { led = 42 }
+effect = { kind = "solid", color = [255, 255, 255] }
+
+[[lighting.layer_scene.cell]]
+target = { led = 6 }
+effect = { kind = "solid", color = [255, 255, 255] }
+
+[[lighting.layer_scene.cell]]
+target = { led = 46 }
+effect = { kind = "solid", color = [255, 255, 255] }
+
+[[lighting.layer_scene.cell]]
+target = { led = 7 }
+effect = { kind = "solid", color = [255, 255, 255] }
+
+[[lighting.layer_scene.cell]]
+target = { led = 47 }
+effect = { kind = "solid", color = [255, 255, 255] }
+
+[[lighting.layer_scene.cell]]
+target = { led = 8 }
+effect = { kind = "solid", color = [255, 255, 255] }
+
+[[lighting.layer_scene.cell]]
+target = { led = 48 }
+effect = { kind = "solid", color = [255, 255, 255] }
+
+[[lighting.layer_scene.cell]]
+target = { led = 9 }
+effect = { kind = "solid", color = [255, 255, 255] }
+
+[[lighting.layer_scene.cell]]
+target = { led = 49 }
+effect = { kind = "solid", color = [255, 255, 255] }
