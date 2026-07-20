@@ -1,32 +1,30 @@
 # glove80-control
 
-CLI for the Glove80. Keymap editing uses RMK's native Rynk protocol. Lighting,
-persistent lighting config, build identity, and bootloader entry use the
-Glove80 protocol (`PROTOCOL.md` in `crates/glove80-host-protocol/`).
+CLI for the Glove80. Live keymap editing, topology-aware lighting, state
+queries, and central bootloader entry use RMK's native Rynk protocol.
+Persistent lighting config and build-identity commands are legacy compatibility
+paths for older firmware (`PROTOCOL.md` in `crates/glove80-host-protocol/`).
 (The legacy ZMK Studio serial commands were retired after the RMK
 cutover.)
 
 ## Transports
 
-- `--usb` — Linux hidraw for Glove80 commands and the sibling Rynk HID
-  interface. `--device /dev/ttyACM…` remains available for older serial-based
-  Rynk firmware.
-- `--ble` — BlueZ over D-Bus. Glove80 commands use the custom GATT service;
-  keymaps use Rynk's native GATT service.
+- `--usb` — Linux hidraw for Rynk HID. `--device /dev/ttyACM…` remains
+  available for older serial-based Rynk firmware.
+- `--ble` — BlueZ over D-Bus using Rynk's native GATT service.
 - Default is auto: USB when present, otherwise BLE.
 - `--device` disambiguates: a `/dev/hidraw*` path or a BLE address
   (`AA:BB:CC:DD:EE:FF`).
-- Device-identification constants (vendor usage page/usage, GATT UUIDs)
-  live in `src/transport/ids.rs`, the single place to keep in sync with
-  the firmware's transport definitions.
+- Legacy product-protocol device-identification constants remain in
+  `src/transport/ids.rs` for the compatibility commands.
 
-## Lighting commands (RMK host protocol)
+## Lighting commands (Rynk)
 
 Capabilities are queried first on every connection; all parameters are
 validated against what the device advertises.
 
-- `lighting ping [--data TEXT]` — round-trip latency check.
-- `lighting caps` — advertised capacities, effects, and feature bits.
+- `lighting ping` — round-trip a Rynk version query and report latency.
+- `lighting caps` — topology identity, capacities, effects, and feature bits.
 - `lighting set <KEYS> <COLOR> [--effect blink|breathe] [--period MS]
   [--phase MS] [--duty PCT] [--ttl MS]` — set overlay cells. `KEYS` is a
   comma/range list (`0-5,12,40`); `COLOR` is `#RRGGBB` or a named color
@@ -35,7 +33,8 @@ validated against what the device advertises.
   `max_cells_per_op` are split automatically.
 - `lighting unset <KEYS>...` — revert cells to transparent.
 - `lighting clear` — clear the whole host overlay.
-- `lighting read` — table of the current overlay, including remaining TTLs.
+- `lighting read` — authoritative revision, output/background state,
+  brightness, and overlay cell count.
 - `lighting replace [FILE] [--ttl MS]` — atomically replace the whole
   overlay from cell-spec lines (stdin when `FILE` is omitted or `-`).
   One cell per line, `#`-comments and blank lines ignored:
@@ -50,12 +49,16 @@ validated against what the device advertises.
   An empty spec is equivalent to `lighting clear`.
 - `lighting brightness [VALUE]` — get, or set (0-255), the global
   brightness scalar.
-- `lighting toggle <ID> [on|off]` — get or set a toggle overlay's state.
-- `bootloader [--peripheral] [--yes]` — send `ENTER_BOOTLOADER` over the
-  host protocol (asks for confirmation unless `--yes`). Targets the
-  central half unless `--peripheral`.
+- `lighting toggle` is retained as a legacy parser but rejected because named
+  toggle overlays are not part of RMK's standard lighting model.
+- `bootloader [--yes]` — enter the central UF2 bootloader through Rynk. Use the
+  physical right-half bootloader binding for the peripheral.
 
-## Canonical configuration file (keymap + lighting)
+## Legacy canonical configuration file (keymap + lighting)
+
+Current RMK lighting firmware does not expose the old transactional product
+protocol. This section documents the retained compatibility tooling and file
+format for older builds.
 
 One TOML file configures the whole keyboard — keymap layers through Rynk and
 persistent lighting through the product protocol — with one apply flow.

@@ -12,10 +12,11 @@ import {
   FEATURE_OVERLAY_READBACK,
   FEATURE_TTL,
   type Capabilities,
+  type CellState,
   type CellWrite,
   type Effect,
 } from "../lib/host-protocol";
-import type { OverlayWriteResult, ProtocolClient } from "../lib/protocol-client";
+import type { OverlayWriteResult } from "../lib/protocol-client";
 import { CHANNEL_CEILING } from "../lib/compositor-preview";
 import { Board, type BoardCell } from "./Board";
 import { BrushControls } from "./BrushControls";
@@ -33,8 +34,19 @@ export interface StatusUpdate {
   message: string;
 }
 
+export interface OverlayClient {
+  readonly supportsOverlayReadback?: boolean;
+  readOverlay?(): Promise<CellState[]>;
+  getBrightness(): Promise<number>;
+  setBrightness(level: number): Promise<number>;
+  setCells(ttlMs: number, cells: CellWrite[]): Promise<OverlayWriteResult>;
+  unsetCells(keys: number[]): Promise<OverlayWriteResult>;
+  clearOverlay(): Promise<OverlayWriteResult>;
+  replaceOverlay(ttlMs: number, cells: CellWrite[]): Promise<OverlayWriteResult>;
+}
+
 interface OverlayPanelProps {
-  client: ProtocolClient | null;
+  client: OverlayClient | null;
   capabilities: Capabilities | null;
   brush: Brush;
   onBrushChange: (brush: Brush) => void;
@@ -59,7 +71,10 @@ export function OverlayPanel({ client, capabilities, brush, onBrushChange, onSta
   ttlRef.current = ttlSeconds;
 
   const supportsTtl = !capabilities || (capabilities.featureBits & FEATURE_TTL) !== 0;
-  const supportsReadback = !capabilities || (capabilities.featureBits & FEATURE_OVERLAY_READBACK) !== 0;
+  const supportsReadback =
+    !!client?.readOverlay &&
+    client.supportsOverlayReadback !== false &&
+    (!capabilities || (capabilities.featureBits & FEATURE_OVERLAY_READBACK) !== 0);
   const maxPerOp = capabilities?.maxCellsPerOp ?? 40;
 
   const mergeAck = useCallback((result: OverlayWriteResult, writtenKeys: number[]) => {
@@ -81,7 +96,18 @@ export function OverlayPanel({ client, capabilities, brush, onBrushChange, onSta
   const syncFromKeyboard = useCallback(async (announce: boolean) => {
     if (!client) return;
     try {
-      const [overlay, level] = [await client.readOverlay(), await client.getBrightness()];
+      const level = await client.getBrightness();
+      const overlay = client.readOverlay ? await client.readOverlay() : null;
+      setBrightness(level);
+      if (!overlay) {
+        if (announce) {
+          onStatus({
+            tone: "ok",
+            message: "Authoritative Rynk lighting state refreshed · overlay contents stay local",
+          });
+        }
+        return;
+      }
       const now = Date.now();
       setCells(
         new Map(
@@ -92,7 +118,6 @@ export function OverlayPanel({ client, capabilities, brush, onBrushChange, onSta
         ),
       );
       setPending(new Set());
-      setBrightness(level);
       if (announce) {
         onStatus({ tone: "ok", message: `Overlay synced from the keyboard · ${overlay.length} lit keys` });
       }
@@ -114,7 +139,7 @@ export function OverlayPanel({ client, capabilities, brush, onBrushChange, onSta
       setBrightness(null);
       return;
     }
-    if (supportsReadback) void syncFromKeyboard(false);
+    void syncFromKeyboard(false);
   }, [client, supportsReadback, syncFromKeyboard]);
 
   // Tick down TTL cells so the board matches what the firmware will do.

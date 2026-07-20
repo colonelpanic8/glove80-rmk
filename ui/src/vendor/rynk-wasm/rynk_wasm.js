@@ -27,6 +27,22 @@ export class RynkClient {
         wasm.__wbg_rynkclient_free(ptr, 0);
     }
     /**
+     * @param {AbortLightingOverlayReplaceRequest} request
+     * @returns {Promise<void>}
+     */
+    abort_lighting_overlay_replace(request) {
+        const ret = wasm.rynkclient_abort_lighting_overlay_replace(this.__wbg_ptr, request);
+        return ret;
+    }
+    /**
+     * @param {BeginLightingOverlayReplaceRequest} request
+     * @returns {Promise<LightingOverlayTransaction>}
+     */
+    begin_lighting_overlay_replace(request) {
+        const ret = wasm.rynkclient_begin_lighting_overlay_replace(this.__wbg_ptr, request);
+        return ret;
+    }
+    /**
      * @returns {Promise<void>}
      */
     bootloader_jump() {
@@ -39,6 +55,22 @@ export class RynkClient {
      */
     clear_ble_profile(slot) {
         const ret = wasm.rynkclient_clear_ble_profile(this.__wbg_ptr, slot);
+        return ret;
+    }
+    /**
+     * @param {ClearLightingOverlayRequest} request
+     * @returns {Promise<LightingState>}
+     */
+    clear_lighting_overlay(request) {
+        const ret = wasm.rynkclient_clear_lighting_overlay(this.__wbg_ptr, request);
+        return ret;
+    }
+    /**
+     * @param {CommitLightingOverlayReplaceRequest} request
+     * @returns {Promise<LightingState>}
+     */
+    commit_lighting_overlay_replace(request) {
+        const ret = wasm.rynkclient_commit_lighting_overlay_replace(this.__wbg_ptr, request);
         return ret;
     }
     /**
@@ -172,6 +204,76 @@ export class RynkClient {
         return ret;
     }
     /**
+     * @returns {Promise<LightingCapabilities>}
+     */
+    get_lighting_capabilities() {
+        const ret = wasm.rynkclient_get_lighting_capabilities(this.__wbg_ptr);
+        return ret;
+    }
+    /**
+     * @param {LightingPageRequest} request
+     * @returns {Promise<LightingKeysPage>}
+     */
+    get_lighting_keys(request) {
+        const ret = wasm.rynkclient_get_lighting_keys(this.__wbg_ptr, request);
+        return ret;
+    }
+    /**
+     * @param {LightingPageRequest} request
+     * @returns {Promise<LightingLedsPage>}
+     */
+    get_lighting_leds(request) {
+        const ret = wasm.rynkclient_get_lighting_leds(this.__wbg_ptr, request);
+        return ret;
+    }
+    /**
+     * @param {LightingPageRequest} request
+     * @returns {Promise<LightingOutputsPage>}
+     */
+    get_lighting_outputs(request) {
+        const ret = wasm.rynkclient_get_lighting_outputs(this.__wbg_ptr, request);
+        return ret;
+    }
+    /**
+     * @param {LightingPageRequest} request
+     * @returns {Promise<LightingPhysicalKeysPage>}
+     */
+    get_lighting_physical_keys(request) {
+        const ret = wasm.rynkclient_get_lighting_physical_keys(this.__wbg_ptr, request);
+        return ret;
+    }
+    /**
+     * @param {LightingPageRequest} request
+     * @returns {Promise<LightingRoutesPage>}
+     */
+    get_lighting_routes(request) {
+        const ret = wasm.rynkclient_get_lighting_routes(this.__wbg_ptr, request);
+        return ret;
+    }
+    /**
+     * @returns {Promise<LightingState>}
+     */
+    get_lighting_state() {
+        const ret = wasm.rynkclient_get_lighting_state(this.__wbg_ptr);
+        return ret;
+    }
+    /**
+     * @param {LightingPageRequest} request
+     * @returns {Promise<LightingZoneMembershipsPage>}
+     */
+    get_lighting_zone_memberships(request) {
+        const ret = wasm.rynkclient_get_lighting_zone_memberships(this.__wbg_ptr, request);
+        return ret;
+    }
+    /**
+     * @param {LightingPageRequest} request
+     * @returns {Promise<LightingZonesPage>}
+     */
+    get_lighting_zones(request) {
+        const ret = wasm.rynkclient_get_lighting_zones(this.__wbg_ptr, request);
+        return ret;
+    }
+    /**
      * @returns {Promise<LockStatus>}
      */
     get_lock_status() {
@@ -257,6 +359,14 @@ export class RynkClient {
         return ret;
     }
     /**
+     * @param {PutLightingOverlayChunkRequest} request
+     * @returns {Promise<void>}
+     */
+    put_lighting_overlay_chunk(request) {
+        const ret = wasm.rynkclient_put_lighting_overlay_chunk(this.__wbg_ptr, request);
+        return ret;
+    }
+    /**
      * @returns {Promise<void>}
      */
     reboot() {
@@ -335,6 +445,22 @@ export class RynkClient {
         return ret;
     }
     /**
+     * @param {SetLightingOverlayRequest} request
+     * @returns {Promise<LightingState>}
+     */
+    set_lighting_overlay(request) {
+        const ret = wasm.rynkclient_set_lighting_overlay(this.__wbg_ptr, request);
+        return ret;
+    }
+    /**
+     * @param {SetLightingStateRequest} request
+     * @returns {Promise<LightingState>}
+     */
+    set_lighting_state(request) {
+        const ret = wasm.rynkclient_set_lighting_state(this.__wbg_ptr, request);
+        return ret;
+    }
+    /**
      * @param {number} offset
      * @param {MacroData} data
      * @returns {Promise<void>}
@@ -381,6 +507,14 @@ export class RynkClient {
      */
     unlock_poll() {
         const ret = wasm.rynkclient_unlock_poll(this.__wbg_ptr);
+        return ret;
+    }
+    /**
+     * @param {UnsetLightingOverlayRequest} request
+     * @returns {Promise<LightingState>}
+     */
+    unset_lighting_overlay(request) {
+        const ret = wasm.rynkclient_unset_lighting_overlay(this.__wbg_ptr, request);
         return ret;
     }
 }
@@ -695,7 +829,7 @@ function __wbg_get_imports() {
             console.warn(arg0);
         },
         __wbindgen_cast_0000000000000001: function(arg0, arg1) {
-            // Cast intrinsic for `Closure(Closure { owned: true, function: Function { arguments: [Externref], shim_idx: 318, ret: Result(Unit), inner_ret: Some(Result(Unit)) }, mutable: true }) -> Externref`.
+            // Cast intrinsic for `Closure(Closure { owned: true, function: Function { arguments: [Externref], shim_idx: 418, ret: Result(Unit), inner_ret: Some(Result(Unit)) }, mutable: true }) -> Externref`.
             const ret = makeMutClosure(arg0, arg1, wasm_bindgen_131d9c369ca8bda___convert__closures_____invoke___wasm_bindgen_131d9c369ca8bda___JsValue__core_7d5f0a2ba6a62c33___result__Result_____wasm_bindgen_131d9c369ca8bda___JsError___true_);
             return ret;
         },

@@ -1,15 +1,26 @@
-// Browser Rynk keymap client. Rynk owns keymap operations; Lightbench's
-// product protocol remains responsible for lighting and persistent lighting
-// records during the migration.
+// Browser Rynk client for live keymap and topology-aware lighting operations.
+// The older product protocol remains only for legacy persisted config records.
 
 import initRynk, {
   connect,
   type DeviceCapabilities,
   type KeyAction,
+  type LightingCapabilities,
+  type LightingEffect,
+  type LightingOverlayCell,
+  type LightingState,
   type RynkClient,
 } from "../vendor/rynk-wasm/rynk_wasm";
 
-import type { KeymapEntry } from "./host-protocol";
+import {
+  FEATURE_ATOMIC_REPLACE,
+  FEATURE_TTL,
+  type Capabilities,
+  type CellWrite,
+  type Effect,
+  type KeymapEntry,
+} from "./host-protocol";
+import type { OverlayWriteResult } from "./protocol-client";
 import { fromViaKeycode, toViaKeycode } from "./rynk-keycode";
 
 const RYNK_HEADER_LEN = 5;
@@ -120,7 +131,19 @@ async function openHidLink(): Promise<ByteLink> {
   );
 }
 
-export interface BrowserKeymapClient {
+export interface BrowserLightingClient {
+  readonly lightingCapabilities: Capabilities;
+  readonly supportsOverlayReadback: false;
+  getLightingState(): Promise<LightingState>;
+  setCells(ttlMs: number, cells: CellWrite[]): Promise<OverlayWriteResult>;
+  unsetCells(keys: number[]): Promise<OverlayWriteResult>;
+  clearOverlay(): Promise<OverlayWriteResult>;
+  replaceOverlay(ttlMs: number, cells: CellWrite[]): Promise<OverlayWriteResult>;
+  getBrightness(): Promise<number>;
+  setBrightness(level: number): Promise<number>;
+}
+
+export interface BrowserKeymapClient extends BrowserLightingClient {
   readonly label: string;
   readonly rows: number;
   readonly cols: number;
@@ -134,16 +157,109 @@ class ConnectedRynkClient implements BrowserKeymapClient {
   readonly rows: number;
   readonly cols: number;
   readonly layers: number;
+  readonly lightingCapabilities: Capabilities;
+  readonly supportsOverlayReadback = false as const;
 
   constructor(
     readonly label: string,
     private readonly link: ByteLink,
     private readonly client: RynkClient,
     private readonly capabilities: DeviceCapabilities,
+    private readonly rynkLightingCapabilities: LightingCapabilities,
   ) {
     this.rows = capabilities.num_rows;
     this.cols = capabilities.num_cols;
     this.layers = capabilities.num_layers;
+    this.lightingCapabilities = {
+      protocolMajor: 1,
+      protocolMinor: 0,
+      ledCountLeft: Math.min(40, rynkLightingCapabilities.led_count),
+      ledCountRight: Math.max(0, rynkLightingCapabilities.led_count - 40),
+      layerCapacity: capabilities.num_layers,
+      maxCellsPerOp: rynkLightingCapabilities.overlay_capacity,
+      effectMask: rynkLightingCapabilities.effects,
+      overlayCellCapacity: rynkLightingCapabilities.overlay_capacity,
+      maxMessageLen: 256,
+      featureBits: FEATURE_TTL | FEATURE_ATOMIC_REPLACE,
+      maxConfigBlobLen: 0,
+      keymapRows: capabilities.num_rows,
+      keymapCols: capabilities.num_cols,
+      maxKeymapEntriesPerOp: 0,
+    };
+  }
+
+  async getLightingState(): Promise<LightingState> {
+    return this.client.get_lighting_state();
+  }
+
+  async setCells(ttlMs: number, cells: CellWrite[]): Promise<OverlayWriteResult> {
+    let state = await this.client.get_lighting_state();
+    for (const cell of cells) {
+      state = await this.client.set_lighting_overlay({
+        expected_revision: state.revision,
+        cell: wireCell(cell, ttlMs),
+      });
+    }
+    return { partial: false, pendingKeys: [] };
+  }
+
+  async unsetCells(keys: number[]): Promise<OverlayWriteResult> {
+    let state = await this.client.get_lighting_state();
+    for (const key of keys) {
+      state = await this.client.unset_lighting_overlay({
+        expected_revision: state.revision,
+        led_id: key,
+      });
+    }
+    return { partial: false, pendingKeys: [] };
+  }
+
+  async clearOverlay(): Promise<OverlayWriteResult> {
+    const state = await this.client.get_lighting_state();
+    await this.client.clear_lighting_overlay({ expected_revision: state.revision });
+    return { partial: false, pendingKeys: [] };
+  }
+
+  async replaceOverlay(ttlMs: number, cells: CellWrite[]): Promise<OverlayWriteResult> {
+    const state = await this.client.get_lighting_state();
+    const transaction = await this.client.begin_lighting_overlay_replace({
+      expected_revision: state.revision,
+      cell_count: cells.length,
+    });
+    try {
+      const chunkSize = this.rynkLightingCapabilities.overlay_chunk_capacity;
+      for (let offset = 0; offset < cells.length; offset += chunkSize) {
+        await this.client.put_lighting_overlay_chunk({
+          transaction_id: transaction.id,
+          offset,
+          cells: cells.slice(offset, offset + chunkSize).map((cell) => wireCell(cell, ttlMs)),
+        });
+      }
+      await this.client.commit_lighting_overlay_replace({ transaction_id: transaction.id });
+    } catch (error) {
+      await this.client
+        .abort_lighting_overlay_replace({ transaction_id: transaction.id })
+        .catch(() => undefined);
+      throw error;
+    }
+    return { partial: false, pendingKeys: [] };
+  }
+
+  async getBrightness(): Promise<number> {
+    return (await this.client.get_lighting_state()).output_brightness;
+  }
+
+  async setBrightness(level: number): Promise<number> {
+    const state = await this.client.get_lighting_state();
+    const next = await this.client.set_lighting_state({
+      expected_revision: state.revision,
+      state: {
+        output_enabled: state.output_enabled,
+        output_brightness: level,
+        background: state.background,
+      },
+    });
+    return next.output_brightness;
   }
 
   async readKeymapLayer(layer: number): Promise<number[]> {
@@ -200,9 +316,48 @@ export async function connectRynkKeymap(
         `Rynk device is ${capabilities.num_rows}x${capabilities.num_cols}, expected the Glove80 6x14 grid`,
       );
     }
-    return new ConnectedRynkClient(link.label, link, client, capabilities);
+    if (!capabilities.lighting_enabled) {
+      client.free();
+      throw new Error("This Rynk firmware does not advertise topology-aware lighting");
+    }
+    const lightingCapabilities = await client.get_lighting_capabilities();
+    return new ConnectedRynkClient(link.label, link, client, capabilities, lightingCapabilities);
   } catch (error) {
     await link.close().catch(() => undefined);
     throw error;
+  }
+}
+
+function wireCell(cell: CellWrite, ttlMs: number): LightingOverlayCell {
+  return {
+    led_id: cell.key,
+    effect: wireEffect(cell.effect),
+    ttl_ms: ttlMs > 0 ? ttlMs : undefined,
+  };
+}
+
+function wireEffect(effect: Effect): LightingEffect {
+  const color = { r: effect.r, g: effect.g, b: effect.b };
+  switch (effect.kind) {
+    case "solid":
+      return { Solid: { color } };
+    case "blink":
+      return {
+        Blink: {
+          color,
+          period_ms: effect.periodMs,
+          phase_ms: effect.phaseMs,
+          duty: effect.dutyPercent,
+        },
+      };
+    case "breathe":
+      return {
+        Breathe: {
+          color,
+          period_ms: effect.periodMs,
+          phase_ms: effect.phaseMs,
+          step_ms: 16,
+        },
+      };
   }
 }

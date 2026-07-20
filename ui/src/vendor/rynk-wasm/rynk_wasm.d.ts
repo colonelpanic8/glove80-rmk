@@ -11,7 +11,7 @@ export type KeyAction = "No" | "Transparent" | { Single: Action } | { Tap: Actio
  * topic table above — generated from it. `Serialize` lets the host
  * re-emit a decoded topic as JSON (every payload is already a wire type).
  */
-export type TopicEvent = { LayerChange: number } | { WpmUpdate: number } | { ConnectionChange: ConnectionStatus } | { SleepState: boolean } | { LedIndicatorChange: LedIndicator } | { BatteryStatusChange: BatteryStatus };
+export type TopicEvent = { LayerChange: number } | { WpmUpdate: number } | { ConnectionChange: ConnectionStatus } | { SleepState: boolean } | { LedIndicatorChange: LedIndicator } | { BatteryStatusChange: BatteryStatus } | { LightingChange: LightingChanged };
 
 /**
  * A key\'s outline rectangle in key-units.
@@ -370,6 +370,23 @@ export interface Key {
 }
 
 /**
+ * One named semantic zone.
+ */
+export interface LightingZone {
+    id: LightingZoneId;
+    name: string;
+}
+
+/**
+ * One ordered transaction chunk. Chunks are applied only by commit.
+ */
+export interface PutLightingOverlayChunkRequest {
+    transaction_id: number;
+    offset: number;
+    cells: LightingOverlayCell[];
+}
+
+/**
  * One render variant (e.g. ANSI / ISO): its own keys and encoders. A hidden key
  * reflows the tokens after it — encoders included — so each variant carries its
  * own encoder positions.
@@ -583,11 +600,311 @@ export interface FirmwareVersion {
     patch: number;
 }
 
+/**
+ *r" Authoritative mutable state and optimistic-concurrency revision.
+ */
+export interface LightingState {
+    revision: number;
+    output_enabled: boolean;
+    output_brightness: number;
+    background: LightingBackgroundState;
+    overlay_len: number;
+}
+
+/**
+ *r" Begin an atomic, multi-packet overlay replacement.
+ */
+export interface BeginLightingOverlayReplaceRequest {
+    expected_revision: number;
+    cell_count: number;
+}
+
+/**
+ *r" Best-effort invalidation marker. Hosts recover current authoritative
+ *r" state with `GetLightingState`; events never carry a second state copy.
+ */
+export type LightingChanged = undefined;
+
+/**
+ *r" Board-global Q8.8 point in key-pitch units.
+ */
+export interface LightingPoint3 {
+    x: number;
+    y: number;
+    z: number;
+}
+
+/**
+ *r" Bounded set of standard effects understood by the RMK lighting engine.
+ */
+export type LightingEffect = { Solid: { color: LightingRgb8 } } | { Blink: { color: LightingRgb8; period_ms: number; phase_ms: number; duty: number } } | { Breathe: { color: LightingRgb8; period_ms: number; phase_ms: number; step_ms: number } };
+
+/**
+ *r" Built-in effects accepted by this firmware.
+ */
+export type LightingEffectFlags = number;
+
+/**
+ *r" Color and addressability capabilities of a physical output.
+ */
+export type LightingOutputCapabilities = number;
+
+/**
+ *r" Device-independent linear RGB sample.
+ */
+export interface LightingRgb8 {
+    r: number;
+    g: number;
+    b: number;
+}
+
+/**
+ *r" Identity of a lighting processor, such as one half of a split keyboard.
+ */
+export type LightingNodeId = number;
+
+/**
+ *r" Identity of one physical output owned by a lighting node.
+ */
+export type LightingOutputId = number;
+
+/**
+ *r" Lighting-domain rejection carried inside Rynk's outer protocol result.
+ */
+export type LightingError = "Unsupported" | "InvalidRequest" | "InvalidEffect" | "InvalidTtl" | { TopologyRevisionConflict: { expected: number; current: number } } | { StateRevisionConflict: { expected: number; current: number } } | { UnknownLed: { led_id: LightingLedId } } | { OverlayFull: { capacity: number } } | "TransactionBusy" | "InvalidTransaction" | "TransactionExpired" | { TransactionIncomplete: { expected: number; received: number } };
+
+/**
+ *r" One concrete output on one lighting node.
+ */
+export interface LightingOutput {
+    node: LightingNodeId;
+    id: LightingOutputId;
+    pixel_count: number;
+    capabilities: LightingOutputCapabilities;
+    coverage: LightingOutputCoverage;
+}
+
+/**
+ *r" One real key in RMK's logical matrix. Matrix holes have no record.
+ */
+export interface LightingMatrixPosition {
+    row: number;
+    col: number;
+}
+
+/**
+ *r" One semantic light. It may have key association, explicit geometry,
+ *r" both, or neither.
+ */
+export interface LightingLed {
+    id: LightingLedId;
+    key: LightingMatrixPosition | undefined;
+    position: LightingPoint3 | undefined;
+    /**
+     *r" Span into the flat zone-membership table.
+     */
+    zone_start: number;
+    zone_len: number;
+}
+
+/**
+ *r" One transient overlay cell addressed by stable LED identity.
+ */
+export interface LightingOverlayCell {
+    led_id: LightingLedId;
+    effect: LightingEffect;
+    /**
+     *r" Relative lifetime. `None` lasts until unset, clear, or reboot;
+     *r" `Some(0)` is invalid.
+     */
+    ttl_ms: number | undefined;
+}
+
+/**
+ *r" Opaque transaction token allocated by the firmware.
+ */
+export interface LightingOverlayTransaction {
+    id: number;
+    cell_count: number;
+}
+
+/**
+ *r" Optional capabilities beyond the mandatory state/topology surface.
+ */
+export type LightingFeatureFlags = number;
+
+/**
+ *r" Positive Q8.8 key dimensions in key-pitch units.
+ */
+export interface LightingKeySize {
+    width: number;
+    height: number;
+}
+
+/**
+ *r" Revision-pinned request for one metadata page.
+ */
+export interface LightingPageRequest {
+    topology_revision: number;
+    offset: number;
+}
+
+/**
+ *r" Shared physical-key geometry consumed by lighting, displays, and hosts.
+ */
+export interface LightingPhysicalKey {
+    matrix: LightingMatrixPosition;
+    center: LightingPoint3;
+    size: LightingKeySize;
+    /**
+     *r" Clockwise rotation in hundredths of one degree.
+     */
+    rotation: number;
+}
+
+/**
+ *r" Stable identity of one semantic lighting zone.
+ */
+export type LightingZoneId = number;
+
+/**
+ *r" Stable, board-wide identity of one independently controllable light.
+ */
+export type LightingLedId = number;
+
+/**
+ *r" Stable-light to physical-address mapping. Dense compositor slots are
+ *r" intentionally not part of the public protocol.
+ */
+export interface LightingRoute {
+    led_id: LightingLedId;
+    node: LightingNodeId;
+    output: LightingOutputId;
+    physical_index: number;
+}
+
+/**
+ *r" Static limits and topology identity for a lighting-enabled device.
+ */
+export interface LightingCapabilities {
+    topology_revision: number;
+    /**
+     *r" Real logical matrix keys, including keys without measured geometry.
+     */
+    logical_key_count: number;
+    physical_key_count: number;
+    led_count: number;
+    zone_count: number;
+    zone_membership_count: number;
+    output_count: number;
+    route_count: number;
+    overlay_capacity: number;
+    page_capacity: number;
+    overlay_chunk_capacity: number;
+    features: LightingFeatureFlags;
+    effects: LightingEffectFlags;
+}
+
+/**
+ *r" VIA-compatible designated background. It is only the lowest standard
+ *r" source; disabling it does not disable layers, overlays, or status.
+ */
+export interface LightingBackgroundState {
+    enabled: boolean;
+    hue: number;
+    saturation: number;
+    value: number;
+    speed: number;
+    mode: LightingBackgroundMode;
+}
+
+/**
+ *r" Whether all physical pixels of an output must have a logical route.
+ */
+export type LightingOutputCoverage = "Complete" | "Sparse";
+
+export interface AbortLightingOverlayReplaceRequest {
+    transaction_id: number;
+}
+
+export interface ClearLightingOverlayRequest {
+    expected_revision: number;
+}
+
+export interface CommitLightingOverlayReplaceRequest {
+    transaction_id: number;
+}
+
+export interface LightingKeysPage {
+    topology_revision: number;
+    total_count: number;
+    items: LightingMatrixPosition[];
+}
+
+export interface LightingLedsPage {
+    topology_revision: number;
+    total_count: number;
+    items: LightingLed[];
+}
+
+export interface LightingMutableState {
+    output_enabled: boolean;
+    output_brightness: number;
+    background: LightingBackgroundState;
+}
+
+export interface LightingOutputsPage {
+    topology_revision: number;
+    total_count: number;
+    items: LightingOutput[];
+}
+
+export interface LightingPhysicalKeysPage {
+    topology_revision: number;
+    total_count: number;
+    items: LightingPhysicalKey[];
+}
+
+export interface LightingRoutesPage {
+    topology_revision: number;
+    total_count: number;
+    items: LightingRoute[];
+}
+
+export interface LightingZoneMembershipsPage {
+    topology_revision: number;
+    total_count: number;
+    items: LightingZoneId[];
+}
+
+export interface LightingZonesPage {
+    topology_revision: number;
+    total_count: number;
+    items: LightingZone[];
+}
+
+export interface SetLightingOverlayRequest {
+    expected_revision: number;
+    cell: LightingOverlayCell;
+}
+
+export interface SetLightingStateRequest {
+    expected_revision: number;
+    state: LightingMutableState;
+}
+
+export interface UnsetLightingOverlayRequest {
+    expected_revision: number;
+    led_id: LightingLedId;
+}
+
 export type HidKeyCode = "No" | "ErrorRollover" | "PostFail" | "ErrorUndefined" | "A" | "B" | "C" | "D" | "E" | "F" | "G" | "H" | "I" | "J" | "K" | "L" | "M" | "N" | "O" | "P" | "Q" | "R" | "S" | "T" | "U" | "V" | "W" | "X" | "Y" | "Z" | "Kc1" | "Kc2" | "Kc3" | "Kc4" | "Kc5" | "Kc6" | "Kc7" | "Kc8" | "Kc9" | "Kc0" | "Enter" | "Escape" | "Backspace" | "Tab" | "Space" | "Minus" | "Equal" | "LeftBracket" | "RightBracket" | "Backslash" | "NonusHash" | "Semicolon" | "Quote" | "Grave" | "Comma" | "Dot" | "Slash" | "CapsLock" | "F1" | "F2" | "F3" | "F4" | "F5" | "F6" | "F7" | "F8" | "F9" | "F10" | "F11" | "F12" | "PrintScreen" | "ScrollLock" | "Pause" | "Insert" | "Home" | "PageUp" | "Delete" | "End" | "PageDown" | "Right" | "Left" | "Down" | "Up" | "NumLock" | "KpSlash" | "KpAsterisk" | "KpMinus" | "KpPlus" | "KpEnter" | "Kp1" | "Kp2" | "Kp3" | "Kp4" | "Kp5" | "Kp6" | "Kp7" | "Kp8" | "Kp9" | "Kp0" | "KpDot" | "NonusBackslash" | "Application" | "KbPower" | "KpEqual" | "F13" | "F14" | "F15" | "F16" | "F17" | "F18" | "F19" | "F20" | "F21" | "F22" | "F23" | "F24" | "Execute" | "Help" | "Menu" | "Select" | "Stop" | "Again" | "Undo" | "Cut" | "Copy" | "Paste" | "Find" | "KbMute" | "KbVolumeUp" | "KbVolumeDown" | "LockingCapsLock" | "LockingNumLock" | "LockingScrollLock" | "KpComma" | "KpEqualAs400" | "International1" | "International2" | "International3" | "International4" | "International5" | "International6" | "International7" | "International8" | "International9" | "Language1" | "Language2" | "Language3" | "Language4" | "Language5" | "Language6" | "Language7" | "Language8" | "Language9" | "AlternateErase" | "SystemRequest" | "Cancel" | "Clear" | "Prior" | "Return" | "Separator" | "Out" | "Oper" | "ClearAgain" | "Crsel" | "Exsel" | "SystemPower" | "SystemSleep" | "SystemWake" | "AudioMute" | "AudioVolUp" | "AudioVolDown" | "MediaNextTrack" | "MediaPrevTrack" | "MediaStop" | "MediaPlayPause" | "MediaSelect" | "MediaEject" | "Mail" | "Calculator" | "MyComputer" | "WwwSearch" | "WwwHome" | "WwwBack" | "WwwForward" | "WwwStop" | "WwwRefresh" | "WwwFavorites" | "MediaFastForward" | "MediaRewind" | "BrightnessUp" | "BrightnessDown" | "ControlPanel" | "Assistant" | "MissionControl" | "Launchpad" | "MouseUp" | "MouseDown" | "MouseLeft" | "MouseRight" | "MouseBtn1" | "MouseBtn2" | "MouseBtn3" | "MouseBtn4" | "MouseBtn5" | "MouseBtn6" | "MouseBtn7" | "MouseBtn8" | "MouseWheelUp" | "MouseWheelDown" | "MouseWheelLeft" | "MouseWheelRight" | "MouseAccel0" | "MouseAccel1" | "MouseAccel2" | "LCtrl" | "LShift" | "LAlt" | "LGui" | "RCtrl" | "RShift" | "RAlt" | "RGui";
 
 export type KeyCode = { Hid: HidKeyCode } | { Consumer: ConsumerKey } | { SystemControl: SystemControlKey };
 
 export type LedIndicator = { num_lock: boolean; caps_lock: boolean; scroll_lock: boolean; compose: boolean; kana: boolean; };
+
+export type LightingBackgroundMode = "Solid" | "Breathe";
 
 export type ModifierCombination = { left_ctrl: boolean; left_shift: boolean; left_alt: boolean; left_gui: boolean; right_ctrl: boolean; right_shift: boolean; right_alt: boolean; right_gui: boolean; };
 
@@ -609,8 +926,12 @@ export class RynkClient {
     private constructor();
     free(): void;
     [Symbol.dispose](): void;
+    abort_lighting_overlay_replace(request: AbortLightingOverlayReplaceRequest): Promise<void>;
+    begin_lighting_overlay_replace(request: BeginLightingOverlayReplaceRequest): Promise<LightingOverlayTransaction>;
     bootloader_jump(): Promise<void>;
     clear_ble_profile(slot: number): Promise<void>;
+    clear_lighting_overlay(request: ClearLightingOverlayRequest): Promise<LightingState>;
+    commit_lighting_overlay_replace(request: CommitLightingOverlayReplaceRequest): Promise<LightingState>;
     get_battery_status(): Promise<BatteryStatus>;
     get_behavior(): Promise<BehaviorConfig>;
     get_ble_status(): Promise<BleStatus>;
@@ -628,6 +949,15 @@ export class RynkClient {
     get_keymap_bulk(layer: number, start_row: number, start_col: number): Promise<GetKeymapBulkResponse>;
     get_layout(): Promise<LayoutInfo>;
     get_led_indicator(): Promise<LedIndicator>;
+    get_lighting_capabilities(): Promise<LightingCapabilities>;
+    get_lighting_keys(request: LightingPageRequest): Promise<LightingKeysPage>;
+    get_lighting_leds(request: LightingPageRequest): Promise<LightingLedsPage>;
+    get_lighting_outputs(request: LightingPageRequest): Promise<LightingOutputsPage>;
+    get_lighting_physical_keys(request: LightingPageRequest): Promise<LightingPhysicalKeysPage>;
+    get_lighting_routes(request: LightingPageRequest): Promise<LightingRoutesPage>;
+    get_lighting_state(): Promise<LightingState>;
+    get_lighting_zone_memberships(request: LightingPageRequest): Promise<LightingZoneMembershipsPage>;
+    get_lighting_zones(request: LightingPageRequest): Promise<LightingZonesPage>;
     get_lock_status(): Promise<LockStatus>;
     get_macro(offset: number): Promise<MacroData>;
     get_matrix_state(): Promise<MatrixState>;
@@ -645,6 +975,7 @@ export class RynkClient {
      * runs concurrently with the request methods.
      */
     next_topic(): Promise<TopicEvent>;
+    put_lighting_overlay_chunk(request: PutLightingOverlayChunkRequest): Promise<void>;
     reboot(): Promise<void>;
     set_behavior(config: BehaviorConfig): Promise<void>;
     set_combo(index: number, config: Combo): Promise<void>;
@@ -654,12 +985,15 @@ export class RynkClient {
     set_fork(index: number, config: Fork): Promise<void>;
     set_key(layer: number, row: number, col: number, action: KeyAction): Promise<void>;
     set_keymap_bulk(request: SetKeymapBulkRequest): Promise<void>;
+    set_lighting_overlay(request: SetLightingOverlayRequest): Promise<LightingState>;
+    set_lighting_state(request: SetLightingStateRequest): Promise<LightingState>;
     set_macro(offset: number, data: MacroData): Promise<void>;
     set_morse(index: number, config: Morse): Promise<void>;
     set_morse_bulk(request: SetMorseBulkRequest): Promise<void>;
     storage_reset(mode: StorageResetMode): Promise<void>;
     switch_ble_profile(slot: number): Promise<void>;
     unlock_poll(): Promise<LockStatus>;
+    unset_lighting_overlay(request: UnsetLightingOverlayRequest): Promise<LightingState>;
 }
 
 /**
@@ -679,8 +1013,12 @@ export interface InitOutput {
     readonly _critical_section_1_0_release: (a: number) => void;
     readonly __wbg_rynkclient_free: (a: number, b: number) => void;
     readonly connect: (a: any) => any;
+    readonly rynkclient_abort_lighting_overlay_replace: (a: number, b: any) => any;
+    readonly rynkclient_begin_lighting_overlay_replace: (a: number, b: any) => any;
     readonly rynkclient_bootloader_jump: (a: number) => any;
     readonly rynkclient_clear_ble_profile: (a: number, b: number) => any;
+    readonly rynkclient_clear_lighting_overlay: (a: number, b: any) => any;
+    readonly rynkclient_commit_lighting_overlay_replace: (a: number, b: any) => any;
     readonly rynkclient_get_battery_status: (a: number) => any;
     readonly rynkclient_get_behavior: (a: number) => any;
     readonly rynkclient_get_ble_status: (a: number) => any;
@@ -698,6 +1036,15 @@ export interface InitOutput {
     readonly rynkclient_get_keymap_bulk: (a: number, b: number, c: number, d: number) => any;
     readonly rynkclient_get_layout: (a: number) => any;
     readonly rynkclient_get_led_indicator: (a: number) => any;
+    readonly rynkclient_get_lighting_capabilities: (a: number) => any;
+    readonly rynkclient_get_lighting_keys: (a: number, b: any) => any;
+    readonly rynkclient_get_lighting_leds: (a: number, b: any) => any;
+    readonly rynkclient_get_lighting_outputs: (a: number, b: any) => any;
+    readonly rynkclient_get_lighting_physical_keys: (a: number, b: any) => any;
+    readonly rynkclient_get_lighting_routes: (a: number, b: any) => any;
+    readonly rynkclient_get_lighting_state: (a: number) => any;
+    readonly rynkclient_get_lighting_zone_memberships: (a: number, b: any) => any;
+    readonly rynkclient_get_lighting_zones: (a: number, b: any) => any;
     readonly rynkclient_get_lock_status: (a: number) => any;
     readonly rynkclient_get_macro: (a: number, b: number) => any;
     readonly rynkclient_get_matrix_state: (a: number) => any;
@@ -709,6 +1056,7 @@ export interface InitOutput {
     readonly rynkclient_get_wpm: (a: number) => any;
     readonly rynkclient_lock: (a: number) => any;
     readonly rynkclient_next_topic: (a: number) => any;
+    readonly rynkclient_put_lighting_overlay_chunk: (a: number, b: any) => any;
     readonly rynkclient_reboot: (a: number) => any;
     readonly rynkclient_set_behavior: (a: number, b: any) => any;
     readonly rynkclient_set_combo: (a: number, b: number, c: any) => any;
@@ -718,12 +1066,15 @@ export interface InitOutput {
     readonly rynkclient_set_fork: (a: number, b: number, c: any) => any;
     readonly rynkclient_set_key: (a: number, b: number, c: number, d: number, e: any) => any;
     readonly rynkclient_set_keymap_bulk: (a: number, b: any) => any;
+    readonly rynkclient_set_lighting_overlay: (a: number, b: any) => any;
+    readonly rynkclient_set_lighting_state: (a: number, b: any) => any;
     readonly rynkclient_set_macro: (a: number, b: number, c: any) => any;
     readonly rynkclient_set_morse: (a: number, b: number, c: any) => any;
     readonly rynkclient_set_morse_bulk: (a: number, b: any) => any;
     readonly rynkclient_storage_reset: (a: number, b: any) => any;
     readonly rynkclient_switch_ble_profile: (a: number, b: number) => any;
     readonly rynkclient_unlock_poll: (a: number) => any;
+    readonly rynkclient_unset_lighting_overlay: (a: number, b: any) => any;
     readonly init: () => void;
     readonly wasm_bindgen_131d9c369ca8bda___convert__closures_____invoke___wasm_bindgen_131d9c369ca8bda___JsValue__core_7d5f0a2ba6a62c33___result__Result_____wasm_bindgen_131d9c369ca8bda___JsError___true_: (a: number, b: number, c: any) => [number, number];
     readonly wasm_bindgen_131d9c369ca8bda___convert__closures_____invoke___js_sys_bfa7dc20d6a7225c___Function_fn_wasm_bindgen_131d9c369ca8bda___JsValue_____wasm_bindgen_131d9c369ca8bda___sys__Undefined___js_sys_bfa7dc20d6a7225c___Function_fn_wasm_bindgen_131d9c369ca8bda___JsValue_____wasm_bindgen_131d9c369ca8bda___sys__Undefined_______true_: (a: number, b: number, c: any, d: any) => void;

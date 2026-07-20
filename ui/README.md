@@ -1,18 +1,17 @@
 # Glove80 Lightbench
 
 Lightbench connects straight to the keyboard — no daemon or Studio — and uses
-the Glove80 host protocol for lighting plus Rynk for keymaps. It drives:
+one Rynk WebHID session for live lighting and keymaps. It drives:
 
 - the **live host overlay**: RAM-only lighting painted directly onto the
   board, with TTL and brightness control;
-- the **persistent config**: the ordered lighting records the keyboard boots
-  with, edited offline and applied through the transactional v1.1 config
-  session;
+- the **legacy persistent config editor**: retained for offline compatibility
+  and demo-mode testing, but not exposed by current RMK lighting firmware;
 - the **keymap**: live bindings read and written through Rynk.
 
-The ZMK-era Studio path has been retired. Lighting uses WebHID (USB) or Web
-Bluetooth; Rynk keymaps use Rynk's WebHID collection over USB or Bluetooth.
-The two sessions are intentionally separate for now.
+The ZMK-era Studio path has been retired. Wired and already-paired Bluetooth
+connections both use Rynk's WebHID collection (usage page `0xFF60`, usage
+`0x61`).
 
 ## Run locally
 
@@ -27,19 +26,10 @@ Chromium browser; `localhost` counts as a secure context).
 
 ## Connecting
 
-- **Connect USB** — WebHID. Lightbench matches the keyboard's dedicated
-  host-protocol interface (VID `0x16C0` / PID `0x27DB`, usage page `0xFF88`,
-  usage `0x01`) and never touches the Vial raw-HID interface. Pick the
-  Glove80 in the browser prompt; no other program needs to be closed, the
-  interface is exclusive to this protocol.
-- **Connect BLE** — Web Bluetooth. The keyboard must already be paired
-  (bonded) with the OS; the `fc550001-…` GATT service requires an encrypted
-  link and is claimed via `optionalServices`. Requests go out as
-  write-without-response chunks; responses arrive as notifications.
-- **Connect Rynk USB** (Keymap tab) — WebHID usage page `0xFF60`, usage
-  `0x61`, on the firmware's dedicated Rynk interface.
-- **Connect Rynk Bluetooth** (Keymap tab) — WebHID usage page `0xFF60`, usage
-  `0x61`, exposed by the already paired BLE keyboard.
+- **Connect USB** — choose the Glove80's Rynk WebHID collection.
+- **Connect BLE** — first pair the keyboard with the OS, then choose that
+  paired keyboard's Rynk HID collection. Browser code does not access a custom
+  GATT service.
 - **Demo mode** — an in-memory keyboard (`src/lib/mock-device.ts`)
   implementing the full protocol, including the config transfer session,
   partial-apply semantics, a live keymap (seeded with a QWERTY base layer,
@@ -47,9 +37,8 @@ Chromium browser; `localhost` counts as a secure context).
   Everything in the UI can be exercised with no hardware; a banner makes the
   mode unmistakable.
 
-The first exchange on any connection is `GET_CAPABILITIES`; the connection
-readout shows the protocol version and advertised features, and every panel
-gates itself on what the keyboard actually advertises.
+The Rynk handshake advertises keymap and lighting support; Lightbench then
+queries lighting limits/topology and authoritative mutable state.
 
 When the firmware advertises build-identity reporting (feature bit 8),
 Lightbench also issues `GET_VERSION` and shows both halves' firmware version
@@ -70,12 +59,12 @@ while the split link has not synced, not an error.
   what the keyboard shows.
 - **Brightness** is the device's global scalar (0–255) under the compiled
   safety ceiling.
-- **Sync from keyboard** (`READ_OVERLAY`) adopts whatever the keyboard is
-  currently showing; **Push my state** (`REPLACE_OVERLAY`) makes the keyboard
-  match the canvas exactly. **Clear overlay** removes everything.
-- If the right half is offline, writes answer `PARTIAL_APPLY`; the affected
-  keys are marked pending on the board instead of pretending they lit. They
-  apply automatically when the half reconnects.
+- Rynk exposes authoritative state and overlay size, but intentionally does
+  not duplicate every overlay cell for readback. **Push my state** uses the
+  atomic replace transaction; **Clear overlay** removes everything.
+- Every mutation is revision-checked and returns the new authoritative state.
+  The central owns the board-wide frame and forwards complete staged frames to
+  the right half.
 
 ## Persistent config editor
 
@@ -102,7 +91,7 @@ while the split link has not synced, not an error.
 
 ## Keymap editor
 
-Production keymap editing uses an independent Rynk connection from this tab.
+Production keymap editing shares the Rynk connection used by live lighting.
 Demo mode retains the frozen v1.2 backend solely so the UI can be exercised
 without hardware.
 
@@ -135,9 +124,9 @@ without hardware.
 - `src/lib/keycodes.ts` — the VIA keycode name table (format, parse,
   search), mirroring `tools/glove80-control/src/keycodes.rs` so the web UI
   and the CLI speak the same names.
-- `src/lib/rynk-keycode.ts` / `rynk-web-client.ts` — the transitional typed
-  action converter and WebHID Rynk client, backed by the generated
-  `src/vendor/rynk-wasm` package.
+- `src/lib/rynk-keycode.ts` / `rynk-web-client.ts` — the typed action converter
+  and WebHID client for keymaps plus revision-checked lighting, backed by the
+  generated `src/vendor/rynk-wasm` package.
 - `src/lib/glove80-layout.ts` — the LED chain order, plus the 6×14 keymap
   grid ↔ physical key mapping (from `firmware/glove80-rmk/vial.json`).
 - `src/lib/transport.ts` + `webhid-transport.ts` / `webbluetooth-transport.ts`

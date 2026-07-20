@@ -1,6 +1,5 @@
-// Lightbench: Glove80 lighting/config over the product protocol plus keymap
-// editing over Rynk. The two protocols currently have independent browser
-// sessions because their USB and BLE transports are distinct.
+// Lightbench: live Glove80 lighting and keymaps over one Rynk session. The
+// product-protocol panels remain available only for the in-memory legacy demo.
 
 import { useEffect, useState } from "react";
 
@@ -34,8 +33,7 @@ import {
   type RynkBrowserTransport,
 } from "./lib/rynk-web-client";
 import type { Transport, TransportKind } from "./lib/transport";
-import { connectWebBluetooth, webBluetoothSupported } from "./lib/webbluetooth-transport";
-import { connectWebHid, webHidSupported } from "./lib/webhid-transport";
+import { webHidSupported } from "./lib/webhid-transport";
 
 type PanelName = "overlay" | "config" | "toggles" | "keymap";
 
@@ -197,14 +195,24 @@ export function App() {
       tone: "busy",
       message: kind === "demo" ? "Starting the demo keyboard…" : `Waiting for a ${kind.toUpperCase()} device…`,
     });
+    if (kind !== "demo") {
+      try {
+        const next = await connectRynkKeymap(kind);
+        setRynkClient(next);
+        setStatus({
+          tone: "ok",
+          message: `Rynk connected · ${next.lightingCapabilities.ledCountLeft + next.lightingCapabilities.ledCountRight} LEDs · ${next.layers} layers`,
+        });
+      } catch (error) {
+        setStatus({ tone: "error", message: connectionError(error) });
+      } finally {
+        setConnecting(null);
+      }
+      return;
+    }
     let transport: Transport | null = null;
     try {
-      transport =
-        kind === "usb"
-          ? await connectWebHid()
-          : kind === "ble"
-            ? await connectWebBluetooth()
-            : new MockTransport(createDemoKeyboard());
+      transport = new MockTransport(createDemoKeyboard());
       const nextClient = new ProtocolClient(transport);
       // GET_CAPABILITIES is mandatory before anything else; the UI trusts
       // only what the keyboard advertises here.
@@ -240,18 +248,24 @@ export function App() {
   };
 
   const disconnect = async () => {
-    if (!client) return;
+    if (!client && !rynkClient) return;
     // Deliberately no clear here: host-overlay cells without TTL survive
     // until an explicit clear or reboot, and a disconnect must never change
     // how the keyboard looks (docs/lighting-design.md).
-    await client.close().catch(() => undefined);
+    await client?.close().catch(() => undefined);
+    await rynkClient?.close().catch(() => undefined);
     setClient(null);
+    setRynkClient(null);
     setCapabilities(null);
     setVersion(null);
     setStatus({ tone: "idle", message: "Disconnected — the keyboard keeps whatever it was showing" });
   };
 
   const demo = client?.transport.kind === "demo";
+  const connected = client !== null || rynkClient !== null;
+  const activeCapabilities = capabilities ?? rynkClient?.lightingCapabilities ?? null;
+  const activeLabel = client?.transport.label ?? rynkClient?.label ?? "No keyboard";
+  const activeKind = client?.transport.kind ?? (rynkClient ? "rynk" : null);
 
   return (
     <main className="app-shell">
@@ -262,19 +276,19 @@ export function App() {
           <p>Paint the keyboard itself. No daemon required.</p>
         </div>
         <div className="connection-cluster">
-          <div className={`connection-readout ${client ? "connected" : ""}`}>
+          <div className={`connection-readout ${connected ? "connected" : ""}`}>
             <span className="status-dot" aria-hidden="true" />
             <span>
-              <strong>{client ? client.transport.label : "No keyboard"}</strong>
+              <strong>{activeLabel}</strong>
               <small>
-                {client && capabilities
-                  ? `${client.transport.kind.toUpperCase()} · ${describeCapabilities(capabilities)}`
+                {connected && activeCapabilities
+                  ? `${activeKind?.toUpperCase()} · ${describeCapabilities(activeCapabilities)}`
                   : "Offline editor"}
               </small>
             </span>
           </div>
           {client && version && <VersionReadout version={version} />}
-          {client ? (
+          {connected ? (
             <button className="button subtle" onClick={() => void disconnect()}>
               Disconnect
             </button>
@@ -290,12 +304,12 @@ export function App() {
               </button>
               <button
                 className="button subtle"
-                disabled={!webBluetoothSupported() || connecting !== null}
+                disabled={!webHidSupported() || connecting !== null}
                 onClick={() => void connect("ble")}
                 title={
-                  webBluetoothSupported()
-                    ? "Connect with Web Bluetooth (the keyboard must already be paired)"
-                    : "Web Bluetooth is unavailable in this browser"
+                  webHidSupported()
+                    ? "Connect to the already-paired Bluetooth keyboard through its Rynk HID collection"
+                    : "WebHID is unavailable in this browser"
                 }
               >
                 {connecting === "ble" ? "Connecting…" : "Connect BLE"}
@@ -369,8 +383,8 @@ export function App() {
 
       {panel === "overlay" ? (
         <OverlayPanel
-          client={client}
-          capabilities={capabilities}
+          client={client ?? rynkClient}
+          capabilities={activeCapabilities}
           brush={brush}
           onBrushChange={setBrush}
           onStatus={setStatus}

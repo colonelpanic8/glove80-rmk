@@ -2,8 +2,8 @@
 
 This repository contains the active Glove80 firmware and control stack built
 on [RMK](https://github.com/HaoboGu/rmk): firmware for both keyboard halves,
-the downstream lighting compositor, the Glove80 product protocol, the
-`glove80-control` CLI, and the Lightbench browser UI.
+Glove80 lighting topology and hardware integration, legacy product-protocol
+compatibility code, the `glove80-control` CLI, and the Lightbench browser UI.
 
 The embedded firmware, compositor, and protocol crate intentionally remain
 separate Cargo workspaces because they use different targets. Root `make`
@@ -78,24 +78,23 @@ drifting from the submodule used by firmware and native clients.
 
 ## Protocol surfaces
 
-- **Rynk** is RMK's native keymap/configuration protocol. Firmware, the CLI,
-  and the browser package all derive it from the pinned RMK revision.
+- **Rynk** is RMK's native keymap/configuration protocol and now owns live
+  keymap plus topology-aware lighting operations. Firmware, the CLI, and the
+  browser package all derive it from the pinned RMK revision.
 - **Vial** remains a compatibility surface represented by the firmware's
   `vial.json`; this product currently selects Rynk and does not use Vial as the
   owner of lighting behavior.
-- **glove80-host-protocol** is the versioned, capability-driven product
-  protocol for lighting, persistent product configuration, firmware version,
-  and bootloader operations not owned by Rynk. Its Rust codec and JSON golden
-  vectors live in `crates/glove80-host-protocol/` and are shared with the CLI
-  and Lightbench tests.
+- **glove80-host-protocol** is retained for legacy persistent configuration,
+  firmware-version tooling, compatibility tests, and the browser demo. Current
+  firmware no longer exposes its separate transport for live lighting.
 
 ## Lighting ownership
 
 This repository owns Glove80-specific hardware facts and product policy: LED
-topology and chain routing, physical geometry, safety ceilings, default scenes,
-status semantics, persistence, split routing, and product-protocol adapters.
-The crate at `crates/glove80-compositor/` is downstream while that work is
-being aligned with RMK.
+topology and chain routing, the 80% hardware safety ceiling, default scenes,
+and split-frame presentation. Generic composition, state revisioning,
+scheduling, topology readback, and Rynk lighting commands come from pinned RMK.
+The former downstream compositor remains only as compatibility/reference code.
 
 Generic event, composition, scheduling, driver, split, storage, and Rynk
 mechanisms belong upstream in RMK. Moving generic pieces upstream must preserve

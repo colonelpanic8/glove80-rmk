@@ -9,23 +9,21 @@ use std::path::PathBuf;
 
 use anyhow::{bail, Context, Result};
 use clap::{Args, Subcommand, ValueEnum};
-use glove80_host_protocol::{
-    feature, BootTarget, Capabilities, CellState, CellWrite, Effect, EffectKind,
-};
+use glove80_host_protocol::{feature, Capabilities, CellState, CellWrite, Effect, EffectKind};
 
 use crate::hostproto::{effect_name, ApplyOutcome, HostClient};
-use crate::transport::{self, Selector};
+use crate::transport::Selector;
 
 /// Control the RMK lighting host overlay over USB raw HID or BLE.
 #[derive(Subcommand)]
 pub enum LightingCommand {
-    /// Round-trip a PING and report the latency.
+    /// Round-trip a Rynk version query and report the latency.
     Ping {
         /// Optional payload text to echo (up to 64 bytes).
         #[arg(long)]
         data: Option<String>,
     },
-    /// Show the device's advertised protocol capabilities.
+    /// Show the device's Rynk lighting capabilities and topology summary.
     Caps,
     /// Set one or more overlay cells to a color, optionally animated.
     ///
@@ -60,7 +58,7 @@ pub enum LightingCommand {
     },
     /// Clear the whole host overlay.
     Clear,
-    /// Read the overlay back as a table, including remaining TTLs.
+    /// Read authoritative lighting state, including revision and overlay size.
     Read,
     /// Atomically replace the whole overlay from cell-spec lines.
     ///
@@ -81,7 +79,7 @@ pub enum LightingCommand {
         /// New level 0-255; omit to read the current level.
         value: Option<u8>,
     },
-    /// Get (no argument) or set a named toggle overlay's state.
+    /// Legacy named toggle overlay command (unsupported by RMK lighting).
     Toggle {
         /// Toggle id as configured on the device.
         id: u8,
@@ -222,7 +220,7 @@ pub fn build_effect(
 }
 
 impl EffectArg {
-    fn kind(self) -> EffectKind {
+    pub(crate) fn kind(self) -> EffectKind {
         match self {
             EffectArg::Solid => EffectKind::Solid,
             EffectArg::Blink => EffectKind::Blink,
@@ -433,9 +431,7 @@ pub fn render_capabilities(capabilities: &Capabilities) -> String {
 // ---------------------------------------------------------------------------
 
 pub fn run(selector: &Selector, command: &LightingCommand) -> Result<()> {
-    let transport = transport::connect(selector)?;
-    let mut client = HostClient::new(transport);
-    run_with_client(&mut client, command)
+    crate::rynk_client::run_lighting(selector, command)
 }
 
 /// Transport-independent dispatch (unit-tested with the mock transport).
@@ -534,11 +530,6 @@ fn read_stdin() -> Result<String> {
 
 /// Host-protocol bootloader entry with a confirmation prompt.
 pub fn run_bootloader(selector: &Selector, peripheral: bool, yes: bool) -> Result<()> {
-    let target = if peripheral {
-        BootTarget::Peripheral
-    } else {
-        BootTarget::Central
-    };
     let half = if peripheral { "peripheral" } else { "central" };
     if !yes {
         print!("Reboot the {half} half into its UF2 bootloader? [y/N] ");
@@ -553,13 +544,8 @@ pub fn run_bootloader(selector: &Selector, peripheral: bool, yes: bool) -> Resul
             return Ok(());
         }
     }
-    let transport = transport::connect(selector)?;
-    let mut client = HostClient::new(transport);
-    if client.enter_bootloader(target)? {
-        println!("{half} half acknowledged the bootloader request");
-    } else {
-        println!("no response — the {half} half most likely reset into its bootloader");
-    }
+    crate::rynk_client::run_bootloader(selector, peripheral)?;
+    println!("{half} half accepted the Rynk bootloader request");
     Ok(())
 }
 

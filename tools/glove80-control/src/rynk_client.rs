@@ -1,20 +1,28 @@
-//! Rynk-backed keymap operations.
+//! Rynk-backed keymap, lighting, and bootloader operations.
 //!
-//! Lighting and the transactional Glove80 configuration format still use the
-//! product protocol during migration; the live keymap has one owner: Rynk.
+//! The transactional Glove80 configuration format remains a legacy path, but
+//! live keymap and lighting state each have one owner: Rynk.
 
 use std::time::Duration;
 
 use anyhow::{anyhow, bail, Context, Result};
 use embassy_futures::select::{select, Either};
 use rynk::rmk_types::action::KeyAction;
-use rynk::rmk_types::protocol::rynk::SetKeymapBulkRequest;
+use rynk::rmk_types::protocol::rynk::{
+    AbortLightingOverlayReplaceRequest, BeginLightingOverlayReplaceRequest,
+    ClearLightingOverlayRequest, CommitLightingOverlayReplaceRequest, LightingBackgroundMode,
+    LightingEffect, LightingEffectFlags, LightingFeatureFlags, LightingLedId, LightingMutableState,
+    LightingOverlayCell, LightingRgb8, LightingState, PutLightingOverlayChunkRequest,
+    SetKeymapBulkRequest, SetLightingOverlayRequest, SetLightingStateRequest,
+    UnsetLightingOverlayRequest,
+};
 use rynk::{Client, RynkDevice};
 use rynk_ble::BleDevice;
 use rynk_serial::SerialDevice;
 
 use crate::keymap::{self, KeymapCommand};
 use crate::keymapcfg::{KeymapReport, KeymapStage, LayerPlan};
+use crate::lighting::{EffectArg, LightingCommand};
 use crate::rynk_hid::HidDevice;
 use crate::transport::{Preference, Selector};
 
@@ -39,6 +47,342 @@ pub fn run_keymap(selector: &Selector, command: &KeymapCommand) -> Result<()> {
             Device::Ble(device) => run_device(device, command).await,
         }
     })
+}
+
+/// Run topology-aware lighting operations over the same Rynk session used by
+/// keymap control. Every mutation uses the authoritative revision returned by
+/// the preceding read or write.
+pub fn run_lighting(selector: &Selector, command: &LightingCommand) -> Result<()> {
+    let runtime =
+        tokio::runtime::Runtime::new().context("could not create the Rynk async runtime")?;
+    runtime.block_on(async {
+        match select_device(selector).await? {
+            Device::Hid(device) => run_lighting_device(device, command).await,
+            Device::Serial(device) => run_lighting_device(device, command).await,
+            Device::Ble(device) => run_lighting_device(device, command).await,
+        }
+    })
+}
+
+/// Enter the central bootloader through Rynk. The right-half request remains
+/// a board-specific split action and is currently only available from the
+/// keyboard's physical bootloader binding.
+pub fn run_bootloader(selector: &Selector, peripheral: bool) -> Result<()> {
+    if peripheral {
+        bail!(
+            "Rynk bootloader entry targets the central half; use the right-half physical bootloader key for the peripheral"
+        );
+    }
+    let runtime =
+        tokio::runtime::Runtime::new().context("could not create the Rynk async runtime")?;
+    runtime.block_on(async {
+        match select_device(selector).await? {
+            Device::Hid(device) => run_bootloader_device(device).await,
+            Device::Serial(device) => run_bootloader_device(device).await,
+            Device::Ble(device) => run_bootloader_device(device).await,
+        }
+    })
+}
+
+async fn run_lighting_device<D: RynkDevice>(device: D, command: &LightingCommand) -> Result<()> {
+    let label = device.label();
+    let (client, mut driver) = connect_device(device, &label).await?;
+    match select(driver.run(&client), operate_lighting(&client, command)).await {
+        Either::First(error) => Err(anyhow!("Rynk connection to {label} ended: {error}")),
+        Either::Second(result) => result,
+    }
+}
+
+async fn run_bootloader_device<D: RynkDevice>(device: D) -> Result<()> {
+    let label = device.label();
+    let (client, mut driver) = connect_device(device, &label).await?;
+    match select(driver.run(&client), client.bootloader_jump()).await {
+        Either::First(error) => Err(anyhow!("Rynk connection to {label} ended: {error}")),
+        Either::Second(result) => result.map_err(Into::into),
+    }
+}
+
+async fn operate_lighting(client: &Client, command: &LightingCommand) -> Result<()> {
+    match command {
+        LightingCommand::Ping { data } => {
+            if data.is_some() {
+                bail!("Rynk does not accept ping payloads; omit --data");
+            }
+            let started = std::time::Instant::now();
+            let version = client.get_version().await?;
+            println!(
+                "Rynk v{}.{} round trip: {:.1} ms",
+                version.major,
+                version.minor,
+                started.elapsed().as_secs_f64() * 1000.0
+            );
+        }
+        LightingCommand::Caps => {
+            let caps = client.get_lighting_capabilities().await?;
+            let effects = [
+                (LightingEffectFlags::SOLID, "solid"),
+                (LightingEffectFlags::BLINK, "blink"),
+                (LightingEffectFlags::BREATHE, "breathe"),
+            ]
+            .into_iter()
+            .filter_map(|(bit, name)| caps.effects.contains(bit).then_some(name))
+            .collect::<Vec<_>>()
+            .join(", ");
+            let features = [
+                (LightingFeatureFlags::OVERLAY_TTL, "overlay TTL"),
+                (
+                    LightingFeatureFlags::ATOMIC_OVERLAY_REPLACE,
+                    "atomic replace",
+                ),
+                (LightingFeatureFlags::LAYER_AWARE, "layer-aware"),
+                (LightingFeatureFlags::PHYSICAL_GEOMETRY, "physical geometry"),
+                (LightingFeatureFlags::ZONES, "zones"),
+                (LightingFeatureFlags::ROUTING, "routing"),
+            ]
+            .into_iter()
+            .filter_map(|(bit, name)| caps.features.contains(bit).then_some(name))
+            .collect::<Vec<_>>()
+            .join(", ");
+            println!(
+                "topology revision: {}\nLEDs: {}\nlogical keys: {}\nphysical keys: {}\noutputs: {}\nroutes: {}\noverlay capacity: {}\neffects: {}\nfeatures: {}",
+                caps.topology_revision,
+                caps.led_count,
+                caps.logical_key_count,
+                caps.physical_key_count,
+                caps.output_count,
+                caps.route_count,
+                caps.overlay_capacity,
+                effects,
+                features,
+            );
+        }
+        LightingCommand::Set {
+            keys,
+            color,
+            effect,
+            period,
+            phase,
+            duty,
+            ttl,
+        } => {
+            let keys = crate::lighting::parse_key_list(keys)?;
+            let effect = rynk_effect(
+                *effect,
+                crate::lighting::parse_color(color)?,
+                *period,
+                *phase,
+                *duty,
+            )?;
+            let ttl_ms = ttl.map(positive_ttl).transpose()?;
+            let mut state = client.get_lighting_state().await?;
+            for key in &keys {
+                state = client
+                    .set_lighting_overlay(SetLightingOverlayRequest {
+                        expected_revision: state.revision,
+                        cell: LightingOverlayCell {
+                            led_id: LightingLedId(u16::from(*key)),
+                            effect,
+                            ttl_ms,
+                        },
+                    })
+                    .await?;
+            }
+            println!(
+                "set {} LED(s); {}",
+                keys.len(),
+                render_lighting_state(state)
+            );
+        }
+        LightingCommand::Unset { keys } => {
+            let mut ids = Vec::new();
+            for list in keys {
+                ids.extend(crate::lighting::parse_key_list(list)?);
+            }
+            let mut state = client.get_lighting_state().await?;
+            for id in &ids {
+                state = client
+                    .unset_lighting_overlay(UnsetLightingOverlayRequest {
+                        expected_revision: state.revision,
+                        led_id: LightingLedId(u16::from(*id)),
+                    })
+                    .await?;
+            }
+            println!(
+                "unset {} LED(s); {}",
+                ids.len(),
+                render_lighting_state(state)
+            );
+        }
+        LightingCommand::Clear => {
+            let state = client.get_lighting_state().await?;
+            let state = client
+                .clear_lighting_overlay(ClearLightingOverlayRequest {
+                    expected_revision: state.revision,
+                })
+                .await?;
+            println!("cleared overlay; {}", render_lighting_state(state));
+        }
+        LightingCommand::Read => {
+            println!(
+                "{}",
+                render_lighting_state(client.get_lighting_state().await?)
+            );
+        }
+        LightingCommand::Replace { file, ttl } => {
+            let spec = match file.as_deref() {
+                None => read_stdin()?,
+                Some(path) if path.as_os_str() == "-" => read_stdin()?,
+                Some(path) => std::fs::read_to_string(path)
+                    .with_context(|| format!("could not read {}", path.display()))?,
+            };
+            let parsed = crate::lighting::parse_replace_spec(&spec)?;
+            let ttl_ms = ttl.map(positive_ttl).transpose()?;
+            let state = client.get_lighting_state().await?;
+            let transaction = client
+                .begin_lighting_overlay_replace(BeginLightingOverlayReplaceRequest {
+                    expected_revision: state.revision,
+                    cell_count: u16::try_from(parsed.len()).context("too many overlay cells")?,
+                })
+                .await?;
+            let staged = async {
+                for (chunk_index, cells) in parsed.chunks(8).enumerate() {
+                    let mut request = PutLightingOverlayChunkRequest {
+                        transaction_id: transaction.id,
+                        offset: u16::try_from(chunk_index * 8).unwrap(),
+                        cells: Default::default(),
+                    };
+                    for cell in cells {
+                        request
+                            .cells
+                            .push(LightingOverlayCell {
+                                led_id: LightingLedId(u16::from(cell.key)),
+                                effect: legacy_effect(cell.effect),
+                                ttl_ms,
+                            })
+                            .map_err(|_| anyhow!("lighting transaction chunk overflow"))?;
+                    }
+                    client
+                        .put_lighting_overlay_chunk(request)
+                        .await?;
+                }
+                client
+                    .commit_lighting_overlay_replace(CommitLightingOverlayReplaceRequest {
+                        transaction_id: transaction.id,
+                    })
+                    .await
+                    .map_err(anyhow::Error::from)
+            }
+            .await;
+            match staged {
+                Ok(state) => println!(
+                    "replaced overlay with {} LED(s); {}",
+                    parsed.len(),
+                    render_lighting_state(state)
+                ),
+                Err(error) => {
+                    let _ = client
+                        .abort_lighting_overlay_replace(AbortLightingOverlayReplaceRequest {
+                            transaction_id: transaction.id,
+                        })
+                        .await;
+                    return Err(error);
+                }
+            }
+        }
+        LightingCommand::Brightness { value } => {
+            let state = client.get_lighting_state().await?;
+            let state = if let Some(value) = value {
+                client
+                    .set_lighting_state(SetLightingStateRequest {
+                        expected_revision: state.revision,
+                        state: LightingMutableState {
+                            output_enabled: state.output_enabled,
+                            output_brightness: *value,
+                            background: state.background,
+                        },
+                    })
+                    .await?
+            } else {
+                state
+            };
+            println!(
+                "brightness: {}; revision: {}",
+                state.output_brightness, state.revision
+            );
+        }
+        LightingCommand::Toggle { .. } => {
+            bail!("named toggle overlays are not part of the RMK lighting model")
+        }
+    }
+    Ok(())
+}
+
+fn positive_ttl(value: u32) -> Result<u32> {
+    if value == 0 {
+        bail!("TTL must be greater than zero; omit --ttl for no expiry");
+    }
+    Ok(value)
+}
+
+fn rynk_effect(
+    kind: EffectArg,
+    rgb: (u8, u8, u8),
+    period: Option<u16>,
+    phase: Option<u16>,
+    duty: Option<u8>,
+) -> Result<LightingEffect> {
+    let legacy = crate::lighting::build_effect(kind.kind(), rgb, period, phase, duty)?;
+    Ok(legacy_effect(legacy))
+}
+
+fn legacy_effect(effect: glove80_host_protocol::Effect) -> LightingEffect {
+    let color = LightingRgb8 {
+        r: effect.r,
+        g: effect.g,
+        b: effect.b,
+    };
+    match effect.kind {
+        glove80_host_protocol::EffectKind::Solid => LightingEffect::Solid { color },
+        glove80_host_protocol::EffectKind::Blink => LightingEffect::Blink {
+            color,
+            period_ms: u32::from(effect.period_ms),
+            phase_ms: u32::from(effect.phase_ms),
+            duty: effect.duty_percent,
+        },
+        glove80_host_protocol::EffectKind::Breathe => LightingEffect::Breathe {
+            color,
+            period_ms: u32::from(effect.period_ms),
+            phase_ms: u32::from(effect.phase_ms),
+            step_ms: 16,
+        },
+    }
+}
+
+fn render_lighting_state(state: LightingState) -> String {
+    let background_mode = match state.background.mode {
+        LightingBackgroundMode::Solid => "solid",
+        LightingBackgroundMode::Breathe => "breathe",
+    };
+    format!(
+        "revision: {}\noutput: {}\nbrightness: {}\noverlay cells: {}\nbackground: {} (mode {}, HSV {},{},{}; speed {})",
+        state.revision,
+        if state.output_enabled { "on" } else { "off" },
+        state.output_brightness,
+        state.overlay_len,
+        if state.background.enabled { "on" } else { "off" },
+        background_mode,
+        state.background.hue,
+        state.background.saturation,
+        state.background.value,
+        state.background.speed,
+    )
+}
+
+fn read_stdin() -> Result<String> {
+    let mut text = String::new();
+    std::io::Read::read_to_string(&mut std::io::stdin().lock(), &mut text)
+        .context("could not read the cell spec from stdin")?;
+    Ok(text)
 }
 
 /// Read every Rynk keymap layer and convert it to the canonical config's

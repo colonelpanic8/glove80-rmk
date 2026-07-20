@@ -5,4 +5,4 @@
 # files (rmk/, protocol/) still take precedence for builds run inside them.
 channel = "1.97.0"
 components = ["clippy", "rust-src", "rustfmt"]
-targets = ["thumbv7em-none-eabihf"]
+targets = ["thumbv7em-none-eabihf", "wasm32-unknown-unknown"]

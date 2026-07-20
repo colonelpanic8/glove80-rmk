@@ -18,9 +18,9 @@ mod transport;
 mod version;
 
 #[derive(Parser)]
-#[command(about = "Control Glove80 keyboards: keymaps over Rynk; lighting, \
-                   persistent config, version, and bootloader entry over the \
-                   Glove80 host protocol")]
+#[command(about = "Control Glove80 keyboards: keymaps, lighting, and bootloader \
+                   entry over Rynk; legacy persistent config and version tools \
+                   remain available for older firmware")]
 struct Cli {
     /// Device to talk to: a /dev/hidraw* path for Glove80/Rynk HID, an older
     /// Rynk firmware's /dev/ttyACM* path, or a BLE address. Combined config
@@ -49,13 +49,12 @@ enum Command {
         #[command(subcommand)]
         command: ConfigCommand,
     },
-    /// Reboot a half into its UF2 bootloader (host protocol
-    /// ENTER_BOOTLOADER; central half unless --peripheral).
+    /// Reboot the central half into its UF2 bootloader through Rynk.
     Bootloader {
         #[command(flatten)]
         host: lighting::BootloaderArgs,
     },
-    /// Control the RMK lighting host overlay over USB raw HID or BLE.
+    /// Control topology-aware RMK lighting over Rynk USB HID or BLE.
     Lighting {
         #[command(subcommand)]
         command: lighting::LightingCommand,
