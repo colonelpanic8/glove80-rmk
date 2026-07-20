@@ -85,8 +85,8 @@ drifting from the submodule used by firmware and native clients.
   `vial.json`; this product currently selects Rynk and does not use Vial as the
   owner of lighting behavior.
 - **glove80-host-protocol** is retained for legacy persistent configuration,
-  firmware-version tooling, compatibility tests, and the browser demo. Current
-  firmware no longer exposes its separate transport for live lighting.
+  compatibility tests, and the browser demo. Current firmware reports its
+  build identity and owns live lighting through Rynk.
 
 ## Lighting ownership
 

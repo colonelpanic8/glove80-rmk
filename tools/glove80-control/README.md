@@ -176,23 +176,19 @@ overlay writes print the keys still pending on the peripheral.
 - Capabilities, matrix size, layer count, and bulk support come from the Rynk
   handshake rather than product-protocol feature bit 7.
 
-## Build identity (host protocol v1.3)
+## Build identity (Rynk)
 
-- `version` prints this CLI's own build identity (crate semver plus the git
-  short hash embedded at build time, `-dirty` when built from a tree with
-  uncommitted changes) and then queries GET_VERSION for both keyboard
-  halves: semver, git hash, dirty flag, and connection state per half.
-- The peripheral's identity is announced to the central over the split link
-  at link-up; while the link is down the CLI shows the last-known version
-  as `disconnected (last known)`, or `never seen since the central booted`
-  when the central has no announcement cached.
-- When both halves are present but built from different commits or crate
-  versions the firmware sets a mismatch flag and the CLI prints a prominent
-  `WARNING: HALVES MISMATCH` — the usual cause is flashing one half and
-  forgetting the other.
-- A note is printed when the keyboard speaks a different protocol version
-  than the CLI. Gated on capability feature bit 8; the CLI refuses cleanly
-  when the firmware does not advertise build-identity reporting.
+- `version` keeps three concepts separate: the structured Rynk protocol
+  version, the application-defined firmware build label, and the structured
+  RMK crate version.
+- Glove80's default firmware label is
+  `glove80-rmk v<semver> (<git-hash>[-dirty]) / RMK v<semver>`. Downstream
+  firmware can replace the whole bounded label with
+  `HostService::with_build_label` without changing protocol compatibility.
+- The current Rynk endpoint describes the central/application build. Split
+  target identity and half-mismatch detection need a future routed or
+  per-peripheral build-info query; `version` does not claim to validate the
+  peripheral image yet.
 
 ## Development
 

@@ -18,9 +18,11 @@ mod transport;
 mod version;
 
 #[derive(Parser)]
-#[command(about = "Control Glove80 keyboards: keymaps, lighting, and bootloader \
-                   entry over Rynk; legacy persistent config and version tools \
-                   remain available for older firmware")]
+#[command(
+    about = "Control Glove80 keyboards: keymaps, lighting, firmware identity, \
+                   and bootloader entry over Rynk; legacy persistent config tools \
+                   remain available for older firmware"
+)]
 struct Cli {
     /// Device to talk to: a /dev/hidraw* path for Glove80/Rynk HID, an older
     /// Rynk firmware's /dev/ttyACM* path, or a BLE address. Combined config
@@ -64,8 +66,7 @@ enum Command {
         #[command(subcommand)]
         command: keymap::KeymapCommand,
     },
-    /// Show this CLI's and both keyboard halves' firmware build identity
-    /// (RMK host protocol v1.3, GET_VERSION) and warn on mismatched halves.
+    /// Show this CLI's identity plus the keyboard's Rynk, firmware, and RMK versions.
     Version,
 }
 

@@ -64,6 +64,20 @@ pub fn run_lighting(selector: &Selector, command: &LightingCommand) -> Result<()
     })
 }
 
+/// Query the distinct protocol, application-build, and RMK identities over
+/// one Rynk session.
+pub fn run_version(selector: &Selector) -> Result<()> {
+    let runtime =
+        tokio::runtime::Runtime::new().context("could not create the Rynk async runtime")?;
+    runtime.block_on(async {
+        match select_device(selector).await? {
+            Device::Hid(device) => run_version_device(device).await,
+            Device::Serial(device) => run_version_device(device).await,
+            Device::Ble(device) => run_version_device(device).await,
+        }
+    })
+}
+
 /// Enter the central bootloader through Rynk. The right-half request remains
 /// a board-specific split action and is currently only available from the
 /// keyboard's physical bootloader binding.
@@ -100,6 +114,23 @@ async fn run_bootloader_device<D: RynkDevice>(device: D) -> Result<()> {
         Either::First(error) => Err(anyhow!("Rynk connection to {label} ended: {error}")),
         Either::Second(result) => result.map_err(Into::into),
     }
+}
+
+async fn run_version_device<D: RynkDevice>(device: D) -> Result<()> {
+    let label = device.label();
+    let (client, mut driver) = connect_device(device, &label).await?;
+    match select(driver.run(&client), read_version(&client)).await {
+        Either::First(error) => Err(anyhow!("Rynk connection to {label} ended: {error}")),
+        Either::Second(result) => result,
+    }
+}
+
+async fn read_version(client: &Client) -> Result<()> {
+    let protocol = client.get_version().await?;
+    let device = client.get_device_info().await?;
+    let build = client.get_build_info().await?;
+    print!("{}", crate::version::render(protocol, &device, &build));
+    Ok(())
 }
 
 async fn operate_lighting(client: &Client, command: &LightingCommand) -> Result<()> {
@@ -261,9 +292,7 @@ async fn operate_lighting(client: &Client, command: &LightingCommand) -> Result<
                             })
                             .map_err(|_| anyhow!("lighting transaction chunk overflow"))?;
                     }
-                    client
-                        .put_lighting_overlay_chunk(request)
-                        .await?;
+                    client.put_lighting_overlay_chunk(request).await?;
                 }
                 client
                     .commit_lighting_overlay_replace(CommitLightingOverlayReplaceRequest {

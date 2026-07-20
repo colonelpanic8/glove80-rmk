@@ -75,16 +75,18 @@ RMK. Run from the repository root on branch `codex/rmk-evaluation`.
   - `version` must print this shape, with build-specific values in braces:
 
     ```text
-    glove80-control v{semver} ({git-hash}{-dirty}), host protocol v1.3
-    firmware:
-      central      v{semver}  {git-hash}{-dirty}  connected
-      peripheral   v{semver}  {git-hash}{-dirty}  connected
+    glove80-control v{semver} ({git-hash}{-dirty})
+    Rynk protocol: v0.3
+    firmware: glove80-rmk v{semver} ({git-hash}{-dirty}) / RMK v{semver}
+    RMK: v{semver}
+    device: {manufacturer} {product} (USB {vid}:{pid})
+    serial: {serial}
     ```
 
-  - Both firmware hashes and semvers must match.
-  - `WARNING: HALVES MISMATCH` must not appear.
-  - A dirty suffix is acceptable only if both halves were intentionally built
-    from the same dirty tree and the exact artifacts are retained.
+  - The firmware label and structured RMK line must name the intended versions.
+  - A dirty suffix is acceptable only for an intentionally retained local build.
+  - This query currently identifies the central/application image; verify the
+    peripheral artifact separately until Rynk exposes routed split build info.
   - `lighting caps` must print:
 
     ```text
@@ -132,14 +134,14 @@ RMK. Run from the repository root on branch `codex/rmk-evaluation`.
    cp dist/glove80-rmk-0.1.0-rh.uf2 /run/media/imalison/GLV80RHBOOT/
    sync
    timeout 30 sh -c 'while test -d /run/media/imalison/GLV80RHBOOT; do sleep 1; done'
-   timeout 45 sh -c 'until ./target/debug/glove80-control --usb version | grep -q "peripheral.*connected"; do sleep 2; done'
+   timeout 45 sh -c 'until ./target/debug/glove80-control --usb version >/dev/null 2>&1; do sleep 2; done'
    ```
 
    - Expected bootloader output: `peripheral half acknowledged the bootloader
      request` or `no response — the peripheral half most likely reset into its
      bootloader`.
-   - The right UF2 volume appears, disappears after the copy, and `version`
-     reports the peripheral connected again.
+   - The right UF2 volume appears and disappears after the copy; later split
+     typing tests confirm that the peripheral rejoined.
 
 2. Flash the central only after the peripheral has rejoined:
 
@@ -156,7 +158,7 @@ RMK. Run from the repository root on branch `codex/rmk-evaluation`.
    - Expected bootloader output: `central half acknowledged the bootloader
      request` or `no response — the central half most likely reset into its
      bootloader`.
-   - Final `version` must show both halves connected with matching builds.
+   - Final `version` must show the expected application and RMK build identity.
 
 ## 1. USB typing (left-local) — HANDS
 
@@ -194,7 +196,7 @@ RMK. Run from the repository root on branch `codex/rmk-evaluation`.
   "$G80CTL" --ble lighting ping --data ble
   ```
 
-  - `version` must show both halves connected with matching builds.
+  - `version` must show the expected application and RMK build identity.
   - Expected ping: `PING 3 bytes over BLE (...): {latency} ms`.
 
 - [ ] Capture typing over BLE:

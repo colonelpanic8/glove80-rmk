@@ -310,6 +310,18 @@ export interface Fork {
 }
 
 /**
+ * Human-readable identity of the firmware build.
+ *
+ * Unlike [`ProtocolVersion`], this label is deliberately application-defined:
+ * it is for diagnostics and display, never compatibility decisions. RMK
+ * supplies an RMK-only default and downstream firmware may replace it with a
+ * label containing its own package, source revision, or configuration name.
+ */
+export interface BuildInfo {
+    label: string;
+}
+
+/**
  * Identifies a specific key position in the keymap.
  */
 export interface KeyPosition {
@@ -935,6 +947,7 @@ export class RynkClient {
     get_battery_status(): Promise<BatteryStatus>;
     get_behavior(): Promise<BehaviorConfig>;
     get_ble_status(): Promise<BleStatus>;
+    get_build_info(): Promise<BuildInfo>;
     get_capabilities(): Promise<DeviceCapabilities>;
     get_combo(index: number): Promise<Combo>;
     get_combo_bulk(start_index: number): Promise<GetComboBulkResponse>;
@@ -1022,6 +1035,7 @@ export interface InitOutput {
     readonly rynkclient_get_battery_status: (a: number) => any;
     readonly rynkclient_get_behavior: (a: number) => any;
     readonly rynkclient_get_ble_status: (a: number) => any;
+    readonly rynkclient_get_build_info: (a: number) => any;
     readonly rynkclient_get_capabilities: (a: number) => any;
     readonly rynkclient_get_combo: (a: number, b: number) => any;
     readonly rynkclient_get_combo_bulk: (a: number, b: number) => any;

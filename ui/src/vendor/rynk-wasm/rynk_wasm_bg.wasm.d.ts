@@ -14,6 +14,7 @@ export const rynkclient_commit_lighting_overlay_replace: (a: number, b: any) => 
 export const rynkclient_get_battery_status: (a: number) => any;
 export const rynkclient_get_behavior: (a: number) => any;
 export const rynkclient_get_ble_status: (a: number) => any;
+export const rynkclient_get_build_info: (a: number) => any;
 export const rynkclient_get_capabilities: (a: number) => any;
 export const rynkclient_get_combo: (a: number, b: number) => any;
 export const rynkclient_get_combo_bulk: (a: number, b: number) => any;

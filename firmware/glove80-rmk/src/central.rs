@@ -14,8 +14,27 @@ mod keyboard_central {
     /// descriptor and protocol mailbox.
     #[Overwritten(host_service)]
     fn host_service() {
+        use core::fmt::Write as _;
+
+        let dirty = if env!("GLOVE80_GIT_DIRTY") == "1" {
+            "-dirty"
+        } else {
+            ""
+        };
+        let mut build_label = ::rmk::heapless::String::<128>::new();
+        let _ = write!(
+            build_label,
+            "{} v{} ({}{}) / RMK v{}",
+            env!("CARGO_PKG_NAME"),
+            env!("CARGO_PKG_VERSION"),
+            env!("GLOVE80_GIT_HASH"),
+            dirty,
+            ::rmk::host::RMK_VERSION_STRING,
+        );
+
         ::rmk::host::HostService::new(&keymap, &rmk_config)
             .with_lighting(crate::central_lighting::rynk_controller())
+            .with_build_label(build_label.as_str())
     }
 
     /// Central owner of the board-wide RMK lighting engine. Its output writes

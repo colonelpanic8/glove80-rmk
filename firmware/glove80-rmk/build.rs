@@ -10,8 +10,8 @@
 //!   the linker args this target needs.
 //! - [`vial_config_generation`] — RMK's Vial contract: the compressed
 //!   keyboard definition and keyboard UID constants Vial expects.
-//! - [`version_embedding`] — ours: git/semver build identity served over the
-//!   host protocol's GET_VERSION (protocol v1.3).
+//! - [`version_embedding`] — ours: git/semver build identity served by Rynk's
+//!   application-defined `GetBuildInfo` label.
 
 use std::fs::File;
 use std::io::{Read, Write};
@@ -93,11 +93,10 @@ fn vial_config_generation() {
     fs::write(out_file, const_declarations).unwrap();
 }
 
-/// Embed this build's identity for the host protocol's GET_VERSION (v1.3).
+/// Embed this application build's identity for Rynk `GetBuildInfo`.
 ///
-/// Ours (see PROTOCOL.md "GET_VERSION"): the firmware reports its crate
-/// semver plus the git state of the build tree. Emitted as `rustc-env`
-/// values consumed by `src/version.rs`:
+/// The firmware reports its crate semver plus the git state of the build tree.
+/// These `rustc-env` values are composed with RMK's version in `central.rs`:
 ///
 /// - `GLOVE80_GIT_HASH`: `git rev-parse --short=8 HEAD`, exactly 8 ASCII
 ///   chars (padded with '0' on the right if git ever yields fewer). The
