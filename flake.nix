@@ -13,7 +13,6 @@
   outputs = { self, nixpkgs, fenix, flake-utils }:
     flake-utils.lib.eachDefaultSystem (system:
       let
-        zmk = ./zmk;
         pkgs = import nixpkgs { inherit system; };
         lib = pkgs.lib;
         rustToolchain = fenix.packages.${system}.fromToolchainFile {
@@ -22,22 +21,8 @@
         };
         libclang = pkgs.llvmPackages.libclang.lib;
         clangMajor = lib.versions.major pkgs.llvmPackages.clang.version;
-        zmkPkgs = import (zmk + "/nix/pinned-nixpkgs.nix") { inherit system; };
-        firmware = import zmk { pkgs = zmkPkgs; };
       in
       {
-        packages.firmware = import ./config {
-          inherit pkgs firmware;
-        };
-        packages.default = self.packages.${system}.firmware;
-
-        apps.generate-keymap = {
-          type = "app";
-          program = "${pkgs.writeShellScript "generate-glove80-keymap" ''
-            exec ${pkgs.nodejs}/bin/node "$PWD/scripts/generate-keymap.mjs"
-          ''}";
-        };
-
         devShells.default = pkgs.mkShell {
           packages = [
             rustToolchain
