@@ -2,8 +2,8 @@ MEMORY
 {
   /* nRF52840 with the MoErgo Glove80 bootloader (Adafruit nRF52 family).
    *
-   * Flash map shared with the ZMK firmware in this repo
-   * (zmk/app/boards/arm/glove80/glove80.dtsi):
+   * Flash map inherited from the historical ZMK firmware in the separate
+   * glove80-config repository (zmk/app/boards/arm/glove80/glove80.dtsi):
    *   0x00000000-0x00026000  MBR + SoftDevice region (left in place, unused)
    *   0x00026000-0x000dc000  application (this image)
    *   0x000dc000-0x000ec000  reserved runtime-config partition

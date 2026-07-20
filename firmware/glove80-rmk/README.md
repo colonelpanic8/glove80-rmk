@@ -1,14 +1,14 @@
-# Glove80 RMK spike
+# Glove80 RMK firmware
 
-RMK firmware for the MoErgo Glove80, built as the bounded hardware spike
-described in [`docs/rmk-evaluation.md`](../../docs/rmk-evaluation.md). The
-known-good ZMK firmware in `zmk/` remains the recovery baseline; nothing here
-modifies it.
+RMK firmware for the MoErgo Glove80. The original bounded evaluation is
+documented in [`docs/rmk-evaluation.md`](../../docs/rmk-evaluation.md). The
+known-good ZMK firmware remains in the separate legacy `glove80-config`
+repository as a recovery baseline.
 
 ## Layout and hardware sources
 
-All hardware facts are transcribed from the ZMK board definition in
-`zmk/app/boards/arm/glove80/`:
+All hardware facts were transcribed from the legacy `glove80-config` ZMK board
+definition under `zmk/app/boards/arm/glove80/`:
 
 - 6x14 logical grid identical to the ZMK matrix transform (columns 0-6 left
   half, 7-13 right half; columns 6/7 are the thumb clusters; positions
@@ -30,7 +30,7 @@ and the power-button PWM LED (left `P1.15`, right `P0.16`, 20 us period at
 
 Lighting is split between `src/lighting.rs` (hardware driver + RMK task
 glue) and the host-testable compositor crate in
-[`../glove80-compositor/`](../glove80-compositor/); both binaries register
+[`../../crates/glove80-compositor/`](../../crates/glove80-compositor/); both binaries register
 the lighting task as a custom RMK processor from inside the
 `#[rmk_central]` / `#[rmk_peripheral]` module.
 

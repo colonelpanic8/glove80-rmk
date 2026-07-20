@@ -1,5 +1,9 @@
 # Phase 7 qualification run-sheet
 
+> RMK commands and artifacts in this checklist use this repository. ZMK
+> recovery commands refer to the separate legacy `glove80-config` repository
+> and must be run there; its sources are intentionally not vendored here.
+
 Hardware acceptance run-sheet for replacing the Glove80 ZMK baseline with
 RMK. Run from the repository root on branch `codex/rmk-evaluation`.
 
@@ -42,9 +46,9 @@ RMK. Run from the repository root on branch `codex/rmk-evaluation`.
 - [ ] **AUTO, build only:** build both RMK images:
 
   ```sh
-  (cd firmware/glove80-rmk && nix develop --command ./build.sh)
-  test -f firmware/glove80-rmk/glove80_lh_rmk.uf2
-  test -f firmware/glove80-rmk/glove80_rh_rmk.uf2
+  make dist
+  test -f dist/glove80-rmk-0.1.0-lh.uf2
+  test -f dist/glove80-rmk-0.1.0-rh.uf2
   ```
 
 - [ ] **AUTO, build only:** build and retain the four ZMK recovery images:
@@ -125,7 +129,7 @@ RMK. Run from the repository root on branch `codex/rmk-evaluation`.
    ```sh
    "$G80CTL" --usb bootloader --peripheral --yes
    timeout 30 sh -c 'until test -d /run/media/imalison/GLV80RHBOOT; do sleep 1; done'
-   cp firmware/glove80-rmk/glove80_rh_rmk.uf2 /run/media/imalison/GLV80RHBOOT/
+   cp dist/glove80-rmk-0.1.0-rh.uf2 /run/media/imalison/GLV80RHBOOT/
    sync
    timeout 30 sh -c 'while test -d /run/media/imalison/GLV80RHBOOT; do sleep 1; done'
    timeout 45 sh -c 'until ./target/debug/glove80-control --usb version | grep -q "peripheral.*connected"; do sleep 2; done'
@@ -142,7 +146,7 @@ RMK. Run from the repository root on branch `codex/rmk-evaluation`.
    ```sh
    "$G80CTL" --usb bootloader --yes
    timeout 30 sh -c 'until test -d /run/media/imalison/GLV80LHBOOT; do sleep 1; done'
-   cp firmware/glove80-rmk/glove80_lh_rmk.uf2 /run/media/imalison/GLV80LHBOOT/
+   cp dist/glove80-rmk-0.1.0-lh.uf2 /run/media/imalison/GLV80LHBOOT/
    sync
    timeout 30 sh -c 'while test -d /run/media/imalison/GLV80LHBOOT; do sleep 1; done'
    timeout 45 sh -c 'until ./target/debug/glove80-control --usb version >/dev/null 2>&1; do sleep 2; done'
@@ -717,7 +721,7 @@ RMK. Run from the repository root on branch `codex/rmk-evaluation`.
 - [ ] **HANDS:** physically enter the right bootloader, then flash RMK:
 
   ```sh
-  cp firmware/glove80-rmk/glove80_rh_rmk.uf2 /run/media/imalison/GLV80RHBOOT/
+  cp dist/glove80-rmk-0.1.0-rh.uf2 /run/media/imalison/GLV80RHBOOT/
   sync
   ```
 
@@ -725,7 +729,7 @@ RMK. Run from the repository root on branch `codex/rmk-evaluation`.
       left bootloader, then flash RMK:
 
   ```sh
-  cp firmware/glove80-rmk/glove80_lh_rmk.uf2 /run/media/imalison/GLV80LHBOOT/
+  cp dist/glove80-rmk-0.1.0-lh.uf2 /run/media/imalison/GLV80LHBOOT/
   sync
   ```
 

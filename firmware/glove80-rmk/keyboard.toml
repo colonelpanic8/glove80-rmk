@@ -1,7 +1,7 @@
 # MoErgo Glove80 — RMK spike configuration.
 #
 # Hardware facts are transcribed from the ZMK board definition in
-# zmk/app/boards/arm/glove80/ (dts + pinctrl + defconfig). The logical layout
+# the legacy glove80-config zmk/app/boards/arm/glove80/ files. The logical layout
 # is the same 6x14 grid used by the ZMK matrix transform: columns 0-6 are the
 # left half (column 6 = left thumb cluster), columns 7-13 are the right half
 # (column 7 = right thumb cluster). Grid positions (0,5), (0,8), (5,5) and
@@ -29,7 +29,8 @@ map = """
 
 [keymap]
 layers = 8
-# Ported from config/glove80.keymap. Layers: 0 Base, 1 Lower, 2 Magic,
+# Ported from legacy glove80-config/config/glove80.keymap. Layers: 0 Base,
+# 1 Lower, 2 Magic,
 # 3 Games, 4 Mac Hyper. Layers 5-7 are unassigned editable capacity.
 # Substitutions from the ZMK keymap:
 #   - &magic hold-tap        -> MO(2) (RGB status macro has no RMK equivalent yet)

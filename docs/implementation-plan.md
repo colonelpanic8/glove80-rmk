@@ -1,5 +1,10 @@
 # Implementation plan
 
+> Historical note: this plan spans work completed before repository extraction.
+> References to `host-lighting`, `protocol/proto`, `config`, or the ZMK recovery
+> build describe the separate legacy `glove80-config` repository and are not
+> paths or build inputs in this repository.
+
 How we get from the working RMK spike to the full system in
 [`design-goals.md`](./design-goals.md) and
 [`lighting-design.md`](./lighting-design.md). Phases are ordered by

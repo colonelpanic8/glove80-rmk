@@ -50,7 +50,8 @@ bind_interrupts!(struct Irqs {
 /// Number of WS2812 LEDs on each half's chain.
 ///
 /// Left-half chain order (from the comment block in
-/// `zmk/app/boards/arm/glove80/glove80_lh.dts`; chain index at each physical
+/// the legacy `glove80-config/zmk/app/boards/arm/glove80/glove80_lh.dts`;
+/// chain index at each physical
 /// key position, thumb cluster bottom right):
 ///
 /// ```text
