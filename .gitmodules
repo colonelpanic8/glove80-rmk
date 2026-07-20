@@ -1,4 +1,4 @@
 [submodule "dependencies/rmk"]
 	path = dependencies/rmk
 	url = https://github.com/colonelpanic8/rmk
-	branch = glove80-rynk
+	branch = glove80-rmk/integration

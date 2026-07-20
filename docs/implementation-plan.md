@@ -28,10 +28,10 @@ final phase.
   full scenes; no schema decision needed. Lightbench starts with per-key
   editing either way.
 - **RMK dependency**: the original git subtree has been replaced by the
-  `dependencies/rmk` submodule, pinned to the fork's `glove80-rynk`
-  integration branch. Generic extensions remain split into independently reviewable fork
-  branches; `docs/upstream/PATCHES.md` records their provenance and current
-  disposition.
+  `dependencies/rmk` submodule, pinned to the fork's
+  `glove80-rmk/integration` branch. Generic extensions remain split into
+  independently reviewable fork branches; `docs/upstream/PATCHES.md` records
+  their provenance and current disposition.
 - **Patch style rule**: any new fork-side RMK patch is written as a generic
   RMK extension point (a hook, channel, or registration mechanism any
   keyboard could use), never as Glove80-specific logic inside RMK. Glove80

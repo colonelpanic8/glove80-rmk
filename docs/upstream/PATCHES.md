@@ -1,80 +1,34 @@
-# RMK extension inventory
+# RMK dependency inventory
 
-Refreshed after the Rynk migration on 2026-07-19. The active candidate pins
-`dependencies/rmk` to `glove80-rynk` at `67f444b2`; `glove80` at `8089822e`
-remains the pre-Rynk rollback. Both are published at `colonelpanic8/rmk`.
+Refreshed on 2026-07-20. The active firmware depends on four generic RMK
+topics. They are published as stable branch names on `colonelpanic8/rmk`,
+proposed upstream as ready PRs against `HaoboGu/rmk:feat/rynk`, and composed
+into `glove80-rmk/integration`.
 
-The old subtree carried 49 `GLOVE80 PATCH` marker occurrences. The active
-submodule carries **zero** marker comments and the Glove80 firmware contains
-no references to the old module names. The historical marker counts below are
-kept only to make the extraction auditable.
+| Topic | Fork branch | Current tip | Upstream PR | Active API |
+| --- | --- | --- | --- | --- |
+| Split application messages | `glove80-rmk/split-app` | `6f436cf1` | [#984](https://github.com/HaoboGu/rmk/pull/984) | `rmk::split_app` |
+| Topology-aware lighting | `glove80-rmk/lighting` | `d518ab4c` | [#987](https://github.com/HaoboGu/rmk/pull/987) | `rmk::lighting`, Rynk lighting, Vial RGB Matrix |
+| Macro runtime hooks | `glove80-rmk/runtime-hooks` | `47922960` | [#985](https://github.com/HaoboGu/rmk/pull/985) | custom `HostService`, `Runnable` processors |
+| Rynk USB HID | `glove80-rmk/rynk-usb-hid` | `902c9d63` | [#986](https://github.com/HaoboGu/rmk/pull/986) | fixed-report Rynk USB transport |
 
-## Active fork components
+The lighting branch is intentionally stacked on the split-message branch.
+This lets the lighting PR demonstrate split behavior while keeping the split
+primitive reviewable on its own. After #984 lands, rebase the lighting branch
+to remove the already-merged commit.
 
-| Component | Fork branch / tip | Active API | Historical markers |
-| --- | --- | --- | ---: |
-| Split application messages | `split-app-messages` / `f84ac245` | `rmk::split_app` | 14 |
-| Host transport hooks | `host-transport-hooks` / `722ddcdf` | `rmk::vendor_transport` | 19 |
-| Shared flash | `shared-flash` / `ed6bd38d` | `rmk::shared_flash` | 4 |
-| Keymap operations | `keymap-ops` / `b0b89891` | **Retired; superseded by Rynk** | 6 |
-| CRC-32 ungating | `glove80` / `e26faf69` | `rmk::crc32` | 1 |
-| nRF VBUS state hook | `glove80` / `8089822e` | `rmk::usb::USB_VBUS_DETECTED` | 5 |
-| **Historical total** | | | **49** |
+The integration tip is `dc2e2425`. It is an octopus merge over upstream Rynk
+tip `8bfc94f7`, with lighting (including split messages), runtime hooks, and
+USB HID as its non-base parents. The superproject pins the full commit rather
+than following the moving branch implicitly.
 
-The pre-Rynk integration commit `9b0e53c0` merges the four generic feature
-branches on upstream `main` `a0ebb564`. `b13e6dd7` merges upstream
-`feat/rynk`; `4136f2ee` then removes `keymap_ops`, and `67f444b2` adds the
-shared-flash/Rynk CI matrix. CRC-32 and VBUS remain integration-only changes.
+## Deliberately absent downstream patches
 
-## Component notes
+The current firmware does not use the retired vendor transport, shared-flash,
+keymap-operation bridge, public RMK CRC helper, or nRF VBUS hook from the older
+`glove80` / `glove80-rynk` campaign. Those branches remain historical rollback
+and provenance records; they are not inputs to the current firmware and must
+not be merged into the new integration branch.
 
-### Split application messages
-
-A bounded opaque application channel in both directions plus split-link state.
-The Glove80 sync codec uses it for lighting, firmware identity, shared state,
-and magic-guarded peripheral bootloader entry. The containing module was
-renamed from `split_app_pipe` to `split_app` during extraction.
-
-### Host transport hooks
-
-Opaque application-defined transport over a dedicated USB raw-HID interface
-and custom BLE GATT service. The fork generalizes the former
-`host_proto_pipe` module and `HOSTP_*` symbols as `vendor_transport` and
-`VENDOR_*`.
-
-### Shared flash
-
-The opt-in `shared_flash` feature serializes RMK storage and application-owned
-flash access through the same radio-safe nRF driver. The polished API uniquely
-acquires `SharedFlash` with `take(window)`; every operation requires `&mut
-self` and is confined to the immutable validated window. This replaces the
-old free-function `config_flash` API.
-
-### Keymap operations
-
-A historical one-operation-at-a-time channel into the Vial task. It is still
-preserved on its feature branch for provenance, but is absent from the active
-integration because firmware, CLI, and Lightbench now use Rynk.
-
-### Keep-local integration changes
-
-- `e26faf69` exposes RMK's CRC-32 implementation without requiring split DFU;
-  Glove80 runtime-configuration headers reuse it.
-- `8089822e` wraps the nRF VBUS detector and exposes
-  `USB_VBUS_DETECTED`, allowing conditional lighting to distinguish physical
-  VBUS/charging state from configured USB HID state.
-
-## Cutover verification
-
-- `.gitmodules` tracks `dependencies/rmk`, branch `glove80-rynk`, at `67f444b2`.
-- `firmware/glove80-rmk/Cargo.toml` opts into `shared_flash` and uses the submodule path.
-- The firmware uses `split_app`, `vendor_transport`, `shared_flash`, and Rynk;
-  no old module names or production `keymap_ops` use remain.
-- The transactional config store owns the unique partition-scoped
-  `SharedFlash` client.
-- Both release UF2 images build under the repository's pinned Rust 1.97.0 Nix
-  shell after the cutover.
-
-Do not propose either Glove80 integration branch upstream. Publish and review
-the generic feature branches independently, rebasing them onto the current
-upstream base as required by the upstream-alignment plan.
+See [BRANCH-STACK.md](./BRANCH-STACK.md) for the refresh procedure and exact
+composition rules.

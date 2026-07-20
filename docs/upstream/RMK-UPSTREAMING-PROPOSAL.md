@@ -1,8 +1,10 @@
 # RMK downstream changes and upstreaming proposal
 
-Status: active proposal. The hardware-qualified production candidate is
-`glove80-rynk` at `75d0edc3`; the known-good pre-Rynk rollback is `glove80` at `8089822e`.
-Upstream Rynk PR #962 was still open, non-draft, and clean on 2026-07-19.
+Status: historical planning record. The active 2026-07-20 topic branches,
+upstream PRs, and integration recipe are documented in
+[`PATCHES.md`](./PATCHES.md) and [`BRANCH-STACK.md`](./BRANCH-STACK.md).
+The campaign below explains earlier decisions and must not be used as the
+current branch or submission checklist.
 
 ## Execution board
 

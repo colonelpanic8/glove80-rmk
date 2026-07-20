@@ -1,12 +1,10 @@
 # RMK upstreaming verification summary
 
-The first verification pass below was completed on 2026-07-19 without remote
-mutations. Since then, the feature branches were consolidated on upstream
-`a0ebb564`, the `glove80` integration branch was pushed to
-`colonelpanic8/rmk`, and this repository first cut over at `8089822e`. It now
-uses the Rynk integration `glove80-rynk` at `67f444b2`, while `8089822e`
-remains the rollback. `PATCHES.md` is the authoritative current inventory; the older
-branch hashes and test narrative retained here are provenance.
+The first verification pass below was completed on 2026-07-19 and is retained
+as historical provenance. The active 2026-07-20 dependency inventory is
+[`PATCHES.md`](./PATCHES.md), and the refresh/composition procedure is
+[`BRANCH-STACK.md`](./BRANCH-STACK.md). The older branch hashes and test
+narrative below are not the current integration recipe.
 
 ## Document index
 

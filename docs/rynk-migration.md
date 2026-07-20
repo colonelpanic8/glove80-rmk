@@ -1,79 +1,64 @@
 # Rynk migration
 
-## Decision
+## Current decision
 
-Adopt Rynk for keymap configuration, but do not pretend it is stable upstream
-yet. [HaoboGu/rmk PR #962](https://github.com/HaoboGu/rmk/pull/962) was open,
-non-draft, and mergeable when verified on 2026-07-19. The evaluated integration
-is published as `colonelpanic8/rmk` branch `glove80-rynk` at `75d0edc3`; the
-pre-Rynk rollback is branch `glove80` at `8089822e`.
+Rynk owns live keymap and lighting control. The qualified downstream RMK
+dependency is `colonelpanic8/rmk:glove80-rmk/integration` at `dc2e2425`, pinned
+as the `dependencies/rmk` submodule. It composes upstream Rynk with the four
+reviewable topics listed in [upstream/PATCHES.md](./upstream/PATCHES.md).
 
-Rynk is worth adopting because it supplies the missing native configuration
-protocol rather than another Glove80-only keymap bridge: typed actions,
-capability discovery, bulk keymap operations, persistence, native host
-libraries, serial and BLE transports, browser-compatible HID, and WASM.
+The older `glove80-rynk` branch and the pre-Rynk `glove80` branch remain
+rollback/provenance refs only. The current firmware no longer depends on their
+vendor transport, shared-flash, keymap-operation, CRC, or VBUS patches.
 
 ## Runtime ownership
 
 | Capability | Owner | Transport |
 | --- | --- | --- |
-| Keymap read/write and persistence | Rynk | CLI: USB HID or native BLE GATT; Lightbench: USB/BLE WebHID |
-| Lighting overlay and toggles | Glove80 protocol | USB vendor raw HID or custom encrypted BLE GATT |
-| Transactional lighting config | Glove80 protocol | USB vendor raw HID or custom encrypted BLE GATT |
-| Build identity and bootloader | Glove80 protocol | USB vendor raw HID or custom encrypted BLE GATT |
-| Split lighting/version/remote boot | Downstream `split_app` | RMK split link |
-| Shared application/RMK storage | Downstream `shared_flash` | nRF internal flash service |
+| Keymap read/write and persistence | Rynk | USB HID; native BLE GATT; browser WebHID |
+| Lighting topology, state, overlays, and readback | RMK lighting through Rynk | USB HID; native BLE GATT; browser WebHID |
+| Vial RGB Matrix compatibility | RMK lighting service | Vial host protocol |
+| Cross-half lighting frames and remote boot request | Firmware over `rmk::split_app` | RMK split link |
+| Physical LED output | Glove80 firmware | local WS2812 and power-button PWM drivers |
 
-The old host-protocol v1.2 keymap codec remains as frozen compatibility and
-test material, but production firmware does not advertise feature bit 7 or
-dispatch its keymap commands. The downstream RMK `keymap_ops` module has been
-removed from `glove80-rynk`.
-
-## Compatibility boundary
-
-Existing canonical configuration files and editor UX use QMK/VIA-style u16
-keycodes. The CLI (`rynk_keycode.rs`) and browser (`rynk-keycode.ts`) convert
-those values to Rynk's typed `KeyAction` at the edge, then perform canonical
-readback. Unsupported or non-representable actions are surfaced as lossy; they
-are never silently reported as successful round trips. Native Rynk actions
-should eventually replace u16 values in a versioned config schema.
+The RMK lighting service is authoritative. A successful Rynk or Vial mutation
+changes that service state; subsequent Rynk/Vial queries and rendered frames
+observe the same value rather than a host-side shadow copy.
 
 ## Browser packaging
 
-Lightbench commits a release-mode `wasm-pack --target web` build under
-`ui/src/vendor/rynk-wasm` so an npm-only build does not require Rust. Regenerate
-it from the pinned submodule with Rust 1.97.0:
+Lightbench commits a release `wasm-pack --target web` package under
+`ui/src/vendor/rynk-wasm`, tied to the exact RMK gitlink by
+`provenance.json`. Regenerate it from the repository root with:
 
 ```sh
-cd dependencies/rmk
 RUSTUP_TOOLCHAIN=1.97.0 wasm-pack build --release --target web \
-  --out-dir ../../ui/src/vendor/rynk-wasm rynk/rynk-wasm
+  --out-dir ui/src/vendor/rynk-wasm dependencies/rmk/rynk/rynk-wasm
 ```
 
-`wasm-pack` writes a catch-all `.gitignore`; replace it with the repository's
-intentional-commit comment before committing regenerated output.
+`wasm-pack` replaces the directory `.gitignore` and the generated README
+header. Restore the repository comment and provenance header before committing,
+then update the recorded WASM SHA-256. `make check` verifies both the RMK commit
+and checksum.
 
-## Qualification and remaining risk
+## Qualification
 
-- Both halves are flashed and match. USB product-protocol lighting and Rynk
-  all-layer reads coexist and pass on hardware.
-- The PR's CDC-ACM transport failed on the Glove80's nRF52840 specifically at
-  CDC IN; the qualified fork reuses Rynk's existing 32-byte HID framing for
-  wired USB. Report this matrix on #962 before proposing an upstream option.
-- Rynk starts locked. Hold physical positions `(0,0)` and `(0,13)` (the outer
-  top-row F1/F10 keys on the base layer) to authorize dangerous Rynk actions.
-- Interactive browser chooser, native BLE, persistence/write/readback, and
-  reconnect/right-half-outage checks remain follow-up qualification.
-- Lightbench currently opens separate lighting and keymap sessions. A single
-  connection requires an upstream Rynk application-command/topic extension,
-  not another ad hoc transport.
-- Track #962 rebases carefully. Keep `75d0edc3` pinned and reproducible until a
-  reviewed upstream commit replaces it; keep `8089822e` available for rollback.
+- Both halves have previously been flashed with the Rynk/HID firmware and the
+  USB Rynk path, all-layer reads, lighting mutation, and state readback were
+  exercised on physical Glove80 hardware.
+- The complete composed RMK feature matrix, Rynk native tests/doctests, WASM
+  package/typecheck, and clippy gates pass at the current integration tree.
+- The repository check and both release cross-builds are required after every
+  pin update.
+- Interactive browser chooser, BLE-only hardware sessions, reconnect/outage,
+  persistence, and fresh-device recovery remain useful manual regression
+  checks; they are not replaced by host-side tests.
 
 ## Upstream posture
 
-Do not upstream the retired keymap bridge or the overlapping transport hook as
-they stand. Report the Glove80 hardware matrix on #962 and propose only gaps
-demonstrated by that qualification. Independently upstream the split-DFU race
-fix and shared-flash feature; coordinate split messaging with upstream's
-forward-split-message work. See `upstream/RMK-UPSTREAMING-PROPOSAL.md`.
+The required generic changes are now proposed independently as upstream PRs
+[#984](https://github.com/HaoboGu/rmk/pull/984),
+[#985](https://github.com/HaoboGu/rmk/pull/985),
+[#986](https://github.com/HaoboGu/rmk/pull/986), and
+[#987](https://github.com/HaoboGu/rmk/pull/987). Refresh and composition rules
+live in [upstream/BRANCH-STACK.md](./upstream/BRANCH-STACK.md).
