@@ -48,7 +48,7 @@ struct HidrawReportDescriptor {
     value: [u8; HID_MAX_DESCRIPTOR_SIZE],
 }
 
-fn raw_info(fd: libc::c_int) -> Result<(u16, u16)> {
+pub(crate) fn raw_info(fd: libc::c_int) -> Result<(u16, u16)> {
     let mut info = HidrawDevinfo {
         bustype: 0,
         vendor: 0,
@@ -62,7 +62,7 @@ fn raw_info(fd: libc::c_int) -> Result<(u16, u16)> {
     Ok((info.vendor as u16, info.product as u16))
 }
 
-fn report_descriptor(fd: libc::c_int) -> Result<Vec<u8>> {
+pub(crate) fn report_descriptor(fd: libc::c_int) -> Result<Vec<u8>> {
     let mut size: libc::c_int = 0;
     // Safety: HIDIOCGRDESCSIZE writes an int.
     let rc = unsafe { libc::ioctl(fd, HIDIOCGRDESCSIZE, &mut size) };

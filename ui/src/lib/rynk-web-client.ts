@@ -26,28 +26,6 @@ interface ByteLink {
   close(): Promise<void>;
 }
 
-interface SerialReader {
-  read(): Promise<{ value?: Uint8Array; done: boolean }>;
-  cancel(): Promise<void>;
-  releaseLock(): void;
-}
-
-interface SerialWriter {
-  write(value: Uint8Array): Promise<void>;
-  abort(): Promise<void>;
-  releaseLock(): void;
-}
-
-interface SerialPort {
-  open(options: { baudRate: number }): Promise<void>;
-  close(): Promise<void>;
-  getInfo(): { usbVendorId?: number; usbProductId?: number };
-  readonly readable: { getReader(): SerialReader };
-  readonly writable: { getWriter(): SerialWriter };
-}
-
-type SerialNavigator = Navigator & { serial?: { requestPort(): Promise<SerialPort> } };
-
 function concat(
   a: Uint8Array<ArrayBufferLike>,
   b: Uint8Array<ArrayBufferLike>,
@@ -100,49 +78,6 @@ function byteLink(
   };
 }
 
-async function openSerialLink(): Promise<ByteLink> {
-  const serial = (navigator as SerialNavigator).serial;
-  if (!serial) throw new Error("Web Serial is unavailable; use Chrome or Edge on a secure origin");
-  const port = await serial.requestPort();
-  await port.open({ baudRate: 115200 });
-  const reader = port.readable.getReader();
-  const writer = port.writable.getWriter();
-  const info = port.getInfo();
-  const label =
-    info.usbVendorId === undefined
-      ? "Rynk USB serial"
-      : `Rynk USB ${info.usbVendorId.toString(16).padStart(4, "0")}:${(info.usbProductId ?? 0)
-          .toString(16)
-          .padStart(4, "0")}`;
-  let endLink: (() => void) | null = null;
-  return byteLink(
-    label,
-    (push, end) => {
-      endLink = end;
-      void (async () => {
-        try {
-          for (;;) {
-            const { value, done } = await reader.read();
-            if (done) break;
-            if (value?.length) push(value);
-          }
-        } finally {
-          end();
-        }
-      })();
-    },
-    (bytes) => writer.write(bytes),
-    async () => {
-      endLink?.();
-      await reader.cancel().catch(() => undefined);
-      reader.releaseLock();
-      await writer.abort().catch(() => undefined);
-      writer.releaseLock();
-      await port.close().catch(() => undefined);
-    },
-  );
-}
-
 async function openHidLink(): Promise<ByteLink> {
   if (!("hid" in navigator)) throw new Error("WebHID is unavailable; use Chrome or Edge");
   const devices = await navigator.hid.requestDevice({
@@ -155,7 +90,7 @@ async function openHidLink(): Promise<ByteLink> {
   let reportHandler: EventListener | null = null;
   let endLink: (() => void) | null = null;
   return byteLink(
-    device.productName || "Rynk BLE WebHID",
+    device.productName || "Rynk WebHID",
     (push, end) => {
       endLink = end;
       reportHandler = (rawEvent) => {
@@ -252,9 +187,9 @@ class ConnectedRynkClient implements BrowserKeymapClient {
 }
 
 export async function connectRynkKeymap(
-  transport: RynkBrowserTransport,
+  _transport: RynkBrowserTransport,
 ): Promise<BrowserKeymapClient> {
-  const link = transport === "usb" ? await openSerialLink() : await openHidLink();
+  const link = await openHidLink();
   try {
     await initRynk();
     const client = await connect(link);

@@ -12,6 +12,7 @@ mod lightcfg;
 mod lighting;
 pub mod runtime_manifest;
 mod rynk_client;
+mod rynk_hid;
 mod rynk_keycode;
 mod transport;
 mod version;

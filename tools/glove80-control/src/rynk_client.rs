@@ -3,6 +3,8 @@
 //! Lighting and the transactional Glove80 configuration format still use the
 //! product protocol during migration; the live keymap has one owner: Rynk.
 
+use std::time::Duration;
+
 use anyhow::{anyhow, bail, Context, Result};
 use embassy_futures::select::{select, Either};
 use rynk::rmk_types::action::KeyAction;
@@ -13,13 +15,16 @@ use rynk_serial::SerialDevice;
 
 use crate::keymap::{self, KeymapCommand};
 use crate::keymapcfg::{KeymapReport, KeymapStage, LayerPlan};
+use crate::rynk_hid::HidDevice;
 use crate::transport::{Preference, Selector};
 
 const GLOVE80_ROWS: u8 = 6;
 const GLOVE80_COLS: u8 = 14;
 const GLOVE80_HOLES: [u8; 4] = [5, 8, 75, 78];
+const RYNK_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 
 enum Device {
+    Hid(HidDevice),
     Serial(SerialDevice),
     Ble(BleDevice),
 }
@@ -29,6 +34,7 @@ pub fn run_keymap(selector: &Selector, command: &KeymapCommand) -> Result<()> {
         tokio::runtime::Runtime::new().context("could not create the Rynk async runtime")?;
     runtime.block_on(async {
         match select_device(selector).await? {
+            Device::Hid(device) => run_device(device, command).await,
             Device::Serial(device) => run_device(device, command).await,
             Device::Ble(device) => run_device(device, command).await,
         }
@@ -42,6 +48,7 @@ pub fn read_all_layers(selector: &Selector) -> Result<Vec<Vec<u16>>> {
         tokio::runtime::Runtime::new().context("could not create the Rynk async runtime")?;
     runtime.block_on(async {
         match select_device(selector).await? {
+            Device::Hid(device) => read_layers_device(device).await,
             Device::Serial(device) => read_layers_device(device).await,
             Device::Ble(device) => read_layers_device(device).await,
         }
@@ -59,6 +66,7 @@ pub fn apply_plans(
         tokio::runtime::Runtime::new().context("could not create the Rynk async runtime")?;
     let (report, stages) = runtime.block_on(async {
         match select_device(selector).await? {
+            Device::Hid(device) => apply_plans_device(device, plans).await,
             Device::Serial(device) => apply_plans_device(device, plans).await,
             Device::Ble(device) => apply_plans_device(device, plans).await,
         }
@@ -71,10 +79,7 @@ pub fn apply_plans(
 
 async fn run_device<D: RynkDevice>(device: D, command: &KeymapCommand) -> Result<()> {
     let label = device.label();
-    let (client, mut driver) = device
-        .connect()
-        .await
-        .with_context(|| format!("could not establish a Rynk session with {label}"))?;
+    let (client, mut driver) = connect_device(device, &label).await?;
     match select(driver.run(&client), operate(&client, command)).await {
         Either::First(error) => Err(anyhow!("Rynk connection to {label} ended: {error}")),
         Either::Second(result) => result,
@@ -83,10 +88,7 @@ async fn run_device<D: RynkDevice>(device: D, command: &KeymapCommand) -> Result
 
 async fn read_layers_device<D: RynkDevice>(device: D) -> Result<Vec<Vec<u16>>> {
     let label = device.label();
-    let (client, mut driver) = device
-        .connect()
-        .await
-        .with_context(|| format!("could not establish a Rynk session with {label}"))?;
+    let (client, mut driver) = connect_device(device, &label).await?;
     match select(driver.run(&client), read_layers(&client)).await {
         Either::First(error) => Err(anyhow!("Rynk connection to {label} ended: {error}")),
         Either::Second(result) => result,
@@ -98,14 +100,21 @@ async fn apply_plans_device<D: RynkDevice>(
     plans: &[LayerPlan],
 ) -> Result<(KeymapReport, Vec<KeymapStage>)> {
     let label = device.label();
-    let (client, mut driver) = device
-        .connect()
-        .await
-        .with_context(|| format!("could not establish a Rynk session with {label}"))?;
+    let (client, mut driver) = connect_device(device, &label).await?;
     match select(driver.run(&client), apply(&client, plans)).await {
         Either::First(error) => Err(anyhow!("Rynk connection to {label} ended: {error}")),
         Either::Second(result) => result,
     }
+}
+
+async fn connect_device<D: RynkDevice>(
+    device: D,
+    label: &str,
+) -> Result<(Client, rynk::Driver<D::Read, D::Write>)> {
+    tokio::time::timeout(RYNK_CONNECT_TIMEOUT, device.connect())
+        .await
+        .with_context(|| format!("timed out establishing a Rynk session with {label}"))?
+        .with_context(|| format!("could not establish a Rynk session with {label}"))
 }
 
 async fn operate(client: &Client, command: &KeymapCommand) -> Result<()> {
@@ -356,7 +365,7 @@ fn check_grid(rows: u8, cols: u8, layers: u8) -> Result<()> {
 
 async fn select_device(selector: &Selector) -> Result<Device> {
     match selector.preference {
-        Preference::Usb => select_serial(selector.device.as_deref()).map(Device::Serial),
+        Preference::Usb => select_usb(selector.device.as_deref()),
         Preference::Ble => select_ble(selector.device.as_deref())
             .await
             .map(Device::Ble),
@@ -370,15 +379,48 @@ async fn select_device(selector: &Selector) -> Result<Device> {
                     .await
                     .map(Device::Ble);
             }
-            match select_serial(selector.device.as_deref()) {
-                Ok(device) => Ok(Device::Serial(device)),
-                Err(serial_error) => select_ble(selector.device.as_deref())
+            match select_usb(selector.device.as_deref()) {
+                Ok(device) => Ok(device),
+                Err(usb_error) => select_ble(selector.device.as_deref())
                     .await
                     .map(Device::Ble)
-                    .with_context(|| format!("USB Rynk discovery also failed: {serial_error:#}")),
+                    .with_context(|| format!("USB Rynk discovery also failed: {usb_error:#}")),
             }
         }
     }
+}
+
+fn select_usb(requested: Option<&str>) -> Result<Device> {
+    if requested.is_some_and(crate::transport::is_ble_address) {
+        bail!("a BLE address cannot be used with --usb");
+    }
+    if requested.is_some_and(|path| path.starts_with("/dev/tty")) {
+        return select_serial(requested).map(Device::Serial);
+    }
+    match select_hid(requested) {
+        Ok(device) => Ok(Device::Hid(device)),
+        Err(hid_error) => select_serial(requested)
+            .map(Device::Serial)
+            .with_context(|| format!("Rynk USB HID discovery also failed: {hid_error:#}")),
+    }
+}
+
+fn select_hid(requested: Option<&str>) -> Result<HidDevice> {
+    let devices = HidDevice::discover().context("Rynk USB HID discovery failed")?;
+    if let Some(path) = requested.filter(|path| path.starts_with("/dev/hidraw")) {
+        if let Some(index) = devices
+            .iter()
+            .position(|device| device.path() == std::path::Path::new(path))
+        {
+            return Ok(devices
+                .into_iter()
+                .nth(index)
+                .expect("index came from devices"));
+        }
+        // Combined config commands pass the sibling product-protocol hidraw
+        // node, so a unique Rynk HID interface is still an unambiguous match.
+    }
+    one_device(devices, "Rynk USB HID")
 }
 
 fn select_serial(requested: Option<&str>) -> Result<SerialDevice> {
