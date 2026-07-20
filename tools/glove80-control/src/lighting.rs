@@ -686,6 +686,53 @@ mod tests {
     }
 
     #[test]
+    fn overlay_write_can_be_queried_back() {
+        let effect = Effect::solid(1, 2, 3);
+        let mock = MockTransport::new()
+            .expect(caps_handler(test_capabilities()))
+            .expect(move |request_id, request| {
+                let Request::SetCells { ttl_ms, cells } = request else {
+                    panic!("expected SetCells, got {request:?}");
+                };
+                assert_eq!(*ttl_ms, 5_000);
+                assert_eq!(cells.as_slice(), &[CellWrite { key: 7, effect }]);
+                vec![ack(request_id, Command::SetCells, Status::Ok, &[])]
+            })
+            .expect(move |request_id, request| {
+                assert_eq!(*request, Request::ReadOverlay);
+                vec![Response {
+                    request_id,
+                    command: Command::ReadOverlay,
+                    status: Status::Ok,
+                    payload: ResponsePayload::OverlayState {
+                        cells: heapless::Vec::from_slice(&[CellState {
+                            key: 7,
+                            effect,
+                            remaining_ttl_ms: 4_900,
+                        }])
+                        .unwrap(),
+                    },
+                }]
+            });
+        let mut client = HostClient::new(Box::new(mock));
+
+        assert_eq!(
+            client
+                .set_cells(5_000, &[CellWrite { key: 7, effect }])
+                .unwrap(),
+            ApplyOutcome::default()
+        );
+        assert_eq!(
+            client.read_overlay().unwrap(),
+            vec![CellState {
+                key: 7,
+                effect,
+                remaining_ttl_ms: 4_900,
+            }]
+        );
+    }
+
+    #[test]
     fn partial_apply_is_surfaced_with_pending_keys() {
         let mock = MockTransport::new()
             .expect(caps_handler(test_capabilities()))
@@ -847,7 +894,7 @@ mod tests {
     }
 
     #[test]
-    fn brightness_and_toggle_round_trip() {
+    fn brightness_and_toggle_changes_can_be_queried_back() {
         let mock = MockTransport::new()
             .expect(caps_handler(test_capabilities()))
             .expect(|request_id, request| {
@@ -860,6 +907,15 @@ mod tests {
                 }]
             })
             .expect(|request_id, request| {
+                assert_eq!(*request, Request::GetBrightness);
+                vec![Response {
+                    request_id,
+                    command: Command::GetBrightness,
+                    status: Status::Ok,
+                    payload: ResponsePayload::Brightness { level: 128 },
+                }]
+            })
+            .expect(|request_id, request| {
                 assert_eq!(*request, Request::SetToggle { id: 2, state: true });
                 vec![Response {
                     request_id,
@@ -867,10 +923,21 @@ mod tests {
                     status: Status::Ok,
                     payload: ResponsePayload::Toggle { id: 2, state: true },
                 }]
+            })
+            .expect(|request_id, request| {
+                assert_eq!(*request, Request::GetToggle { id: 2 });
+                vec![Response {
+                    request_id,
+                    command: Command::GetToggle,
+                    status: Status::Ok,
+                    payload: ResponsePayload::Toggle { id: 2, state: true },
+                }]
             });
         let mut client = HostClient::new(Box::new(mock));
         assert_eq!(client.brightness(Some(128)).unwrap(), 128);
+        assert_eq!(client.brightness(None).unwrap(), 128);
         assert_eq!(client.toggle(2, Some(true)).unwrap(), (2, true));
+        assert_eq!(client.toggle(2, None).unwrap(), (2, true));
     }
 
     #[test]
