@@ -1,0 +1,6 @@
+{
+  "source": "dependencies/rmk/rynk/rynk-wasm",
+  "rmkCommit": "75d0edc315ea759ba667deb4148e389bc016120c",
+  "generationCommand": "wasm-pack build dependencies/rmk/rynk/rynk-wasm --target web",
+  "wasmSha256": "d896f925f4d7ed21675134711083f744b546554eb7be676e876a7486f5b7101f"
+}

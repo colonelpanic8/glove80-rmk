@@ -1,0 +1,24 @@
+name: Build and test
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  product-stack:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: cachix/install-nix-action@v25
+      - name: Check host crates and UI
+        run: make check
+      - name: Build and validate both firmware halves
+        run: make dist
+      - name: Upload release bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: glove80-rmk
+          path: dist/

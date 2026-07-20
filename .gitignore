@@ -5,6 +5,8 @@
 /.west
 /build
 /*.uf2
+**/target/
+/dist/
 /.worktrees/
 /scripts/__pycache__/
 /ui/dist
