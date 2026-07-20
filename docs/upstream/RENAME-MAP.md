@@ -98,7 +98,7 @@ There is exactly **one post-snapshot commit to `rmk/vendor/rmk`**:
 
 It added five historical marker sites, listed in `PATCHES.md`, and was later
 ported to the fork as `8089822e`. The handoff's example `c7e53891` is real, but
-its only changed path is `rmk/glove80-compositor/src/sync.rs`; it does not
+its only changed path is `crates/glove80-compositor/src/sync.rs`; it does not
 modify vendored RMK.
 
 Other post-snapshot monorepo commits are downstream protocol, compositor, CLI,

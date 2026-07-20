@@ -113,7 +113,7 @@ vendor tree:
 
 - `755d008d` — compositor per-record gates and firmware-state conditions.
 - `c7e53891` — compositor sync adds USB-connected state and per-record gate
-  messages; its only path is `rmk/glove80-compositor/src/sync.rs`.
+  messages; its only path is `crates/glove80-compositor/src/sync.rs`.
 - `ca61cc4a` — qualification documentation.
 - `f0cf7849` — protocol support for conditional-lighting gates.
 - `dcfb7003` — CLI support for conditional-lighting gates.

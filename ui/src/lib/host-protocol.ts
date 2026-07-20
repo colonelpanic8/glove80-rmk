@@ -1,8 +1,8 @@
 // Glove80 host protocol v1.3 — TypeScript codec.
 //
-// Byte-level spec: protocol/glove80-host-protocol/PROTOCOL.md.
-// This mirrors the Rust codec (protocol/glove80-host-protocol); both are
-// pinned to the shared golden vectors in protocol/vectors/
+// Byte-level spec: crates/glove80-host-protocol/PROTOCOL.md.
+// This mirrors the Rust codec (crates/glove80-host-protocol); both are
+// pinned to the shared golden vectors in crates/glove80-host-protocol/vectors/
 // (host-protocol-v1.json, frozen, plus host-protocol-v1.1.json,
 // host-protocol-v1.2.json and host-protocol-v1.3.json).
 // All integers little-endian.
@@ -1045,7 +1045,7 @@ export class Reassembler {
 // --- persistent lighting config blob (v1.1) -------------------------------
 //
 // The unit of persistence and transfer for CONFIG_BEGIN/DATA/COMMIT/READ.
-// Mirrors protocol/glove80-host-protocol/src/config.rs; byte layout in
+// Mirrors crates/glove80-host-protocol/src/config.rs; byte layout in
 // PROTOCOL.md ("Persistent configuration (v1.1)").
 
 /** Blob magic ("G80L" read as a little-endian u32). */

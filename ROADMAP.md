@@ -14,7 +14,7 @@ assessment and hardware spike plan in
 [`docs/rmk-evaluation.md`](./docs/rmk-evaluation.md).
 
 The active replacement firmware lives in
-[`rmk/glove80/`](./rmk/glove80/README.md) and is consumed against the pinned RMK
+[`firmware/glove80-rmk/`](./firmware/glove80-rmk/README.md) and is consumed against the pinned RMK
 fork submodule.
 
 The keyboard must always remain a complete standalone keyboard. Host software

@@ -2,7 +2,7 @@
 
 CLI for the Glove80. Keymap editing uses RMK's native Rynk protocol. Lighting,
 persistent lighting config, build identity, and bootloader entry use the
-Glove80 protocol (`PROTOCOL.md` in `protocol/glove80-host-protocol/`).
+Glove80 protocol (`PROTOCOL.md` in `crates/glove80-host-protocol/`).
 (The legacy ZMK Studio serial commands were retired after the RMK
 cutover.)
 
@@ -197,5 +197,5 @@ overlay writes print the keys still pending on the peripheral.
   `cargo test -p glove80-control`. Tests run a mock transport; no hardware
   needed.
 - The wire codec (messages, framing, reassembly) comes from
-  `protocol/glove80-host-protocol`; this crate adds transports,
+  `crates/glove80-host-protocol`; this crate adds transports,
   request/response correlation, validation, and rendering.

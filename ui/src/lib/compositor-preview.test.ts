@@ -1,5 +1,5 @@
 // Fixtures for the client-side mini-compositor, hand-computed against the
-// contract in rmk/glove80-compositor/src/lib.rs (and mirroring that crate's
+// contract in crates/glove80-compositor/src/lib.rs (and mirroring that crate's
 // own test values where they apply: class ordering, transparent reveal,
 // blink duty/phase edges, the breathe triangle wave, brightness scaling and
 // the ceiling clamp).

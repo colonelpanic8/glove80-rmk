@@ -1,7 +1,7 @@
 # Glove80 canonical configuration — the whole keyboard in one file:
 # keymap layers (host protocol v1.2) + persistent lighting (v1.1).
 #
-# This ports the firmware's compiled-in keymap (rmk/glove80/keyboard.toml:
+# This ports the firmware's compiled-in keymap (firmware/glove80-rmk/keyboard.toml:
 # Base / Lower / Magic / Games / Mac Hyper) and the default lighting, so a
 # fresh keyboard configured from this file matches stock behavior:
 #
@@ -59,7 +59,7 @@ _______  _______       _______       KC_MPRV        KC_MNXT        --       ____
 
 # --- Layer 2: Magic (system controls) ---------------------------------------
 # USER(0)-USER(3) select BLE profiles 0-3; USER(10)/USER(11) clear the
-# current/all profiles (rmk/glove80 user-key assignments). The stock
+# current/all profiles (firmware/glove80-rmk user-key assignments). The stock
 # keymap's "switch output to USB" action has no VIA keycode encoding, so
 # its key (r5c6) is unbound here — the firmware would store KC_NO anyway.
 [[layer]]

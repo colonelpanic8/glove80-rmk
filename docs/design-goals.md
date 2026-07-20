@@ -7,7 +7,7 @@ updates never depend on a host being present.
 
 Lighting has its own contract: [`lighting-design.md`](./lighting-design.md).
 The RMK implementation and its hardware verification live in
-[`../rmk/glove80/`](../rmk/glove80/README.md).
+[`../firmware/glove80-rmk/`](../firmware/glove80-rmk/README.md).
 
 ## Non-negotiables
 

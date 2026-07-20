@@ -67,7 +67,7 @@ integration because firmware, CLI, and Lightbench now use Rynk.
 ## Cutover verification
 
 - `.gitmodules` tracks `dependencies/rmk`, branch `glove80-rynk`, at `67f444b2`.
-- `rmk/glove80/Cargo.toml` opts into `shared_flash` and uses the submodule path.
+- `firmware/glove80-rmk/Cargo.toml` opts into `shared_flash` and uses the submodule path.
 - The firmware uses `split_app`, `vendor_transport`, `shared_flash`, and Rynk;
   no old module names or production `keymap_ops` use remain.
 - The transactional config store owns the unique partition-scoped

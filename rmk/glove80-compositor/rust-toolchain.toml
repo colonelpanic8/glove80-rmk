@@ -1,5 +1,0 @@
-[toolchain]
-# Same pin as rmk/glove80: the machine's "stable" channel install is broken
-# (untracked target files fail every channel sync), and a concrete version
-# keeps results reproducible anyway. Host-only crate, no extra targets.
-channel = "1.97.0"

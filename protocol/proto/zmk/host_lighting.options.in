@@ -1,2 +1,0 @@
-zmk.host_lighting.SetPixelsRequest.pixels max_count:@CONFIG_ZMK_HOST_LIGHTING_MAX_UPDATES@
-zmk.host_lighting.SetEffectsRequest.effects max_count:@CONFIG_ZMK_HOST_LIGHTING_MAX_UPDATES@

@@ -131,7 +131,7 @@ without hardware.
 
 - `src/lib/host-protocol.ts` — the TypeScript codec (messages, frame layer,
   config blob), locked to the Rust codec by shared golden vectors under
-  `protocol/vectors/` (v1.0 through v1.3).
+  `crates/glove80-host-protocol/vectors/` (v1.0 through v1.3).
 - `src/lib/keycodes.ts` — the VIA keycode name table (format, parse,
   search), mirroring `tools/glove80-control/src/keycodes.rs` so the web UI
   and the CLI speak the same names.
@@ -139,7 +139,7 @@ without hardware.
   action converter and WebHID Rynk client, backed by the generated
   `src/vendor/rynk-wasm` package.
 - `src/lib/glove80-layout.ts` — the LED chain order, plus the 6×14 keymap
-  grid ↔ physical key mapping (from `rmk/glove80/vial.json`).
+  grid ↔ physical key mapping (from `firmware/glove80-rmk/vial.json`).
 - `src/lib/transport.ts` + `webhid-transport.ts` / `webbluetooth-transport.ts`
   — one chunk-level `Transport` interface and the two browser transports.
 - `src/lib/protocol-client.ts` — frame split/reassembly, request-id

@@ -102,15 +102,15 @@ half was unavailable for at least one batch.
 
 ```sh
 git submodule update --init
-cd rmk/glove80
+cd firmware/glove80-rmk
 nix develop --command ./build.sh
 ```
 
 The build produces the two half-specific images:
 
 ```sh
-rmk/glove80/glove80_lh_rmk.uf2
-rmk/glove80/glove80_rh_rmk.uf2
+firmware/glove80-rmk/glove80_lh_rmk.uf2
+firmware/glove80-rmk/glove80_rh_rmk.uf2
 ```
 
 Flash the RH image first, then the LH image. The physical Magic-layer

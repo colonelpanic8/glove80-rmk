@@ -1,6 +1,6 @@
 // Client-side mini-compositor for the "Composed preview" board.
 //
-// Faithfully mirrors rmk/glove80-compositor/src/lib.rs (the firmware's
+// Faithfully mirrors crates/glove80-compositor/src/lib.rs (the firmware's
 // compositor) so the preview shows what the keyboard would render:
 //
 // - Composition is bottom-to-top by class — base (Always) < layer < toggle

@@ -9,7 +9,7 @@ final phase.
 ## Already done (spike, 2026-07-18)
 
 - RMK port of both halves: boots via stock bootloader, USB + BLE typing,
-  wireless split, Vial editing (USB), battery. `rmk/glove80/`
+  wireless split, Vial editing (USB), battery. `firmware/glove80-rmk/`
 - Minimum lighting engine: WS2812 driver with hard 80% clamp, power-button
   PWM, event-driven frame task, layer color on one key.
 - Vial-over-BLE ruled out (BlueZ bug, documented) — wireless config goes
@@ -46,7 +46,7 @@ final phase.
 
 The heart of the lighting contract, built as pure logic first.
 
-- `rmk/glove80/src/compositor/`: cell type (transparent | color+effect),
+- `firmware/glove80-rmk/src/compositor/`: cell type (transparent | color+effect),
   record + activation predicate (always / layer / toggle / host / status),
   priority-ordered composition into a `Frame`.
 - Effects: static, blink (period/phase/duty), breathe (period/phase).

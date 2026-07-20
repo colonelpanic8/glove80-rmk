@@ -1,5 +1,5 @@
 //! Embed this build's git identity for the `version` verb, exactly the way
-//! the firmware embeds its own (see `rmk/glove80/build.rs`,
+//! the firmware embeds its own (see `firmware/glove80-rmk/build.rs`,
 //! `version_embedding()`): `GLOVE80_GIT_HASH` is `git rev-parse --short=8
 //! HEAD` padded with '0' to exactly 8 ASCII chars (`unknown0` without git),
 //! `GLOVE80_GIT_DIRTY` is `1` iff `git status --porcelain` is non-empty.

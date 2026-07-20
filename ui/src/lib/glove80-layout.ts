@@ -77,7 +77,7 @@ export const GLOVE80_KEYS = buildLayout();
 // The keymap key space is the 6x14 matrix grid (key = row * 14 + col),
 // distinct from the LED chain order above. Grid positions 5, 8, 75 and 78
 // are holes (real matrix slots with no key behind them). The grid → key
-// assignment below matches the firmware's Vial layout (rmk/glove80/vial.json):
+// assignment below matches the firmware's Vial layout (firmware/glove80-rmk/vial.json):
 // columns 6 and 7 of every matrix row are the thumb clusters.
 
 export const KEYMAP_ROWS = 6;

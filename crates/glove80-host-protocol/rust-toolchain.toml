@@ -1,0 +1,4 @@
+[toolchain]
+# Pinned like firmware/glove80-rmk: this machine's "stable" channel install is broken
+# (channel sync fails), and a concrete version keeps builds reproducible.
+channel = "1.97.0"

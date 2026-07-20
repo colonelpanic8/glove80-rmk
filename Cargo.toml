@@ -4,7 +4,7 @@ default-members = ["tools/glove80-control"]
 # glove80-host-protocol is a path dependency with its own [workspace];
 # exclude it so Cargo keeps it a separate workspace root.
 exclude = [
-  "protocol/glove80-host-protocol",
+  "crates/glove80-host-protocol",
   "dependencies/rmk/rmk",
   "dependencies/rmk/rmk-config",
   "dependencies/rmk/rmk-macro",
