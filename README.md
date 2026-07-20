@@ -61,7 +61,7 @@ Build or run the CLI from the repository root:
 
 ```bash
 nix develop --command cargo run -p glove80-control -- --help
-nix develop --command cargo run -p glove80-control -- devices
+nix develop --command cargo run -p glove80-control -- --usb version
 ```
 
 See [`tools/glove80-control/README.md`](tools/glove80-control/README.md) for USB,
