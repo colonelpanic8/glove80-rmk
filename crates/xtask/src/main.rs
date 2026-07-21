@@ -79,7 +79,10 @@ fn check(root: &Path) -> Result<()> {
 
 fn validate_submodule(root: &Path) -> Result<String> {
     let line = git(root, &["submodule", "status", "--", "dependencies/rmk"])?;
-    if !line.starts_with(' ') {
+    // `git()` trims output, including the leading space that `git submodule
+    // status` uses for a clean checkout. Dirty/uninitialized/conflicted
+    // prefixes survive trimming, so reject those explicitly.
+    if matches!(line.as_bytes().first(), Some(b'+' | b'-' | b'U')) {
         return Err(format!(
             "dependencies/rmk is uninitialized, modified, or on the wrong commit: {line}"
         )
