@@ -24,7 +24,7 @@ use rmk::split_app::SplitAppData;
 
 use crate::lighting::{
     BOOTLOADER_TAG, COMMAND_CAPACITY, CORE_MAILBOX, Engine, HalfOutput, LightingHardware,
-    OVERLAY_CAPACITY, REPLICA_SLOT,
+    OVERLAY_CAPACITY, REPLICA_SLOT, SCENE_CAPACITY,
 };
 
 static RYNK_MAILBOX: RynkLightingMailbox = RynkLightingMailbox::new();
@@ -61,7 +61,9 @@ pub fn init<'keymap, 'data>(
     LightingProcessor::new(service, output, &CORE_MAILBOX)
 }
 
-pub fn rynk_adapter() -> StandardRynkLightingAdapter<'static, OVERLAY_CAPACITY, COMMAND_CAPACITY> {
+pub fn rynk_adapter() ->
+    StandardRynkLightingAdapter<'static, OVERLAY_CAPACITY, COMMAND_CAPACITY, SCENE_CAPACITY>
+{
     StandardRynkLightingAdapter::new(&RYNK_MAILBOX, &CORE_MAILBOX, crate::LIGHTING_TOPOLOGY)
 }
 
@@ -75,6 +77,7 @@ pub const fn rynk_controller() -> RynkLightingController<'static> {
         },
         OVERLAY_CAPACITY as u16,
     )
+    .with_scene_capacity(SCENE_CAPACITY as u16)
 }
 
 /// Mirrors authoritative declarative state to the peripheral. Unit events

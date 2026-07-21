@@ -19,7 +19,7 @@ This lets the lighting PR demonstrate split behavior while keeping the split
 primitive reviewable on its own. After #984 lands, rebase the lighting branch
 to remove the already-merged commit.
 
-The `master` tip is `e0711733`. Its ancestry contains an octopus merge over
+The `master` tip is `6bcf2d94`. Its ancestry contains an octopus merge over
 upstream Rynk tip `8bfc94f7`, with lighting (including split messages), runtime
 hooks, and USB HID as its non-base parents, followed by the build-info merge
 and the existing split-bootloader routing and unlock-policy fixes, then the

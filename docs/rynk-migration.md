@@ -3,7 +3,7 @@
 ## Current decision
 
 Rynk owns live keymap and lighting control. The downstream RMK dependency is
-`colonelpanic8/rmk:master` at `e0711733`, pinned as the
+`colonelpanic8/rmk:master` at `6bcf2d94`, pinned as the
 `dependencies/rmk` submodule. It composes upstream Rynk with the six
 reviewable topics listed in [upstream/PATCHES.md](./upstream/PATCHES.md).
 

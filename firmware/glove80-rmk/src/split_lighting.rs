@@ -8,24 +8,27 @@
 use core::num::NonZeroU32;
 
 use rmk::lighting::{
-    BackgroundMode, BackgroundState, BuiltinEffect, IndicatorState, LayerState, LedSlot,
-    LightingContext, OverlayBatch, OverlayCell, Rgb8, StandardMutableState, StandardReplicaState,
+    BackgroundMode, BackgroundState, BuiltinEffect, IndicatorState, LayerPolicy, LayerState,
+    LedSlot, LightingContext, OverlayBatch, OverlayCell, Rgb8, SceneTable, SceneTableCell,
+    StandardMutableState, StandardReplicaState,
 };
 use rmk::split_app::{SPLIT_APP_MSG_MAX, SplitAppData};
 
-use crate::lighting::{LEDS_PER_HALF, OVERLAY_CAPACITY, TOTAL_LEDS};
+use crate::lighting::{LEDS_PER_HALF, OVERLAY_CAPACITY, SCENE_CAPACITY, TOTAL_LEDS};
 
-const VERSION: u8 = 1;
+const VERSION: u8 = 2;
 const TAG_BEGIN: u8 = 1;
 const TAG_CONTEXT: u8 = 2;
 const TAG_CELL: u8 = 3;
 const TAG_COMMIT: u8 = 4;
 const TAG_ACK: u8 = 5;
+const TAG_SCENE_CELL: u8 = 6;
 
-const BEGIN_LEN: usize = 23;
+const BEGIN_LEN: usize = 25;
 const CONTEXT_LEN: usize = 18;
 const CELL_LEN: usize = 26;
-const COMMIT_LEN: usize = 8;
+const SCENE_CELL_LEN: usize = 23;
+const COMMIT_LEN: usize = 9;
 const ACK_LEN: usize = 7;
 const _: () = assert!(CELL_LEN <= SPLIT_APP_MSG_MAX);
 
@@ -35,6 +38,8 @@ pub enum Message {
         generation: u8,
         revision: u32,
         cell_count: u8,
+        scene_count: u8,
+        scene_policy: LayerPolicy,
         sample_time_ms: u64,
         mutable: StandardMutableState,
     },
@@ -48,10 +53,16 @@ pub enum Message {
         revision: u32,
         cell: OverlayCell,
     },
+    SceneCell {
+        generation: u8,
+        revision: u32,
+        cell: SceneTableCell,
+    },
     Commit {
         generation: u8,
         revision: u32,
         cell_count: u8,
+        scene_count: u8,
     },
     Ack {
         generation: u8,
@@ -76,6 +87,8 @@ impl Message {
                 generation,
                 revision,
                 cell_count,
+                scene_count,
+                scene_policy,
                 sample_time_ms,
                 mutable,
             } => {
@@ -97,6 +110,11 @@ impl Message {
                 if mutable.background.mode == BackgroundMode::Breathe {
                     out[18] |= 0x80;
                 }
+                out[23] = scene_count;
+                out[24] = match scene_policy {
+                    LayerPolicy::EffectiveOnly => 0,
+                    LayerPolicy::ActiveStack => 1,
+                };
                 BEGIN_LEN
             }
             Message::Context {
@@ -145,15 +163,49 @@ impl Message {
                 put_u32(&mut out, 22, cell.ttl_ms.map(NonZeroU32::get).unwrap_or(0));
                 CELL_LEN
             }
+            Message::SceneCell {
+                generation,
+                revision,
+                cell,
+            } => {
+                out[1] = TAG_SCENE_CELL;
+                out[2] = generation;
+                put_u32(&mut out, 3, revision);
+                out[7] = cell.layer;
+                out[8] = cell.slot.0 as u8;
+                let (kind, color, period_ms, phase_ms, auxiliary) = match cell.effect {
+                    BuiltinEffect::Solid { color } => (0, color, 0, 0, 0),
+                    BuiltinEffect::Blink {
+                        color,
+                        period_ms,
+                        phase_ms,
+                        duty,
+                    } => (1, color, period_ms, phase_ms, duty as u16),
+                    BuiltinEffect::Breathe {
+                        color,
+                        period_ms,
+                        phase_ms,
+                        step_ms,
+                    } => (2, color, period_ms, phase_ms, step_ms),
+                };
+                out[9] = kind;
+                out[10..13].copy_from_slice(&[color.r, color.g, color.b]);
+                put_u32(&mut out, 13, period_ms);
+                put_u32(&mut out, 17, phase_ms);
+                put_u16(&mut out, 21, auxiliary);
+                SCENE_CELL_LEN
+            }
             Message::Commit {
                 generation,
                 revision,
                 cell_count,
+                scene_count,
             } => {
                 out[1] = TAG_COMMIT;
                 out[2] = generation;
                 put_u32(&mut out, 3, revision);
                 out[7] = cell_count;
+                out[8] = scene_count;
                 COMMIT_LEN
             }
             Message::Ack {
@@ -182,6 +234,12 @@ impl Message {
                     generation: bytes[2],
                     revision: get_u32(bytes, 3),
                     cell_count: bytes[7],
+                    scene_count: bytes[23],
+                    scene_policy: match bytes[24] {
+                        0 => LayerPolicy::EffectiveOnly,
+                        1 => LayerPolicy::ActiveStack,
+                        _ => return Err(DecodeError::Value),
+                    },
                     sample_time_ms: get_u64(bytes, 8),
                     mutable: StandardMutableState {
                         output_enabled: flag(bytes[16])?,
@@ -244,16 +302,54 @@ impl Message {
                     },
                 })
             }
+            TAG_SCENE_CELL if bytes.len() == SCENE_CELL_LEN => {
+                let slot = bytes[8] as usize;
+                if !(LEDS_PER_HALF..TOTAL_LEDS).contains(&slot) {
+                    return Err(DecodeError::Value);
+                }
+                let color = Rgb8::new(bytes[10], bytes[11], bytes[12]);
+                let period_ms = get_u32(bytes, 13);
+                let phase_ms = get_u32(bytes, 17);
+                let auxiliary = get_u16(bytes, 21);
+                let effect = match bytes[9] {
+                    0 => BuiltinEffect::Solid { color },
+                    1 if auxiliary <= 100 => BuiltinEffect::Blink {
+                        color,
+                        period_ms,
+                        phase_ms,
+                        duty: auxiliary as u8,
+                    },
+                    2 => BuiltinEffect::Breathe {
+                        color,
+                        period_ms,
+                        phase_ms,
+                        step_ms: auxiliary,
+                    },
+                    _ => return Err(DecodeError::Value),
+                };
+                Ok(Message::SceneCell {
+                    generation: bytes[2],
+                    revision: get_u32(bytes, 3),
+                    cell: SceneTableCell {
+                        layer: bytes[7],
+                        slot: LedSlot(slot as u16),
+                        effect,
+                    },
+                })
+            }
             TAG_COMMIT if bytes.len() == COMMIT_LEN => Ok(Message::Commit {
                 generation: bytes[2],
                 revision: get_u32(bytes, 3),
                 cell_count: bytes[7],
+                scene_count: bytes[8],
             }),
             TAG_ACK if bytes.len() == ACK_LEN => Ok(Message::Ack {
                 generation: bytes[2],
                 revision: get_u32(bytes, 3),
             }),
-            TAG_BEGIN | TAG_CONTEXT | TAG_CELL | TAG_COMMIT | TAG_ACK => Err(DecodeError::Length),
+            TAG_BEGIN | TAG_CONTEXT | TAG_CELL | TAG_COMMIT | TAG_ACK | TAG_SCENE_CELL => {
+                Err(DecodeError::Length)
+            }
             _ => Err(DecodeError::Tag),
         }
     }
@@ -263,7 +359,7 @@ impl Message {
 /// unless every packet lands and the final commit is applied.
 pub fn try_queue_snapshot(
     generation: u8,
-    snapshot: &StandardReplicaState<OVERLAY_CAPACITY>,
+    snapshot: &StandardReplicaState<OVERLAY_CAPACITY, SCENE_CAPACITY>,
 ) -> bool {
     let cell_count = snapshot
         .overlay
@@ -272,6 +368,15 @@ pub fn try_queue_snapshot(
         .filter(|cell| cell.slot.index() >= LEDS_PER_HALF)
         .count();
     if cell_count > LEDS_PER_HALF {
+        return false;
+    }
+    let scene_count = snapshot
+        .scenes
+        .as_slice()
+        .iter()
+        .filter(|cell| cell.slot.index() >= LEDS_PER_HALF)
+        .count();
+    if scene_count > SCENE_CAPACITY {
         return false;
     }
     let queue = |message: Message| {
@@ -283,6 +388,8 @@ pub fn try_queue_snapshot(
         generation,
         revision: snapshot.revision,
         cell_count: cell_count as u8,
+        scene_count: scene_count as u8,
+        scene_policy: snapshot.scenes.policy(),
         sample_time_ms: snapshot.sample_time_ms,
         mutable: snapshot.mutable,
     }) || !queue(Message::Context {
@@ -306,17 +413,33 @@ pub fn try_queue_snapshot(
             return false;
         }
     }
+    for &cell in snapshot
+        .scenes
+        .as_slice()
+        .iter()
+        .filter(|cell| cell.slot.index() >= LEDS_PER_HALF)
+    {
+        if !queue(Message::SceneCell {
+            generation,
+            revision: snapshot.revision,
+            cell,
+        }) {
+            return false;
+        }
+    }
     queue(Message::Commit {
         generation,
         revision: snapshot.revision,
         cell_count: cell_count as u8,
+        scene_count: scene_count as u8,
     })
 }
 
 struct Stage {
     generation: u8,
-    snapshot: StandardReplicaState<OVERLAY_CAPACITY>,
-    expected_cells: usize,
+    snapshot: StandardReplicaState<OVERLAY_CAPACITY, SCENE_CAPACITY>,
+    expected_overlay_cells: usize,
+    expected_scene_cells: usize,
     context_received: bool,
 }
 
@@ -332,25 +455,33 @@ impl SnapshotStage {
     pub fn apply(
         &mut self,
         message: Message,
-    ) -> Option<(u8, StandardReplicaState<OVERLAY_CAPACITY>)> {
+    ) -> Option<(u8, StandardReplicaState<OVERLAY_CAPACITY, SCENE_CAPACITY>)> {
         match message {
             Message::Begin {
                 generation,
                 revision,
                 cell_count,
+                scene_count,
+                scene_policy,
                 sample_time_ms,
                 mutable,
-            } if cell_count as usize <= LEDS_PER_HALF => {
+            } if cell_count as usize <= LEDS_PER_HALF
+                && scene_count as usize <= SCENE_CAPACITY =>
+            {
+                let mut scenes = SceneTable::new();
+                scenes.set_policy(scene_policy);
                 self.stage = Some(Stage {
                     generation,
                     snapshot: StandardReplicaState {
                         revision,
                         mutable,
                         overlay: OverlayBatch::new(),
+                        scenes,
                         context: LightingContext::default(),
                         sample_time_ms,
                     },
-                    expected_cells: cell_count as usize,
+                    expected_overlay_cells: cell_count as usize,
+                    expected_scene_cells: scene_count as usize,
                     context_received: false,
                 });
                 None
@@ -377,7 +508,7 @@ impl SnapshotStage {
                 let stage = self.stage.as_mut()?;
                 if stage.generation != generation
                     || stage.snapshot.revision != revision
-                    || stage.snapshot.overlay.as_slice().len() >= stage.expected_cells
+                    || stage.snapshot.overlay.as_slice().len() >= stage.expected_overlay_cells
                     || stage
                         .snapshot
                         .overlay
@@ -390,17 +521,42 @@ impl SnapshotStage {
                 }
                 None
             }
+            Message::SceneCell {
+                generation,
+                revision,
+                cell,
+            } => {
+                let stage = self.stage.as_mut()?;
+                if stage.generation != generation
+                    || stage.snapshot.revision != revision
+                    || stage.snapshot.scenes.as_slice().len() >= stage.expected_scene_cells
+                    || stage
+                        .snapshot
+                        .scenes
+                        .as_slice()
+                        .iter()
+                        .any(|existing| existing.layer == cell.layer && existing.slot == cell.slot)
+                    || stage.snapshot.scenes.set(cell).is_err()
+                {
+                    self.stage = None;
+                }
+                None
+            }
             Message::Commit {
                 generation,
                 revision,
                 cell_count,
+                scene_count,
             } => {
                 let valid = self.stage.as_ref().is_some_and(|stage| {
                     stage.generation == generation
                         && stage.snapshot.revision == revision
                         && stage.context_received
-                        && stage.expected_cells == cell_count as usize
-                        && stage.snapshot.overlay.as_slice().len() == stage.expected_cells
+                        && stage.expected_overlay_cells == cell_count as usize
+                        && stage.expected_scene_cells == scene_count as usize
+                        && stage.snapshot.overlay.as_slice().len()
+                            == stage.expected_overlay_cells
+                        && stage.snapshot.scenes.as_slice().len() == stage.expected_scene_cells
                 });
                 if valid {
                     self.stage

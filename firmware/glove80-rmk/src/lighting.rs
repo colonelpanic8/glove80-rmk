@@ -14,7 +14,7 @@ use rmk::core_traits::Runnable;
 use rmk::lighting::{
     EmptySource, IndicatorState, LayerState, LightingContext, LightingMailbox, LightingOutput,
     LightingProcessor, LightingService, LogicalFrame, Rgb8, SnapshotProvider, StandardCommand,
-    StandardError, StandardLightingEngine, StandardReplicaSlot, StandardState,
+    StandardError, StandardLightingEngine, StandardReply, StandardReplicaSlot,
 };
 
 bind_interrupts!(struct Irqs {
@@ -24,19 +24,27 @@ bind_interrupts!(struct Irqs {
 pub const LEDS_PER_HALF: usize = 40;
 pub const TOTAL_LEDS: usize = LEDS_PER_HALF * 2;
 pub const OVERLAY_CAPACITY: usize = 64;
+pub const SCENE_CAPACITY: usize = 64;
 pub const COMMAND_CAPACITY: usize = 4;
 
-pub type Engine =
-    StandardLightingEngine<'static, EmptySource, EmptySource, TOTAL_LEDS, OVERLAY_CAPACITY>;
+pub type Engine = StandardLightingEngine<
+    'static,
+    EmptySource,
+    EmptySource,
+    TOTAL_LEDS,
+    OVERLAY_CAPACITY,
+    SCENE_CAPACITY,
+>;
 pub type CoreMailbox = LightingMailbox<
-    StandardCommand<OVERLAY_CAPACITY>,
-    StandardState,
+    StandardCommand<OVERLAY_CAPACITY, SCENE_CAPACITY>,
+    StandardReply,
     StandardError,
     COMMAND_CAPACITY,
 >;
 
 pub static CORE_MAILBOX: CoreMailbox = LightingMailbox::new();
-pub static REPLICA_SLOT: StandardReplicaSlot<OVERLAY_CAPACITY> = StandardReplicaSlot::new();
+pub static REPLICA_SLOT: StandardReplicaSlot<OVERLAY_CAPACITY, SCENE_CAPACITY> =
+    StandardReplicaSlot::new();
 
 /// MoErgo's documented 80% channel ceiling. This remains in the hardware
 /// driver below every user-controlled transform and protocol path.

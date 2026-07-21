@@ -38,7 +38,7 @@ the octopus merge.
 | `colonelpanic8/rmk:glove80-rmk/rynk-usb-hid` | `902c9d630d3b6d10afbd9fe8527a8806f648bf8b` |
 | `colonelpanic8/rmk:glove80-rmk/build-info` | `8b5dd4d00e96e1cceed41d5a8977879c4879673c` |
 | `colonelpanic8/rmk:glove80-rmk/scene-lighting` | `c7c090ca24070bcfd59f673d65d4418d8d8a7524` |
-| `colonelpanic8/rmk:master` | `e0711733cad46beb199eea9171bc17cb0a37b53f` |
+| `colonelpanic8/rmk:master` | `6bcf2d94f07f04669fb7e99045edb218faa79df0` |
 
 ## Refresh procedure
 
