@@ -3,9 +3,12 @@
 ## Current decision
 
 Rynk owns live keymap and lighting control. The downstream RMK dependency is
-`colonelpanic8/rmk:master` at `6bcf2d94`, pinned as the
-`dependencies/rmk` submodule. It composes upstream Rynk with the six
-reviewable topics listed in [upstream/PATCHES.md](./upstream/PATCHES.md).
+`colonelpanic8/rmk` at `228f9bcd` — the `glove80-rmk/scene-master-merge` tip
+proposed as fork PR #6, which is `master` plus the protocol-versioning
+normalization — pinned as the `dependencies/rmk` submodule. It composes
+upstream Rynk with the six reviewable topics listed in
+[upstream/PATCHES.md](./upstream/PATCHES.md). When PR #6 merges, the pin moves
+mechanically to the resulting `master` commit.
 
 The older `glove80-rynk` branch and the pre-Rynk `glove80` branch remain
 rollback/provenance refs only. The current firmware no longer depends on their
@@ -47,7 +50,7 @@ and checksum.
   USB Rynk path, all-layer reads, lighting mutation, and state readback were
   exercised on physical Glove80 hardware.
 - The complete composed RMK feature matrix, Rynk native tests/doctests, WASM
-  package/typecheck, and clippy gates pass at the current integration tree.
+  package/typecheck, and clippy gates pass at the current composed tree.
 - Split renderer replication and both embedded halves compile at the current
   development pin; physical phase/latency qualification remains pending.
 - The repository check and both release cross-builds are required after every
