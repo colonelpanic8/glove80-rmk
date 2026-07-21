@@ -110,7 +110,19 @@ async fn run_lighting_device<D: RynkDevice>(device: D, command: &LightingCommand
 async fn run_bootloader_device<D: RynkDevice>(device: D) -> Result<()> {
     let label = device.label();
     let (client, mut driver) = connect_device(device, &label).await?;
-    match select(driver.run(&client), client.bootloader_jump()).await {
+    // `bootloader_jump` is deliberately fire-and-forget: success means its
+    // frame reached the driver's queue, not the device. Keep driving long
+    // enough to flush it. A transport disconnect after `queued` becomes true
+    // is the expected proof that the firmware consumed the request and reset.
+    let queued = std::cell::Cell::new(false);
+    let request = async {
+        client.bootloader_jump().await?;
+        queued.set(true);
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        Ok::<(), rynk::RynkHostError>(())
+    };
+    match select(driver.run(&client), request).await {
+        Either::First(_) if queued.get() => Ok(()),
         Either::First(error) => Err(anyhow!("Rynk connection to {label} ended: {error}")),
         Either::Second(result) => result.map_err(Into::into),
     }
