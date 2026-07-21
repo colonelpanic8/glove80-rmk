@@ -7,7 +7,7 @@ fmt:
 	nix develop --command cargo fmt --all
 	nix develop --command cargo fmt --manifest-path crates/glove80-host-protocol/Cargo.toml
 	nix develop --command cargo fmt --manifest-path crates/glove80-compositor/Cargo.toml
-	nix develop --command cargo fmt --manifest-path firmware/glove80-rmk/Cargo.toml
+	nix develop --command cargo fmt --manifest-path crates/glove80-rmk/Cargo.toml
 
 host-test:
 	nix develop --command cargo test --workspace

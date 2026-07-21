@@ -17,5 +17,5 @@ heapless = { version = "0.8", default-features = false }
 serde_json = "1"
 
 # Standalone workspace: the repo root workspace only contains
-# tools/glove80-control and should stay that way.
+# crates/glove80-control and should stay that way.
 [workspace]

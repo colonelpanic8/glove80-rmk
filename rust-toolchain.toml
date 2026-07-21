@@ -1,5 +1,5 @@
 [toolchain]
-# Pinned like crates/glove80-host-protocol and firmware/glove80-rmk: this machine's
+# Pinned like crates/glove80-host-protocol and crates/glove80-rmk: this machine's
 # rustup "stable" channel install is broken (channel sync fails), and a
 # concrete version keeps builds reproducible. Nested rust-toolchain.toml
 # files (rmk/, protocol/) still take precedence for builds run inside them.

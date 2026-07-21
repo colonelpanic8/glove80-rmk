@@ -1,6 +1,6 @@
 [workspace]
-members = ["tools/glove80-control"]
-default-members = ["tools/glove80-control"]
+members = ["crates/glove80-control"]
+default-members = ["crates/glove80-control"]
 # glove80-host-protocol is a path dependency with its own [workspace];
 # exclude it so Cargo keeps it a separate workspace root.
 exclude = [

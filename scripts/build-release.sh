@@ -28,7 +28,7 @@ fi
 
 node scripts/check-rynk-wasm-provenance.mjs "$rmk_commit"
 
-version="$(sed -nE 's/^version[[:space:]]*=[[:space:]]*"([^"]+)"/\1/p' firmware/glove80-rmk/Cargo.toml | head -1)"
+version="$(sed -nE 's/^version[[:space:]]*=[[:space:]]*"([^"]+)"/\1/p' crates/glove80-rmk/Cargo.toml | head -1)"
 protocol_version="$(sed -nE 's/^version[[:space:]]*=[[:space:]]*"([^"]+)"/\1/p' crates/glove80-host-protocol/Cargo.toml | head -1)"
 rust_toolchain="$(sed -nE 's/^channel[[:space:]]*=[[:space:]]*"([^"]+)"/\1/p' rust-toolchain.toml | head -1)"
 source_commit="$(git rev-parse HEAD)"
@@ -37,12 +37,12 @@ config_commit="${GLOVE80_CONFIG_GIT_COMMIT:-standalone}"
 config_dirty="${GLOVE80_CONFIG_GIT_DIRTY:-false}"
 
 (
-  cd firmware/glove80-rmk
+  cd crates/glove80-rmk
   GLOVE80_RMK_GIT_VERSION="$rmk_version" cargo build --release --bin glove80_lh
   GLOVE80_RMK_GIT_VERSION="$rmk_version" cargo build --release --bin glove80_rh
 )
 
-target_dir="firmware/glove80-rmk/target/thumbv7em-none-eabihf/release"
+target_dir="crates/glove80-rmk/target/thumbv7em-none-eabihf/release"
 mkdir -p dist
 install -m 0644 "$target_dir/glove80_lh" "dist/glove80-rmk-${version}-lh.elf"
 install -m 0644 "$target_dir/glove80_rh" "dist/glove80-rmk-${version}-rh.elf"

@@ -1,5 +1,5 @@
 //! Embed this build's git identity for the `version` verb, exactly the way
-//! the firmware embeds its own (see `firmware/glove80-rmk/build.rs`,
+//! the firmware embeds its own (see `crates/glove80-rmk/build.rs`,
 //! `version_embedding()`): `GLOVE80_GIT_HASH` is `git rev-parse --short=8
 //! HEAD` padded with '0' to exactly 8 ASCII chars (`unknown0` without git),
 //! `GLOVE80_GIT_DIRTY` is `1` iff `git status --porcelain` is non-empty.
@@ -7,7 +7,7 @@
 use std::process::Command;
 
 fn main() {
-    // Two levels up: <repo root>/.git/HEAD (this crate is tools/glove80-control).
+    // Two levels up: <repo root>/.git/HEAD (this crate is crates/glove80-control).
     println!("cargo:rerun-if-changed=../../.git/HEAD");
     // HEAD only moves on checkout; ordinary commits move the branch ref, so
     // watch that too or the embedded hash goes stale (same fix as the

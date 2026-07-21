@@ -35,7 +35,7 @@ Run from the repository root:
 
 ```bash
 nix develop --command bash -lc '
-  cd firmware/glove80-rmk
+  cd crates/glove80-rmk
   cargo build --release --bin glove80_lh
   cargo build --release --bin glove80_rh
 '

@@ -3,7 +3,7 @@
 //! Pure logic, `no_std`, zero dependencies: time is an abstract `now_ms: u64`
 //! supplied by the caller, the LED count is a const generic, and nothing here
 //! touches hardware. `cargo test` runs the whole contract on the host; the
-//! firmware (firmware/glove80-rmk) consumes the crate by path and feeds it real
+//! firmware (crates/glove80-rmk) consumes the crate by path and feeds it real
 //! events, a real clock, and a WS2812 frame sink.
 //!
 //! Core model (from the design doc):

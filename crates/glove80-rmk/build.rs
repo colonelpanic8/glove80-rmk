@@ -123,7 +123,7 @@ fn version_embedding() {
     println!("cargo:rerun-if-env-changed=GLOVE80_CONFIG_GIT_DIRTY");
     println!("cargo:rerun-if-env-changed=GLOVE80_RMK_GIT_VERSION");
 
-    // Two levels up: <repo root>/.git/HEAD (this crate is firmware/glove80-rmk).
+    // Two levels up: <repo root>/.git/HEAD (this crate is crates/glove80-rmk).
     // HEAD only changes on checkout/branch switch; ordinary commits move the
     // branch ref file instead, so watch that too or the embedded hash goes
     // stale until an unrelated rebuild.
