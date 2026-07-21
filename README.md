@@ -112,8 +112,12 @@ extraction.
 Keep a known-good pair of RMK UF2 images before testing a new build. Flash the
 right/peripheral half first, wait for it to rejoin, and then flash the
 left/central half. `glove80-control bootloader --peripheral` and
-`glove80-control bootloader` enter the respective UF2 bootloaders after the
-keyboard's physical-presence unlock chord is held.
+`glove80-control bootloader` enter the respective UF2 bootloaders
+programmatically. A firmware build may set
+`[host].bootloader_requires_unlock = true` to require the keyboard's
+physical-presence unlock chord first; this repository intentionally sets it to
+`false` for host-managed deployment. Add `--legacy-host-protocol` when
+recovering a build that predates Rynk bootloader entry.
 
 ## Validation status
 

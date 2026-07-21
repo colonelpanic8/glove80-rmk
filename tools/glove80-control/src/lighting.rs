@@ -9,7 +9,9 @@ use std::path::PathBuf;
 
 use anyhow::{bail, Context, Result};
 use clap::{Args, Subcommand, ValueEnum};
-use glove80_host_protocol::{feature, Capabilities, CellState, CellWrite, Effect, EffectKind};
+use glove80_host_protocol::{
+    feature, BootTarget, Capabilities, CellState, CellWrite, Effect, EffectKind,
+};
 
 use crate::hostproto::{effect_name, ApplyOutcome, HostClient};
 use crate::transport::Selector;
@@ -98,6 +100,10 @@ pub struct BootloaderArgs {
     /// Skip the confirmation prompt.
     #[arg(long)]
     pub yes: bool,
+    /// Use the legacy product protocol as a recovery path for firmware that
+    /// predates Rynk bootloader entry.
+    #[arg(long)]
+    pub legacy_host_protocol: bool,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -536,7 +542,12 @@ fn read_stdin() -> Result<String> {
 }
 
 /// Host-protocol bootloader entry with a confirmation prompt.
-pub fn run_bootloader(selector: &Selector, peripheral: bool, yes: bool) -> Result<()> {
+pub fn run_bootloader(
+    selector: &Selector,
+    peripheral: bool,
+    yes: bool,
+    legacy_host_protocol: bool,
+) -> Result<()> {
     let half = if peripheral { "peripheral" } else { "central" };
     if !yes {
         print!("Reboot the {half} half into its UF2 bootloader? [y/N] ");
@@ -551,8 +562,27 @@ pub fn run_bootloader(selector: &Selector, peripheral: bool, yes: bool) -> Resul
             return Ok(());
         }
     }
-    crate::rynk_client::run_bootloader(selector, peripheral)?;
-    println!("{half} half accepted the Rynk bootloader request");
+    if legacy_host_protocol {
+        let target = if peripheral {
+            BootTarget::Peripheral
+        } else {
+            BootTarget::Central
+        };
+        let transport = crate::transport::connect(selector)?;
+        let mut client = HostClient::new(transport);
+        let acknowledged = client.enter_bootloader(target)?;
+        println!(
+            "{half} half {} the legacy host-protocol bootloader request",
+            if acknowledged {
+                "acknowledged"
+            } else {
+                "reset after"
+            }
+        );
+    } else {
+        crate::rynk_client::run_bootloader(selector, peripheral)?;
+        println!("{half} half accepted the Rynk bootloader request");
+    }
     Ok(())
 }
 

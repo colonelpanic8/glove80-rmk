@@ -125,11 +125,12 @@ enabled = true
 [host]
 vial_enabled = false
 rynk_enabled = true
-# Dangerous Rynk operations require deliberate physical presence. Hold the
-# two outer top-row keys (F1 and F10 positions) to satisfy the challenge;
-# ordinary keymap/config reads and writes remain available without unlocking.
+# Storage reset and matrix-state reads require deliberate physical presence.
+# Firmware deployment is intentionally host-driven on this keyboard, so both
+# halves may enter their UF2 bootloaders programmatically without a key chord.
 insecure = false
 unlock_keys = [[0, 0], [0, 13]]
+bootloader_requires_unlock = false
 
 [split]
 connection = "ble"

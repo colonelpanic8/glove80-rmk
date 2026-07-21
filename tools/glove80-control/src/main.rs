@@ -216,9 +216,12 @@ fn run(cli: Cli) -> Result<()> {
         Command::Lighting { command } => lighting::run(&hostproto_selector(&cli), command),
         Command::Keymap { command } => keymap::run(&hostproto_selector(&cli), command),
         Command::Version => version::run(&hostproto_selector(&cli)),
-        Command::Bootloader { host } => {
-            lighting::run_bootloader(&hostproto_selector(&cli), host.peripheral, host.yes)
-        }
+        Command::Bootloader { host } => lighting::run_bootloader(
+            &hostproto_selector(&cli),
+            host.peripheral,
+            host.yes,
+            host.legacy_host_protocol,
+        ),
     }
 }
 

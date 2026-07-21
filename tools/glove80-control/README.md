@@ -51,10 +51,12 @@ validated against what the device advertises.
   brightness scalar.
 - `lighting toggle` is retained as a legacy parser but rejected because named
   toggle overlays are not part of RMK's standard lighting model.
-- `bootloader [--peripheral] [--yes]` — enter the selected half's UF2
-  bootloader through Rynk. On a locked keyboard the CLI displays the configured
-  physical-presence keys, polls while they are held, and reports success only
-  after the selected half actually disconnects.
+- `bootloader [--peripheral] [--yes] [--legacy-host-protocol]` — enter the
+  selected half's UF2 bootloader through Rynk. When bootloader entry is locked,
+  the CLI displays the configured physical-presence keys, polls while they are
+  held, and reports success only after the selected half actually disconnects.
+  `--legacy-host-protocol` is a recovery path for older firmware that predates
+  Rynk bootloader entry.
 
 ## Canonical configuration file (Rynk keymap + legacy lighting)
 
