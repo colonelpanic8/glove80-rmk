@@ -241,6 +241,7 @@ pub struct BleTransport {
     request_char: Proxy<'static>,
     notifications: mpsc::Receiver<Vec<u8>>,
     chunk_len: usize,
+    #[allow(dead_code)] // consumed only by the retained product-protocol client
     description: String,
 }
 

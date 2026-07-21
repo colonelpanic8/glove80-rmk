@@ -25,6 +25,7 @@ pub trait Transport {
     /// Receive one chunk, or `None` if `timeout` elapses first.
     fn recv_chunk(&mut self, timeout: Duration) -> Result<Option<Vec<u8>>>;
     /// Human-readable description of the connected endpoint.
+    #[allow(dead_code)] // consumed only by the retained product-protocol client
     fn description(&self) -> String;
 }
 

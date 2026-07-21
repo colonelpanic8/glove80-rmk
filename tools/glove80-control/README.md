@@ -54,7 +54,7 @@ validated against what the device advertises.
 - `bootloader [--yes]` — enter the central UF2 bootloader through Rynk. Use the
   physical right-half bootloader binding for the peripheral.
 
-## Legacy canonical configuration file (keymap + lighting)
+## Canonical configuration file (Rynk keymap + legacy lighting)
 
 Current RMK lighting firmware does not expose the old transactional product
 protocol. This section documents the retained compatibility tooling and file
@@ -83,8 +83,8 @@ files keep working unchanged.
   gracefully with a note: keymap-only when the device is running
   compiled-in lighting defaults, lighting-only when the firmware does not
   advertise keymap editing.
-- `config show` — summary of both sections: layers with bound-key counts,
-  then records, activations, effects, and toggle persistence.
+- `config show` — read the populated keymap layers and current lighting state
+  through Rynk. It does not require the retired product-protocol endpoint.
 
 ### Keymap section
 
@@ -114,6 +114,10 @@ KC_F1   KC_F2  ...     # 6 rows x 14 columns, whitespace-separated
   leaves its bindings untouched. Omit all layer keys for a lighting-only
   file, or all lighting tables for a keymap-only file (the other side of
   the keyboard's state is then left exactly as it was).
+- When any layer has `keys`, the file is authoritative for the keymap's
+  length: every firmware slot after the final declared `[[layer]]` is cleared
+  and read back. This prevents an exported or hand-written five-layer config
+  from silently retaining stale bindings in slots 5–7.
 - On export the device has no IDs/names to offer, so they are synthesized
   as `layer0..layerN` (position = slot) and trailing all-unbound layers
   are dropped. Export → apply → export is stable.
@@ -139,8 +143,9 @@ KC_F1   KC_F2  ...     # 6 rows x 14 columns, whitespace-separated
   hybrid.
 - **Keymap apply is best-effort per Rynk page.** Bulk-capable firmware writes
   one Rynk page at a time; other builds write individual keys. Every key is
-  read back and lossy conversions are reported, but an interrupted multi-page
-  apply leaves earlier pages written — there is no whole-keymap transaction.
+  read back, trailing undeclared slots are cleared, and lossy conversions are
+  reported, but an interrupted multi-page apply leaves earlier pages written
+  — there is no whole-keymap transaction.
 - The keymap section is applied **first**, so a keymap failure stops the
   run before the lighting config is touched.
 

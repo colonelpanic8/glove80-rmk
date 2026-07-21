@@ -472,6 +472,11 @@ pub struct Loaded {
     pub blob: Vec<u8>,
     /// Keymap layers with keys, resolved to firmware slots.
     pub plans: Vec<LayerPlan>,
+    /// Number of layer slots declared by a canonical TOML file. Applying a
+    /// declared keymap clears every trailing firmware slot so stale bindings
+    /// cannot survive behind a shorter canonical file. Raw lighting blobs and
+    /// TOML files with no `[[layer]]` entries leave the keymap untouched.
+    pub keymap_layer_count: Option<usize>,
     /// Whether the file carries a lighting section (raw blobs always do).
     /// When false, apply leaves the stored lighting config untouched.
     pub apply_lighting: bool,
@@ -493,6 +498,7 @@ pub fn load_config(path: &Path) -> Result<Loaded> {
         return Ok(Loaded {
             blob: bytes,
             plans: Vec::new(),
+            keymap_layer_count: None,
             apply_lighting: true,
             source: "raw blob",
         });
@@ -503,6 +509,7 @@ pub fn load_config(path: &Path) -> Result<Loaded> {
     let plans = keymapcfg::build_layer_plans(&file.layers)?;
     Ok(Loaded {
         blob: file_to_blob(&file)?,
+        keymap_layer_count: (!plans.is_empty()).then_some(file.layers.len()),
         plans,
         apply_lighting: file.has_lighting(),
         source: "TOML",
@@ -644,28 +651,28 @@ pub fn run_apply(selector: &Selector, path: &Path, dry_run: bool) -> Result<()> 
         println!("dry run: not touching the device");
         return Ok(());
     }
-    if !loaded.plans.is_empty() {
+    if let Some(layer_count) = loaded.keymap_layer_count {
         println!(
-            "applying the keymap through Rynk ({} layer(s)) — verified by read-back, NOT atomic across batches",
-            loaded.plans.len()
+            "applying the keymap through Rynk ({layer_count} declared layer(s); trailing slots will be cleared) — verified by read-back, NOT atomic across batches"
         );
         let report =
-            crate::rynk_client::apply_plans(selector, &loaded.plans, |stage| match stage {
-                keymapcfg::KeymapStage::LayerBegun { slot, id } => {
-                    println!("  layer {slot} \"{id}\":")
+            crate::rynk_client::apply_plans(selector, &loaded.plans, layer_count, |stage| {
+                match stage {
+                    keymapcfg::KeymapStage::LayerBegun { slot, id } => {
+                        println!("  layer {slot} \"{id}\":")
+                    }
+                    keymapcfg::KeymapStage::Batch { written, total, .. } => {
+                        println!("    wrote {written}/{total} positions");
+                    }
+                    keymapcfg::KeymapStage::LayerDone { lossy, .. } if lossy > 0 => {
+                        println!("    {lossy} position(s) stored differently than requested");
+                    }
+                    keymapcfg::KeymapStage::LayerDone { .. } => {}
                 }
-                keymapcfg::KeymapStage::Batch { written, total, .. } => {
-                    println!("    wrote {written}/{total} positions");
-                }
-                keymapcfg::KeymapStage::LayerDone { lossy, .. } if lossy > 0 => {
-                    println!("    {lossy} position(s) stored differently than requested");
-                }
-                keymapcfg::KeymapStage::LayerDone { .. } => {}
             })?;
         println!(
-            "keymap applied through Rynk: {} positions written across {} layer(s); changes are live and persisted",
-            report.entries_written,
-            loaded.plans.len()
+            "keymap applied through Rynk: {} positions written; {layer_count} declared layer(s), trailing slots cleared; changes are live and persisted",
+            report.entries_written
         );
         for (layer, key, requested, stored) in &report.lossy {
             println!(
@@ -926,13 +933,8 @@ pub fn run_show(selector: &Selector) -> Result<()> {
         println!("{}", keymapcfg::render_keymap_summary(&plans));
     }
 
-    let transport = transport::connect(selector)?;
-    let mut client = HostClient::new(transport);
-    println!("lighting:");
-    let blob = read_active_config(&mut client)?;
-    let config = decode_lighting_config(&blob).expect("validated in read_active_config");
-    println!("{}", render_summary(&config, blob.len()));
-    Ok(())
+    println!("lighting via Rynk:");
+    crate::rynk_client::run_lighting(selector, &crate::lighting::LightingCommand::Read)
 }
 
 #[cfg(test)]
@@ -1718,9 +1720,28 @@ gate = { toggle = 7 }
         Loaded {
             blob: file_to_blob(file).unwrap(),
             plans: keymapcfg::build_layer_plans(&file.layers).unwrap(),
+            keymap_layer_count: file
+                .layers
+                .iter()
+                .any(|layer| layer.keys.is_some())
+                .then_some(file.layers.len()),
             apply_lighting: file.has_lighting(),
             source: "TOML",
         }
+    }
+
+    #[test]
+    fn only_explicit_key_grids_make_the_keymap_authoritative() {
+        let mut declarations_only = ConfigFile::default();
+        declarations_only.layers.push(LayerEntry {
+            id: "base".into(),
+            name: None,
+            keys: None,
+        });
+        assert_eq!(load_file(&declarations_only).keymap_layer_count, None);
+
+        declarations_only.layers[0].keys = Some(keymapcfg::format_grid(&vec![0; 84]));
+        assert_eq!(load_file(&declarations_only).keymap_layer_count, Some(1));
     }
 
     /// Mock handler answering one KEYMAP_WRITE by echoing the request

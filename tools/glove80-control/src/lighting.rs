@@ -290,10 +290,12 @@ fn parse_replace_line(line: &str) -> Result<CellWrite> {
 // Rendering
 // ---------------------------------------------------------------------------
 
+#[allow(dead_code)] // legacy product-protocol renderer
 fn format_color(effect: &Effect) -> String {
     format!("#{:02x}{:02x}{:02x}", effect.r, effect.g, effect.b)
 }
 
+#[allow(dead_code)] // legacy product-protocol renderer
 fn format_ttl(remaining_ms: u32) -> String {
     match remaining_ms {
         0 => "none".into(),
@@ -304,6 +306,7 @@ fn format_ttl(remaining_ms: u32) -> String {
 
 /// Render an overlay-write outcome. Pending keys are always surfaced —
 /// a partial apply must never look like a full one.
+#[allow(dead_code)] // legacy product-protocol renderer
 pub fn render_apply(operation: &str, outcome: &ApplyOutcome) -> String {
     if !outcome.partial && outcome.pending_keys.is_empty() {
         return format!("{operation}: applied to both halves");
@@ -329,6 +332,7 @@ pub fn render_apply(operation: &str, outcome: &ApplyOutcome) -> String {
 }
 
 /// Render READ_OVERLAY as a table with remaining TTLs.
+#[allow(dead_code)] // legacy product-protocol renderer
 pub fn render_overlay(cells: &[CellState]) -> String {
     if cells.is_empty() {
         return "host overlay is empty".into();
@@ -386,6 +390,7 @@ pub fn render_overlay(cells: &[CellState]) -> String {
         .join("\n")
 }
 
+#[allow(dead_code)] // legacy product-protocol renderer
 pub fn render_capabilities(capabilities: &Capabilities) -> String {
     let effects = [EffectKind::Solid, EffectKind::Blink, EffectKind::Breathe]
         .iter()
@@ -435,6 +440,7 @@ pub fn run(selector: &Selector, command: &LightingCommand) -> Result<()> {
 }
 
 /// Transport-independent dispatch (unit-tested with the mock transport).
+#[allow(dead_code)] // legacy product-protocol runner
 pub fn run_with_client(client: &mut HostClient, command: &LightingCommand) -> Result<()> {
     match command {
         LightingCommand::Ping { data } => {
@@ -521,6 +527,7 @@ pub fn run_with_client(client: &mut HostClient, command: &LightingCommand) -> Re
     Ok(())
 }
 
+#[allow(dead_code)] // legacy product-protocol runner
 fn read_stdin() -> Result<String> {
     let mut text = String::new();
     std::io::Read::read_to_string(&mut std::io::stdin().lock(), &mut text)

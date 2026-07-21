@@ -6,6 +6,10 @@
 //! per connection and cached; nothing is assumed that the device did not
 //! advertise (PROTOCOL.md requirement).
 
+// Retained for older firmware and the compatibility/config regression suite;
+// current Glove80 firmware routes interactive control through Rynk.
+#![allow(dead_code)]
+
 use std::fmt;
 use std::time::{Duration, Instant};
 

@@ -433,15 +433,16 @@ pub fn read_all_layers(selector: &Selector) -> Result<Vec<Vec<u16>>> {
 pub fn apply_plans(
     selector: &Selector,
     plans: &[LayerPlan],
+    declared_layer_count: usize,
     mut stage: impl FnMut(KeymapStage),
 ) -> Result<KeymapReport> {
     let runtime =
         tokio::runtime::Runtime::new().context("could not create the Rynk async runtime")?;
     let (report, stages) = runtime.block_on(async {
         match select_device(selector).await? {
-            Device::Hid(device) => apply_plans_device(device, plans).await,
-            Device::Serial(device) => apply_plans_device(device, plans).await,
-            Device::Ble(device) => apply_plans_device(device, plans).await,
+            Device::Hid(device) => apply_plans_device(device, plans, declared_layer_count).await,
+            Device::Serial(device) => apply_plans_device(device, plans, declared_layer_count).await,
+            Device::Ble(device) => apply_plans_device(device, plans, declared_layer_count).await,
         }
     })?;
     for event in stages {
@@ -471,10 +472,16 @@ async fn read_layers_device<D: RynkDevice>(device: D) -> Result<Vec<Vec<u16>>> {
 async fn apply_plans_device<D: RynkDevice>(
     device: D,
     plans: &[LayerPlan],
+    declared_layer_count: usize,
 ) -> Result<(KeymapReport, Vec<KeymapStage>)> {
     let label = device.label();
     let (client, mut driver) = connect_device(device, &label).await?;
-    match select(driver.run(&client), apply(&client, plans)).await {
+    match select(
+        driver.run(&client),
+        apply(&client, plans, declared_layer_count),
+    )
+    .await
+    {
         Either::First(error) => Err(anyhow!("Rynk connection to {label} ended: {error}")),
         Either::Second(result) => result,
     }
@@ -628,7 +635,11 @@ async fn read_layers(client: &Client) -> Result<Vec<Vec<u16>>> {
         .collect()
 }
 
-async fn apply(client: &Client, plans: &[LayerPlan]) -> Result<(KeymapReport, Vec<KeymapStage>)> {
+async fn apply(
+    client: &Client,
+    plans: &[LayerPlan],
+    declared_layer_count: usize,
+) -> Result<(KeymapReport, Vec<KeymapStage>)> {
     let capabilities = client.get_capabilities().await?;
     check_grid(
         capabilities.num_rows,
@@ -646,6 +657,13 @@ async fn apply(client: &Client, plans: &[LayerPlan]) -> Result<(KeymapReport, Ve
             capabilities.num_layers
         );
     }
+    let exact_plans = plans_with_trailing_clears(
+        plans,
+        declared_layer_count,
+        capabilities.num_layers,
+        capabilities.num_rows,
+        capabilities.num_cols,
+    )?;
 
     let mut report = KeymapReport::default();
     let mut stages = Vec::new();
@@ -654,7 +672,7 @@ async fn apply(client: &Client, plans: &[LayerPlan]) -> Result<(KeymapReport, Ve
     } else {
         1
     };
-    for plan in plans {
+    for plan in &exact_plans {
         stages.push(KeymapStage::LayerBegun {
             slot: plan.slot,
             id: plan.id.clone(),
@@ -710,6 +728,30 @@ async fn apply(client: &Client, plans: &[LayerPlan]) -> Result<(KeymapReport, Ve
         });
     }
     Ok((report, stages))
+}
+
+fn plans_with_trailing_clears(
+    plans: &[LayerPlan],
+    declared_layer_count: usize,
+    device_layer_count: u8,
+    rows: u8,
+    cols: u8,
+) -> Result<Vec<LayerPlan>> {
+    if declared_layer_count > usize::from(device_layer_count) {
+        bail!(
+            "the canonical config declares {declared_layer_count} layer(s), but Rynk reports only {device_layer_count} layer(s)"
+        );
+    }
+    let mut exact_plans = plans.to_vec();
+    for slot in declared_layer_count..usize::from(device_layer_count) {
+        exact_plans.push(LayerPlan {
+            slot: slot as u8,
+            id: "clear trailing".to_string(),
+            name: None,
+            codes: vec![0; usize::from(rows) * usize::from(cols)],
+        });
+    }
+    Ok(exact_plans)
 }
 
 fn action_to_via(action: KeyAction, layer: u8, offset: usize) -> Result<u16> {
@@ -848,5 +890,34 @@ fn one_device<T>(mut devices: Vec<T>, kind: &str) -> Result<T> {
         0 => bail!("no {kind} device found"),
         1 => Ok(devices.pop().expect("length checked")),
         count => bail!("found {count} {kind} devices; pass --device to select one"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn canonical_keymap_clears_every_trailing_device_layer() {
+        let plans = vec![LayerPlan {
+            slot: 0,
+            id: "base".into(),
+            name: Some("Base".into()),
+            codes: vec![4; 84],
+        }];
+        let exact = plans_with_trailing_clears(&plans, 5, 8, 6, 14).unwrap();
+        assert_eq!(exact.len(), 4);
+        assert_eq!(exact[0], plans[0]);
+        assert_eq!(
+            exact[1..].iter().map(|plan| plan.slot).collect::<Vec<_>>(),
+            vec![5, 6, 7]
+        );
+        assert!(exact[1..].iter().all(|plan| plan.codes == vec![0; 84]));
+    }
+
+    #[test]
+    fn canonical_keymap_rejects_more_layers_than_the_device() {
+        let error = plans_with_trailing_clears(&[], 9, 8, 6, 14).unwrap_err();
+        assert!(error.to_string().contains("declares 9 layer(s)"));
     }
 }
