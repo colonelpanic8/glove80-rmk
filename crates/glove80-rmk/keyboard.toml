@@ -15,6 +15,13 @@ product_id = 0x27db
 manufacturer = "MoErgo"
 chip = "nrf52840"
 
+[rmk]
+# The right half carries both input and replicated lighting state over the
+# split link. On USB power attend every 7.5 ms event; on battery allow one
+# skipped event (15 ms maximum interval) to retain some radio savings.
+split_central_max_latency_powered = 0
+split_central_max_latency_battery = 1
+
 [layout]
 rows = 6
 cols = 14

@@ -4,6 +4,28 @@ This is an append-only coordination log for work that may require changes to
 the shared RMK/Rynk protocol. Add a dated section; do not rewrite or remove
 another agent's requirements.
 
+## 2026-07-21 — Runtime split BLE latency policy
+
+Owner/requester: Glove80 split-latency task.
+
+Status: implemented, verified, and integrated on the composed RMK checkout.
+
+### Requirement and allocation
+
+- Downstream firmware config supplies separate active-mode BLE peripheral
+  latency defaults for USB-powered and battery-powered operation.
+- Runtime state may override the automatic power-based selection; clearing the
+  override returns to automatic selection. Runtime changes are intentionally
+  volatile and reset to build defaults on reboot.
+- Sleep-mode connection parameters remain separate and take precedence while
+  the keyboard sleeps.
+- Add `GetSplitCentralLatency = 0x0706` returning the configured defaults,
+  optional override, current power source, and effective latency.
+- Add `SetSplitCentralLatency = 0x0707` accepting the two defaults and optional
+  override. Values must satisfy the BLE controller bound `0..=499`.
+- Older firmware answers `UnknownCmd`; clients use command probing. No protocol
+  version is minted.
+
 ## 2026-07-21 — Rynkbench transient-overlay readback
 
 Owner/requester: Rynkbench overlay editor task.
