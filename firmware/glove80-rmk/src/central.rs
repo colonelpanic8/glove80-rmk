@@ -60,7 +60,21 @@ mod keyboard_central {
     #[register_processor(runnable)]
     fn lighting_processor() {
         let keymap_ref = &keymap;
-        crate::central_lighting::init(keymap_ref, p.SPI3, p.P0_27, p.P0_31, p.PWM0, p.P1_15)
+        let mut persisted_scenes = ::rmk::heapless::Vec::<
+            ::rmk::types::protocol::rynk::LightingSceneCell,
+            { crate::lighting::SCENE_CAPACITY },
+        >::new();
+        let persisted_policy = storage.read_lighting_scenes(&mut persisted_scenes).await;
+        crate::central_lighting::init(
+            keymap_ref,
+            persisted_scenes.as_slice(),
+            persisted_policy,
+            p.SPI3,
+            p.P0_27,
+            p.P0_31,
+            p.PWM0,
+            p.P1_15,
+        )
     }
 
     /// Type-erased Rynk requests are translated into the standard engine's

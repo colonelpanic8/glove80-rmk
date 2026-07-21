@@ -14,7 +14,7 @@ use rmk::core_traits::Runnable;
 use rmk::lighting::{
     EmptySource, IndicatorState, LayerState, LightingContext, LightingMailbox, LightingOutput,
     LightingProcessor, LightingService, LogicalFrame, Rgb8, SnapshotProvider, StandardCommand,
-    StandardError, StandardLightingEngine, StandardReply, StandardReplicaSlot,
+    StandardError, StandardLightingEngine, StandardReplicaSlot, StandardReply,
 };
 
 bind_interrupts!(struct Irqs {

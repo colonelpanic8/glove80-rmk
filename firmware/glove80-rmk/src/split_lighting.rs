@@ -465,9 +465,7 @@ impl SnapshotStage {
                 scene_policy,
                 sample_time_ms,
                 mutable,
-            } if cell_count as usize <= LEDS_PER_HALF
-                && scene_count as usize <= SCENE_CAPACITY =>
-            {
+            } if cell_count as usize <= LEDS_PER_HALF && scene_count as usize <= SCENE_CAPACITY => {
                 let mut scenes = SceneTable::new();
                 scenes.set_policy(scene_policy);
                 self.stage = Some(Stage {
@@ -554,8 +552,7 @@ impl SnapshotStage {
                         && stage.context_received
                         && stage.expected_overlay_cells == cell_count as usize
                         && stage.expected_scene_cells == scene_count as usize
-                        && stage.snapshot.overlay.as_slice().len()
-                            == stage.expected_overlay_cells
+                        && stage.snapshot.overlay.as_slice().len() == stage.expected_overlay_cells
                         && stage.snapshot.scenes.as_slice().len() == stage.expected_scene_cells
                 });
                 if valid {

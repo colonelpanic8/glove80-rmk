@@ -14,13 +14,14 @@ use rmk::event::{
 };
 use rmk::host::{
     RynkLightingController, RynkLightingDescriptor, RynkLightingMailbox,
-    StandardRynkLightingAdapter,
+    StandardRynkLightingAdapter, install_lighting_scenes,
 };
 use rmk::keymap::KeyMap;
 use rmk::lighting::{
     KeymapLightingState, LightingProcessor, LightingService, LogicalFrame, Rgb8, StandardCommand,
 };
 use rmk::split_app::SplitAppData;
+use rmk::types::protocol::rynk::{LightingLayerPolicy, LightingSceneCell};
 
 use crate::lighting::{
     BOOTLOADER_TAG, COMMAND_CAPACITY, CORE_MAILBOX, Engine, HalfOutput, LightingHardware,
@@ -35,6 +36,8 @@ pub static REMOTE_BOOT_REQUESTS: embassy_sync::channel::Channel<rmk::RawMutex, (
 
 pub fn init<'keymap, 'data>(
     keymap: &'keymap KeyMap<'data>,
+    persisted_scenes: &[LightingSceneCell],
+    persisted_policy: Option<LightingLayerPolicy>,
     spi: Peri<'static, SPI3>,
     data_pin: Peri<'static, impl Pin>,
     chain_power_pin: Peri<'static, impl Pin>,
@@ -49,7 +52,13 @@ pub fn init<'keymap, 'data>(
 > {
     let provider =
         KeymapLightingState::new(keymap).expect("Glove80 layer count fits lighting state");
-    let engine = crate::lighting::engine();
+    let mut engine = crate::lighting::engine();
+    install_lighting_scenes(
+        &mut engine,
+        &crate::LIGHTING_TOPOLOGY,
+        persisted_scenes,
+        persisted_policy,
+    );
     let service = LightingService::new(provider, engine, LogicalFrame::new(Rgb8::BLACK));
     let output = HalfOutput::left(LightingHardware::new(
         spi,
@@ -61,9 +70,8 @@ pub fn init<'keymap, 'data>(
     LightingProcessor::new(service, output, &CORE_MAILBOX)
 }
 
-pub fn rynk_adapter() ->
-    StandardRynkLightingAdapter<'static, OVERLAY_CAPACITY, COMMAND_CAPACITY, SCENE_CAPACITY>
-{
+pub fn rynk_adapter()
+-> StandardRynkLightingAdapter<'static, OVERLAY_CAPACITY, COMMAND_CAPACITY, SCENE_CAPACITY> {
     StandardRynkLightingAdapter::new(&RYNK_MAILBOX, &CORE_MAILBOX, crate::LIGHTING_TOPOLOGY)
 }
 
