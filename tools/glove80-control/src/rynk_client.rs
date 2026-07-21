@@ -346,8 +346,20 @@ async fn operate_lighting(client: &Client, command: &LightingCommand) -> Result<
             println!("cleared overlay; {}", render_lighting_state(state));
         }
         LightingCommand::Read => {
+            let capabilities = client.get_capabilities().await?;
+            let current_layer = client.get_current_layer().await?;
+            let peripheral = if capabilities.is_split {
+                Some(client.get_peripheral_status(0).await?)
+            } else {
+                None
+            };
             println!(
-                "{}",
+                "current layer: {current_layer}\nright half: {}\n{}",
+                match peripheral {
+                    Some(status) if status.connected => "connected",
+                    Some(_) => "disconnected",
+                    None => "not applicable",
+                },
                 render_lighting_state(client.get_lighting_state().await?)
             );
         }

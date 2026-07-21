@@ -33,8 +33,8 @@ validated against what the device advertises.
   `max_cells_per_op` are split automatically.
 - `lighting unset <KEYS>...` — revert cells to transparent.
 - `lighting clear` — clear the whole host overlay.
-- `lighting read` — authoritative revision, output/background state,
-  brightness, and overlay cell count.
+- `lighting read` — authoritative active layer, right-half connection,
+  revision, output/background state, brightness, and overlay cell count.
 - `lighting replace [FILE] [--ttl MS]` — atomically replace the whole
   overlay from cell-spec lines (stdin when `FILE` is omitted or `-`).
   One cell per line, `#`-comments and blank lines ignored:
