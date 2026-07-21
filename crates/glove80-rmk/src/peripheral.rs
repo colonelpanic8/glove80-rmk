@@ -22,4 +22,10 @@ mod keyboard_peripheral {
     fn lighting_replication() {
         crate::lighting::peripheral_replication()
     }
+
+    /// Re-render when this half's own USB/VBUS power changes.
+    #[register_processor(runnable)]
+    fn lighting_power_monitor() {
+        crate::lighting::peripheral_power_monitor()
+    }
 }

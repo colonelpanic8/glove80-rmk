@@ -295,7 +295,47 @@ impl SnapshotProvider for PeripheralState {
     type Snapshot = LightingContext;
 
     fn snapshot(&self) -> Self::Snapshot {
-        PERIPHERAL_CONTEXT.lock(Cell::get)
+        let mut context = PERIPHERAL_CONTEXT.lock(Cell::get);
+        if matches!(
+            crate::LIGHTING_CONTROLS.powered_only_scope,
+            rmk::lighting::PoweredOnlyScope::Local
+        ) {
+            context.powered = local_vbus_present();
+        }
+        context
+    }
+}
+
+fn local_vbus_present() -> bool {
+    embassy_nrf::pac::POWER.usbregstatus().read().vbusdetect()
+}
+
+/// Poll the peripheral's local VBUS bit and invalidate static lighting when it
+/// changes. The central USB connection state is deliberately not involved.
+pub struct PeripheralPowerMonitor {
+    powered: bool,
+}
+
+pub fn peripheral_power_monitor() -> PeripheralPowerMonitor {
+    PeripheralPowerMonitor {
+        powered: local_vbus_present(),
+    }
+}
+
+impl Runnable for PeripheralPowerMonitor {
+    async fn run(&mut self) -> ! {
+        loop {
+            Timer::after_millis(100).await;
+            let powered = local_vbus_present();
+            if matches!(
+                crate::LIGHTING_CONTROLS.powered_only_scope,
+                rmk::lighting::PoweredOnlyScope::Local
+            ) && powered != self.powered
+            {
+                self.powered = powered;
+                CORE_MAILBOX.snapshot_changed();
+            }
+        }
     }
 }
 
