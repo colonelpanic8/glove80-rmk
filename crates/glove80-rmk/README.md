@@ -25,9 +25,8 @@ receiver. Both halves use SPIM3 at 4 MHz with GRB wire order. Every channel is
 hard-clamped to 204/255 (80%) in the final driver, below all host-controlled
 state. Chain power settles for 120 ms before the first frame.
 
-The current firmware no longer compiles the former downstream compositor,
-custom host-protocol transport, or shared-flash lighting configuration. Those
-crates remain in the repository as legacy compatibility/reference material.
+The firmware uses RMK's native Rynk protocol for keymap, lighting, version,
+and bootloader operations; no separate product protocol is maintained here.
 
 ## Build
 
@@ -45,7 +44,7 @@ The supported release command packages both ELFs and UF2s, validates their
 family IDs and flash ranges, and writes provenance under `dist/`:
 
 ```bash
-make firmware
+nix develop --command just firmware
 ```
 
 - left/central UF2 family: `0x9807B007`
@@ -58,4 +57,4 @@ A successful cross-build is not hardware validation. Before release, qualify
 both halves together: typing, layer scenes, whole-board background, live Rynk
 set/unset/clear/replace, state and brightness readback, TTL expiry, split
 disconnect/reconnect, USB and BLE transports, sleep/resume, and bootloader
-recovery. See `../../docs/qualification.md`.
+recovery. Record hardware qualification alongside the release being tested.
