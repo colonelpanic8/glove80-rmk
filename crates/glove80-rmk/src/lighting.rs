@@ -12,9 +12,10 @@ use embassy_sync::blocking_mutex::Mutex as BlockingMutex;
 use embassy_time::{Duration, Timer};
 use rmk::core_traits::Runnable;
 use rmk::lighting::{
-    BatteryStatusProvider, BuiltinEffect, ConditionalScenes, EmptySource, IndicatorState, LayerState,
-    LightingContext, LightingMailbox, LightingOutput, LightingProcessor, LightingService, LogicalFrame, Rgb8,
-    SnapshotProvider, StandardCommand, StandardError, StandardLightingEngine, StandardReplicaSlot, StandardReply,
+    BatteryStatusProvider, BuiltinEffect, ConditionalScenes, EmptySource, IndicatorState,
+    LayerState, LightingContext, LightingMailbox, LightingOutput, LightingProcessor,
+    LightingService, LogicalFrame, Rgb8, SnapshotProvider, StandardCommand, StandardError,
+    StandardLightingEngine, StandardReplicaSlot, StandardReply,
 };
 use rmk::types::battery::BatteryStatus;
 
@@ -265,6 +266,7 @@ pub fn engine() -> Engine {
         EmptySource,
         ConditionalScenes::new(&crate::LIGHTING_CONDITIONAL_SCENE_CELLS, &GLOVE_BATTERIES),
     )
+    .with_controls(crate::LIGHTING_CONTROLS)
 }
 
 static PERIPHERAL_CONTEXT: BlockingMutex<rmk::RawMutex, Cell<LightingContext>> =
@@ -277,6 +279,7 @@ static PERIPHERAL_CONTEXT: BlockingMutex<rmk::RawMutex, Cell<LightingContext>> =
             compose: false,
             kana: false,
         },
+        powered: false,
     }));
 
 #[derive(Clone, Copy)]

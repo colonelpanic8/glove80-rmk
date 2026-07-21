@@ -23,7 +23,11 @@ use const_gen::*;
 use xz2::read::XzEncoder;
 
 fn main() {
-    println!("cargo:rerun-if-changed=keyboard.toml");
+    println!("cargo:rerun-if-env-changed=KEYBOARD_TOML_PATH");
+    println!(
+        "cargo:rerun-if-changed={}",
+        env::var("KEYBOARD_TOML_PATH").unwrap_or_else(|_| "keyboard.toml".to_owned())
+    );
     vial_config_generation();
     link_script_setup();
     version_embedding();

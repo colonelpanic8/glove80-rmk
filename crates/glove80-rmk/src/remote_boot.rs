@@ -16,15 +16,15 @@ pub struct MagicKeyActions;
 impl MagicKeyActions {
     async fn on_action_event(&mut self, event: ActionEvent) {
         match (event.keyboard_event.pressed, event.action) {
-            // The Magic key is also the escape hatch from a dark keyboard.
-            // Sending BacklightOn is idempotent when lighting is already on.
-            (true, Action::LayerOn(layer)) if crate::LIGHTING_CONTROLS.wake_layer == Some(layer) => {
-                rmk::lighting::send_light_action(LightAction::BacklightOn).await;
-            }
             (false, Action::User(action))
                 if crate::LIGHTING_CONTROLS.output_toggle_user_action == Some(action) =>
             {
                 rmk::lighting::send_light_action(LightAction::BacklightToggle).await;
+            }
+            (false, Action::User(action))
+                if crate::LIGHTING_CONTROLS.output_mode_cycle_user_action == Some(action) =>
+            {
+                rmk::lighting::send_light_action(LightAction::OutputModeCycle).await;
             }
             (false, Action::User(PERIPHERAL_BOOTLOADER_ACTION)) => {
                 // A second release while one request is pending is equivalent

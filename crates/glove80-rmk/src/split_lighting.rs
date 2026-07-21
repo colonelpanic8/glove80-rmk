@@ -9,15 +9,15 @@ use core::num::NonZeroU32;
 
 use rmk::lighting::{
     BackgroundMode, BackgroundState, BuiltinEffect, IndicatorState, LayerPolicy, LayerState,
-    LedSlot, LightingContext, OverlayBatch, OverlayCell, Rgb8, SceneTable, SceneTableCell,
-    StandardMutableState, StandardReplicaState,
+    LedSlot, LightingContext, OutputMode, OverlayBatch, OverlayCell, Rgb8, SceneTable,
+    SceneTableCell, StandardMutableState, StandardReplicaState,
 };
 use rmk::split_app::{SPLIT_APP_MSG_MAX, SplitAppData};
 use rmk::types::battery::{BatteryStatus, ChargeState};
 
 use crate::lighting::{BatteryPair, LEDS_PER_HALF, OVERLAY_CAPACITY, SCENE_CAPACITY, TOTAL_LEDS};
 
-const VERSION: u8 = 3;
+const VERSION: u8 = 4;
 const TAG_BEGIN: u8 = 1;
 const TAG_CONTEXT: u8 = 2;
 const TAG_CELL: u8 = 3;
@@ -25,8 +25,8 @@ const TAG_COMMIT: u8 = 4;
 const TAG_ACK: u8 = 5;
 const TAG_SCENE_CELL: u8 = 6;
 
-const BEGIN_LEN: usize = 25;
-const CONTEXT_LEN: usize = 22;
+const BEGIN_LEN: usize = 26;
+const CONTEXT_LEN: usize = 23;
 const CELL_LEN: usize = 26;
 const SCENE_CELL_LEN: usize = 23;
 const COMMIT_LEN: usize = 9;
@@ -43,6 +43,7 @@ pub enum Message {
         scene_policy: LayerPolicy,
         sample_time_ms: u64,
         mutable: StandardMutableState,
+        output_mode: OutputMode,
     },
     Context {
         generation: u8,
@@ -93,6 +94,7 @@ impl Message {
                 scene_policy,
                 sample_time_ms,
                 mutable,
+                output_mode,
             } => {
                 out[1] = TAG_BEGIN;
                 out[2] = generation;
@@ -117,6 +119,11 @@ impl Message {
                     LayerPolicy::EffectiveOnly => 0,
                     LayerPolicy::ActiveStack => 1,
                 };
+                out[25] = match output_mode {
+                    OutputMode::AlwaysOn => 0,
+                    OutputMode::AlwaysOff => 1,
+                    OutputMode::PoweredOnly => 2,
+                };
                 BEGIN_LEN
             }
             Message::Context {
@@ -134,6 +141,7 @@ impl Message {
                 out[17] = indicators(context.indicators);
                 put_battery(&mut out, 18, batteries.left);
                 put_battery(&mut out, 20, batteries.right);
+                out[22] = context.powered as u8;
                 CONTEXT_LEN
             }
             Message::Cell {
@@ -262,6 +270,12 @@ impl Message {
                             },
                         },
                     },
+                    output_mode: match bytes[25] {
+                        0 => OutputMode::AlwaysOn,
+                        1 => OutputMode::AlwaysOff,
+                        2 => OutputMode::PoweredOnly,
+                        _ => return Err(DecodeError::Value),
+                    },
                 })
             }
             TAG_CONTEXT if bytes.len() == CONTEXT_LEN => Ok(Message::Context {
@@ -270,6 +284,7 @@ impl Message {
                 context: LightingContext {
                     layers: LayerState::new(bytes[7], bytes[8], get_u64(bytes, 9)),
                     indicators: get_indicators(bytes[17]),
+                    powered: flag(bytes[22])?,
                 },
                 batteries: BatteryPair {
                     left: get_battery(bytes, 18)?,
@@ -402,6 +417,7 @@ pub fn try_queue_snapshot(
         scene_policy: snapshot.scenes.policy(),
         sample_time_ms: snapshot.sample_time_ms,
         mutable: snapshot.mutable,
+        output_mode: snapshot.output_mode,
     }) || !queue(Message::Context {
         generation,
         revision: snapshot.revision,
@@ -481,6 +497,7 @@ impl SnapshotStage {
                 scene_policy,
                 sample_time_ms,
                 mutable,
+                output_mode,
             } if cell_count as usize <= LEDS_PER_HALF && scene_count as usize <= SCENE_CAPACITY => {
                 let mut scenes = SceneTable::new();
                 scenes.set_policy(scene_policy);
@@ -489,6 +506,7 @@ impl SnapshotStage {
                     snapshot: StandardReplicaState {
                         revision,
                         mutable,
+                        output_mode,
                         overlay: OverlayBatch::new(),
                         scenes,
                         context: LightingContext::default(),
