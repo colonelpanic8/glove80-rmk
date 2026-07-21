@@ -1,9 +1,10 @@
 # RMK branch stack
 
-`dependencies/rmk` follows the stable fork branch name
-`glove80-rmk/integration` and pins one exact commit from it. The integration
-branch is rebuilt from the upstream Rynk base and independently reviewable
-topic branches, then retains the existing post-composition Rynk fixes.
+`dependencies/rmk` follows the fork's release branch, `master`, and pins one
+exact commit from it. A candidate integration branch is rebuilt from the
+upstream Rynk base and independently reviewable topic branches, retains the
+existing post-composition Rynk fixes, and is promoted to `master` after the
+full composed tree passes verification.
 
 ## Branch graph
 
@@ -18,7 +19,7 @@ HaoboGu/rmk:feat/rynk
 feat/rynk + lighting + runtime-hooks + rynk-usb-hid
     └── octopus merge + build-info merge
         └── split-bootloader routing + unlock policy
-            └── glove80-rmk/integration
+            └── master
 ```
 
 `glove80-rmk/lighting` includes `glove80-rmk/split-app`, so Git records the
@@ -35,7 +36,7 @@ the octopus merge.
 | `colonelpanic8/rmk:glove80-rmk/runtime-hooks` | `47922960a9d9ef1c3b088a655d03b986ec78badc` |
 | `colonelpanic8/rmk:glove80-rmk/rynk-usb-hid` | `902c9d630d3b6d10afbd9fe8527a8806f648bf8b` |
 | `colonelpanic8/rmk:glove80-rmk/build-info` | `8b5dd4d00e96e1cceed41d5a8977879c4879673c` |
-| `colonelpanic8/rmk:glove80-rmk/integration` | `27b8bf38444acddfe3d7d6a408ac0f2b102103cb` |
+| `colonelpanic8/rmk:master` | `27b8bf38444acddfe3d7d6a408ac0f2b102103cb` |
 
 ## Refresh procedure
 
@@ -65,8 +66,9 @@ the octopus merge.
    integration branch.
 
 6. Push rewritten topic refs with `--force-with-lease`, then push the rebuilt
-   integration ref. Never update the superproject pin before the remote
-   integration ref is reachable and the composed tree passes verification.
+   integration ref. After the composed tree passes verification, fast-forward
+   `master` to that exact commit. Never update the superproject pin before the
+   remote `master` ref is reachable.
 7. Move `dependencies/rmk` to the new integration commit, regenerate
    `ui/src/vendor/rynk-wasm`, update its provenance hash, and run `make check`
    plus both release firmware builds.

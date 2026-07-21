@@ -3,7 +3,7 @@
 Refreshed on 2026-07-20. The active firmware depends on five generic RMK
 topics. They are published as stable branch names on `colonelpanic8/rmk`,
 proposed upstream as ready PRs against `HaoboGu/rmk:feat/rynk`, and composed
-into `glove80-rmk/integration`.
+into the release branch, `master`.
 
 | Topic | Fork branch | Current tip | Upstream PR | Active API |
 | --- | --- | --- | --- | --- |
@@ -18,7 +18,7 @@ This lets the lighting PR demonstrate split behavior while keeping the split
 primitive reviewable on its own. After #984 lands, rebase the lighting branch
 to remove the already-merged commit.
 
-The integration tip is `27b8bf38`. Its ancestry contains an octopus merge over
+The `master` tip is `27b8bf38`. Its ancestry contains an octopus merge over
 upstream Rynk tip `8bfc94f7`, with lighting (including split messages), runtime
 hooks, and USB HID as its non-base parents, followed by the build-info merge
 and the existing split-bootloader routing and unlock-policy fixes. The

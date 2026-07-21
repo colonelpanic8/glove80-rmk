@@ -29,7 +29,7 @@ final phase.
   editing either way.
 - **RMK dependency**: the original git subtree has been replaced by the
   `dependencies/rmk` submodule, pinned to the fork's
-  `glove80-rmk/integration` branch. Generic extensions remain split into
+  `master` branch. Generic extensions remain split into
   independently reviewable fork branches; `docs/upstream/PATCHES.md` records
   their provenance and current disposition.
 - **Patch style rule**: any new fork-side RMK patch is written as a generic
