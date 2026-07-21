@@ -33,7 +33,7 @@ layers = 8
 # 1 Lower, 2 Magic,
 # 3 Games, 4 Mac Hyper. Layers 5-7 are unassigned editable capacity.
 # Substitutions from the ZMK keymap:
-#   - &magic hold-tap        -> MO(2) (RGB status macro has no RMK equivalent yet)
+#   - &magic hold-tap        -> MO(2) plus board-local lighting wake/status
 #   - &bt_0..&bt_3           -> User0..User3 (RMK BLE profile select)
 #   - &bt BT_CLR / BT_CLR_ALL-> User10 / User11 (profile clear actions)
 #   - &out OUT_USB           -> OutputUsb
@@ -66,7 +66,7 @@ _ _ _ MediaPrevTrack MediaNextTrack _ _ AudioVolUp AudioVolDown _ _ _
 [[keymap.layer]]
 name = "Magic"
 keys = """
-User10 No No No No User2 No No No No No User11
+User10 User13 No No No User2 No No No No No User11
 No No No No No No User3 No No No No No No No
 No No No No No No No No No No No No No No
 Bootloader No No No No No User0 No No No No No No User12
@@ -117,11 +117,22 @@ channel_size = 3
 pubs = 2
 subs = 4
 
-# RemoteBootloaderKey consumes resolved User12 releases on the central.
+# MagicKeyActions consumes resolved User12/User13 and Magic-layer actions.
 [event.action]
 channel_size = 16
 pubs = 1
 subs = 1
+
+# The information-lighting state tracks both halves' live battery reports.
+[event.battery_status]
+channel_size = 2
+pubs = 1
+subs = 1
+
+[event.peripheral_battery]
+channel_size = 3
+pubs = 1
+subs = 3
 
 [storage]
 enabled = true

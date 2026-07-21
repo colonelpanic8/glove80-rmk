@@ -10,7 +10,8 @@ use embassy_nrf::gpio::Pin;
 use embassy_nrf::peripherals::{PWM0, SPI3};
 use rmk::core_traits::Runnable;
 use rmk::event::{
-    EventSubscriber, LayerChangeEvent, LedIndicatorEvent, LightingChangedEvent, SubscribableEvent,
+    BatteryStatusEvent, EventSubscriber, LayerChangeEvent, LedIndicatorEvent, LightingChangedEvent,
+    PeripheralBatteryEvent, SubscribableEvent,
 };
 use rmk::host::{
     RynkLightingController, RynkLightingDescriptor, RynkLightingMailbox,
@@ -88,6 +89,24 @@ pub const fn rynk_controller() -> RynkLightingController<'static> {
     .with_scene_capacity(SCENE_CAPACITY as u16)
 }
 
+/// Latch live battery state for the status source and request a fresh render.
+#[rmk::macros::processor(subscribe = [BatteryStatusEvent, PeripheralBatteryEvent])]
+pub struct BatteryLightingState;
+
+impl BatteryLightingState {
+    async fn on_battery_status_event(&mut self, event: BatteryStatusEvent) {
+        crate::lighting::set_left_battery(event.0);
+        CORE_MAILBOX.snapshot_changed();
+    }
+
+    async fn on_peripheral_battery_event(&mut self, event: PeripheralBatteryEvent) {
+        if event.id == 0 {
+            crate::lighting::set_right_battery(event.state.0);
+            CORE_MAILBOX.snapshot_changed();
+        }
+    }
+}
+
 /// Mirrors authoritative declarative state to the peripheral. Unit events
 /// are only invalidations: every transfer exports a fresh atomic snapshot,
 /// and an acknowledgement or timeout makes reconnect/loss convergence
@@ -111,7 +130,11 @@ impl CentralReplication {
         }
         let snapshot = REPLICA_SLOT.take().ok()?;
         self.generation = self.generation.wrapping_add(1);
-        if crate::split_lighting::try_queue_snapshot(self.generation, &snapshot) {
+        if crate::split_lighting::try_queue_snapshot(
+            self.generation,
+            &snapshot,
+            crate::lighting::battery_statuses(),
+        ) {
             Some((self.generation, snapshot.revision))
         } else {
             None

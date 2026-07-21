@@ -97,12 +97,16 @@ mod keyboard_central {
         crate::central_lighting::RemoteBootDispatcher
     }
 
-    /// Route the Magic-layer key on the right half to that half's UF2
-    /// bootloader. RMK resolves split key actions on the central, so this
-    /// user action must be forwarded explicitly instead of using the local
-    /// `Bootloader` action.
+    /// Handle Magic-layer board controls: wake/toggle master lighting and
+    /// route the right-half UF2 action to the peripheral.
     #[register_processor(event)]
-    fn remote_bootloader_key() {
-        crate::remote_boot::RemoteBootloaderKey
+    fn magic_key_actions() {
+        crate::remote_boot::MagicKeyActions
+    }
+
+    /// Keep the information-view battery bars synchronized with both halves.
+    #[register_processor(event)]
+    fn battery_lighting_state() {
+        crate::central_lighting::BatteryLightingState
     }
 }

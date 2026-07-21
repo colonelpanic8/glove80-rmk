@@ -11,11 +11,14 @@ use embassy_nrf::{Peri, bind_interrupts, peripherals};
 use embassy_sync::blocking_mutex::Mutex as BlockingMutex;
 use embassy_time::{Duration, Timer};
 use rmk::core_traits::Runnable;
+use rmk::lighting::compositor::{Contribution, LightingSource, RenderInput};
 use rmk::lighting::{
-    EmptySource, IndicatorState, LayerState, LightingContext, LightingMailbox, LightingOutput,
-    LightingProcessor, LightingService, LogicalFrame, Rgb8, SnapshotProvider, StandardCommand,
-    StandardError, StandardLightingEngine, StandardReplicaSlot, StandardReply,
+    EffectSample, EmptySource, IndicatorState, LayerState, LedSlot, LightingContext,
+    LightingMailbox, LightingOutput, LightingProcessor, LightingService, LogicalFrame, Rgb8,
+    SnapshotProvider, StandardCommand, StandardError, StandardLightingEngine, StandardReplicaSlot,
+    StandardReply,
 };
+use rmk::types::battery::{BatteryStatus, ChargeState};
 
 bind_interrupts!(struct Irqs {
     SPIM3 => spim::InterruptHandler<peripherals::SPI3>;
@@ -30,7 +33,7 @@ pub const COMMAND_CAPACITY: usize = 4;
 pub type Engine = StandardLightingEngine<
     'static,
     EmptySource,
-    EmptySource,
+    InformationSource,
     TOTAL_LEDS,
     OVERLAY_CAPACITY,
     SCENE_CAPACITY,
@@ -45,6 +48,205 @@ pub type CoreMailbox = LightingMailbox<
 pub static CORE_MAILBOX: CoreMailbox = LightingMailbox::new();
 pub static REPLICA_SLOT: StandardReplicaSlot<OVERLAY_CAPACITY, SCENE_CAPACITY> =
     StandardReplicaSlot::new();
+
+const MAGIC_LAYER: u8 = 2;
+const GAMES_LAYER: u8 = 3;
+
+// F1-F5, corresponding to layers 0-4.
+const LAYER_STATUS_SLOTS: [LedSlot; 5] = [
+    LedSlot(34),
+    LedSlot(28),
+    LedSlot(22),
+    LedSlot(16),
+    LedSlot(10),
+];
+// Five outer-column keys below each top-row key, ordered bottom-up.
+const LEFT_BATTERY_SLOTS: [LedSlot; 5] = [
+    LedSlot(39),
+    LedSlot(38),
+    LedSlot(37),
+    LedSlot(36),
+    LedSlot(35),
+];
+const RIGHT_BATTERY_SLOTS: [LedSlot; 5] = [
+    LedSlot(79),
+    LedSlot(78),
+    LedSlot(77),
+    LedSlot(76),
+    LedSlot(75),
+];
+// W, A, S, D, and the left-thumb Backspace position whose Games action is Space.
+const GAMES_SLOTS: [LedSlot; 5] = [
+    LedSlot(24),
+    LedSlot(31),
+    LedSlot(25),
+    LedSlot(19),
+    LedSlot(3),
+];
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct BatteryPair {
+    pub left: BatteryStatus,
+    pub right: BatteryStatus,
+}
+
+impl BatteryPair {
+    pub const UNAVAILABLE: Self = Self {
+        left: BatteryStatus::Unavailable,
+        right: BatteryStatus::Unavailable,
+    };
+}
+
+static BATTERIES: BlockingMutex<rmk::RawMutex, Cell<BatteryPair>> =
+    BlockingMutex::new(Cell::new(BatteryPair::UNAVAILABLE));
+
+pub fn battery_statuses() -> BatteryPair {
+    BATTERIES.lock(Cell::get)
+}
+
+pub fn set_battery_statuses(statuses: BatteryPair) {
+    BATTERIES.lock(|current| current.set(statuses));
+}
+
+pub fn set_left_battery(status: BatteryStatus) {
+    BATTERIES.lock(|current| {
+        let mut statuses = current.get();
+        statuses.left = status;
+        current.set(statuses);
+    });
+}
+
+pub fn set_right_battery(status: BatteryStatus) {
+    BATTERIES.lock(|current| {
+        let mut statuses = current.get();
+        statuses.right = status;
+        current.set(statuses);
+    });
+}
+
+/// Board-local status composition layered above host overlays.
+///
+/// Layer state is always visible on F1-F5. Games highlights appear only while
+/// layer 3 participates in resolution; the two five-segment battery bars
+/// appear only while the momentary Magic layer is held.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct InformationSource;
+
+impl InformationSource {
+    fn magic_active(context: &LightingContext) -> bool {
+        context.layers.is_active(MAGIC_LAYER)
+    }
+
+    fn games_active(context: &LightingContext) -> bool {
+        context.layers.is_active(GAMES_LAYER)
+    }
+
+    fn battery_color(status: BatteryStatus, segment: usize) -> Rgb8 {
+        const UNLIT: Rgb8 = Rgb8::new(2, 2, 2);
+        match status {
+            BatteryStatus::Unavailable => Rgb8::new(6, 3, 0),
+            BatteryStatus::Available {
+                charge_state,
+                level: None,
+            } => match charge_state {
+                ChargeState::Charging => Rgb8::new(0, 48, 128),
+                ChargeState::Discharging | ChargeState::Unknown => Rgb8::new(24, 12, 0),
+            },
+            BatteryStatus::Available {
+                charge_state,
+                level: Some(level),
+            } => {
+                // Segments represent 1-20, 21-40, 41-60, 61-80, and 81-100%.
+                if level <= (segment as u8) * 20 {
+                    return UNLIT;
+                }
+                match charge_state {
+                    ChargeState::Charging => Rgb8::new(0, 64, 160),
+                    ChargeState::Discharging | ChargeState::Unknown if level <= 20 => {
+                        Rgb8::new(160, 0, 0)
+                    }
+                    ChargeState::Discharging | ChargeState::Unknown if level <= 40 => {
+                        Rgb8::new(160, 48, 0)
+                    }
+                    ChargeState::Discharging | ChargeState::Unknown => Rgb8::new(0, 128, 0),
+                }
+            }
+        }
+    }
+
+    fn color(&self, index: usize, context: &LightingContext) -> Rgb8 {
+        let mut index = index;
+        if Self::magic_active(context) {
+            let batteries = battery_statuses();
+            if index < LEFT_BATTERY_SLOTS.len() {
+                return Self::battery_color(batteries.left, index);
+            }
+            index -= LEFT_BATTERY_SLOTS.len();
+            if index < RIGHT_BATTERY_SLOTS.len() {
+                return Self::battery_color(batteries.right, index);
+            }
+            index -= RIGHT_BATTERY_SLOTS.len();
+        }
+        if index < LAYER_STATUS_SLOTS.len() {
+            return if context.layers.is_active(index as u8) {
+                Rgb8::new(0, 128, 0)
+            } else {
+                Rgb8::new(64, 0, 0)
+            };
+        }
+        index -= LAYER_STATUS_SLOTS.len();
+        if Self::games_active(context) && index < GAMES_SLOTS.len() {
+            return if index + 1 == GAMES_SLOTS.len() {
+                Rgb8::new(160, 48, 0)
+            } else {
+                Rgb8::new(160, 0, 0)
+            };
+        }
+        unreachable!("information source index must be below len")
+    }
+}
+
+impl LightingSource<Rgb8, LightingContext> for InformationSource {
+    fn len(&self, input: &RenderInput<'_, LightingContext>) -> usize {
+        usize::from(Self::magic_active(input.context))
+            * (LEFT_BATTERY_SLOTS.len() + RIGHT_BATTERY_SLOTS.len())
+            + LAYER_STATUS_SLOTS.len()
+            + usize::from(Self::games_active(input.context)) * GAMES_SLOTS.len()
+    }
+
+    fn slot(&self, index: usize, input: &RenderInput<'_, LightingContext>) -> LedSlot {
+        let mut index = index;
+        if Self::magic_active(input.context) {
+            if index < LEFT_BATTERY_SLOTS.len() {
+                return LEFT_BATTERY_SLOTS[index];
+            }
+            index -= LEFT_BATTERY_SLOTS.len();
+            if index < RIGHT_BATTERY_SLOTS.len() {
+                return RIGHT_BATTERY_SLOTS[index];
+            }
+            index -= RIGHT_BATTERY_SLOTS.len();
+        }
+        if index < LAYER_STATUS_SLOTS.len() {
+            return LAYER_STATUS_SLOTS[index];
+        }
+        index -= LAYER_STATUS_SLOTS.len();
+        if Self::games_active(input.context) && index < GAMES_SLOTS.len() {
+            return GAMES_SLOTS[index];
+        }
+        unreachable!("information source index must be below len")
+    }
+
+    fn contribution(
+        &mut self,
+        index: usize,
+        input: &RenderInput<'_, LightingContext>,
+    ) -> Contribution<Rgb8> {
+        Contribution::Opaque(EffectSample {
+            color: self.color(index, input.context),
+            next_change_ms: None,
+        })
+    }
+}
 
 /// MoErgo's documented 80% channel ceiling. This remains in the hardware
 /// driver below every user-controlled transform and protocol path.
@@ -207,7 +409,7 @@ pub fn engine() -> Engine {
         crate::LIGHTING_BACKGROUND,
         crate::LIGHTING_LAYER_SCENES,
         EmptySource,
-        EmptySource,
+        InformationSource,
     )
 }
 
@@ -277,9 +479,10 @@ impl PeripheralReplication {
         let Ok(message) = crate::split_lighting::Message::decode(data) else {
             return;
         };
-        let Some((generation, snapshot)) = self.stage.apply(message) else {
+        let Some((generation, snapshot, batteries)) = self.stage.apply(message) else {
             return;
         };
+        set_battery_statuses(batteries);
         PeripheralState::set(snapshot.context);
         let revision = snapshot.revision;
         if REPLICA_SLOT.put(snapshot).is_err() {

@@ -13,10 +13,11 @@ use rmk::lighting::{
     StandardMutableState, StandardReplicaState,
 };
 use rmk::split_app::{SPLIT_APP_MSG_MAX, SplitAppData};
+use rmk::types::battery::{BatteryStatus, ChargeState};
 
-use crate::lighting::{LEDS_PER_HALF, OVERLAY_CAPACITY, SCENE_CAPACITY, TOTAL_LEDS};
+use crate::lighting::{BatteryPair, LEDS_PER_HALF, OVERLAY_CAPACITY, SCENE_CAPACITY, TOTAL_LEDS};
 
-const VERSION: u8 = 2;
+const VERSION: u8 = 3;
 const TAG_BEGIN: u8 = 1;
 const TAG_CONTEXT: u8 = 2;
 const TAG_CELL: u8 = 3;
@@ -25,7 +26,7 @@ const TAG_ACK: u8 = 5;
 const TAG_SCENE_CELL: u8 = 6;
 
 const BEGIN_LEN: usize = 25;
-const CONTEXT_LEN: usize = 18;
+const CONTEXT_LEN: usize = 22;
 const CELL_LEN: usize = 26;
 const SCENE_CELL_LEN: usize = 23;
 const COMMIT_LEN: usize = 9;
@@ -47,6 +48,7 @@ pub enum Message {
         generation: u8,
         revision: u32,
         context: LightingContext,
+        batteries: BatteryPair,
     },
     Cell {
         generation: u8,
@@ -121,6 +123,7 @@ impl Message {
                 generation,
                 revision,
                 context,
+                batteries,
             } => {
                 out[1] = TAG_CONTEXT;
                 out[2] = generation;
@@ -129,6 +132,8 @@ impl Message {
                 out[8] = context.layers.default;
                 put_u64(&mut out, 9, context.layers.active_bits());
                 out[17] = indicators(context.indicators);
+                put_battery(&mut out, 18, batteries.left);
+                put_battery(&mut out, 20, batteries.right);
                 CONTEXT_LEN
             }
             Message::Cell {
@@ -266,6 +271,10 @@ impl Message {
                     layers: LayerState::new(bytes[7], bytes[8], get_u64(bytes, 9)),
                     indicators: get_indicators(bytes[17]),
                 },
+                batteries: BatteryPair {
+                    left: get_battery(bytes, 18)?,
+                    right: get_battery(bytes, 20)?,
+                },
             }),
             TAG_CELL if bytes.len() == CELL_LEN => {
                 let slot = bytes[7] as usize;
@@ -360,6 +369,7 @@ impl Message {
 pub fn try_queue_snapshot(
     generation: u8,
     snapshot: &StandardReplicaState<OVERLAY_CAPACITY, SCENE_CAPACITY>,
+    batteries: BatteryPair,
 ) -> bool {
     let cell_count = snapshot
         .overlay
@@ -396,6 +406,7 @@ pub fn try_queue_snapshot(
         generation,
         revision: snapshot.revision,
         context: snapshot.context,
+        batteries,
     }) {
         return false;
     }
@@ -441,6 +452,7 @@ struct Stage {
     expected_overlay_cells: usize,
     expected_scene_cells: usize,
     context_received: bool,
+    batteries: BatteryPair,
 }
 
 pub struct SnapshotStage {
@@ -455,7 +467,11 @@ impl SnapshotStage {
     pub fn apply(
         &mut self,
         message: Message,
-    ) -> Option<(u8, StandardReplicaState<OVERLAY_CAPACITY, SCENE_CAPACITY>)> {
+    ) -> Option<(
+        u8,
+        StandardReplicaState<OVERLAY_CAPACITY, SCENE_CAPACITY>,
+        BatteryPair,
+    )> {
         match message {
             Message::Begin {
                 generation,
@@ -481,6 +497,7 @@ impl SnapshotStage {
                     expected_overlay_cells: cell_count as usize,
                     expected_scene_cells: scene_count as usize,
                     context_received: false,
+                    batteries: BatteryPair::UNAVAILABLE,
                 });
                 None
             }
@@ -488,6 +505,7 @@ impl SnapshotStage {
                 generation,
                 revision,
                 context,
+                batteries,
             } => {
                 let stage = self.stage.as_mut()?;
                 if stage.generation != generation || stage.snapshot.revision != revision {
@@ -495,6 +513,7 @@ impl SnapshotStage {
                     return None;
                 }
                 stage.snapshot.context = context;
+                stage.batteries = batteries;
                 stage.context_received = true;
                 None
             }
@@ -558,7 +577,7 @@ impl SnapshotStage {
                 if valid {
                     self.stage
                         .take()
-                        .map(|stage| (stage.generation, stage.snapshot))
+                        .map(|stage| (stage.generation, stage.snapshot, stage.batteries))
                 } else {
                     self.stage = None;
                     None
@@ -597,6 +616,50 @@ fn get_indicators(value: u8) -> IndicatorState {
         compose: value & 8 != 0,
         kana: value & 16 != 0,
     }
+}
+
+fn put_battery(out: &mut [u8], at: usize, status: BatteryStatus) {
+    let (state, level) = match status {
+        BatteryStatus::Unavailable => (0, None),
+        BatteryStatus::Available {
+            charge_state: ChargeState::Charging,
+            level,
+        } => (1, level),
+        BatteryStatus::Available {
+            charge_state: ChargeState::Discharging,
+            level,
+        } => (2, level),
+        BatteryStatus::Available {
+            charge_state: ChargeState::Unknown,
+            level,
+        } => (3, level),
+    };
+    out[at] = state;
+    out[at + 1] = level.unwrap_or(u8::MAX);
+}
+
+fn get_battery(bytes: &[u8], at: usize) -> Result<BatteryStatus, DecodeError> {
+    let level = match bytes[at + 1] {
+        u8::MAX => None,
+        level if level <= 100 => Some(level),
+        _ => return Err(DecodeError::Value),
+    };
+    Ok(match bytes[at] {
+        0 if level.is_none() => BatteryStatus::Unavailable,
+        1 => BatteryStatus::Available {
+            charge_state: ChargeState::Charging,
+            level,
+        },
+        2 => BatteryStatus::Available {
+            charge_state: ChargeState::Discharging,
+            level,
+        },
+        3 => BatteryStatus::Available {
+            charge_state: ChargeState::Unknown,
+            level,
+        },
+        _ => return Err(DecodeError::Value),
+    })
 }
 
 fn put_u16(out: &mut [u8], at: usize, value: u16) {
