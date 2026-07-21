@@ -692,6 +692,19 @@ async fn operate(client: &Client, command: &KeymapCommand) -> Result<()> {
                 keymap::render_write_outcome(&parsed, &readback, capabilities.num_cols)
             );
         }
+        KeymapCommand::Default { layer } => {
+            if let Some(layer) = layer {
+                if *layer >= capabilities.num_layers {
+                    bail!(
+                        "layer {layer} is out of range; Rynk reports {} layer(s)",
+                        capabilities.num_layers
+                    );
+                }
+                client.set_default_layer(*layer).await?;
+            }
+            let stored = client.get_default_layer().await?;
+            println!("default layer: {stored}");
+        }
         KeymapCommand::Find { fragment } => println!("{}", keymap::render_find(fragment)),
     }
     Ok(())

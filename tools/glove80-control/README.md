@@ -175,6 +175,8 @@ overlay writes print the keys still pending on the peripheral.
   echoes what it actually stored; the CLI prints that canonical read-back
   and flags any entry stored differently than requested (`LOSSY`) — some
   actions have no exact VIA encoding.
+- `keymap default [LAYER]` queries or sets the persistent default layer; this
+  also makes host-driven layer and layer-lighting qualification possible.
 - `keymap find FRAGMENT` searches the keycode name table (names and
   aliases, case-insensitive), e.g. `keymap find vol`.
 - Unknown/unnameable codes always print as hex (`0x1234`) and can be

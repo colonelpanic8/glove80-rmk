@@ -42,6 +42,11 @@ pub enum KeymapCommand {
         #[arg(required = true, value_name = "LAYER KEY KEYCODE")]
         entries: Vec<String>,
     },
+    /// Read or set the persistent default layer.
+    Default {
+        /// New default layer; omit to query it.
+        layer: Option<u8>,
+    },
     /// Search the keycode name table.
     Find {
         /// Case-insensitive fragment of a keycode name or alias.
