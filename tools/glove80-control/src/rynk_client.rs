@@ -32,6 +32,9 @@ const GLOVE80_HOLES: [u8; 4] = [5, 8, 75, 78];
 const RYNK_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 const RYNK_UNLOCK_TIMEOUT: Duration = Duration::from_secs(15);
 const RYNK_BOOTLOADER_TIMEOUT: Duration = Duration::from_secs(3);
+// A peripheral command sits behind any already-queued split lighting frames;
+// allow the BLE link time to drain them before declaring failure.
+const RYNK_PERIPHERAL_BOOTLOADER_TIMEOUT: Duration = Duration::from_secs(15);
 
 enum Device {
     Hid(HidDevice),
@@ -114,8 +117,13 @@ async fn run_bootloader_device<D: RynkDevice>(device: D, peripheral: bool) -> Re
             std::future::pending::<Result<()>>().await
         }
     };
+    let bootloader_timeout = if peripheral {
+        RYNK_PERIPHERAL_BOOTLOADER_TIMEOUT
+    } else {
+        RYNK_BOOTLOADER_TIMEOUT
+    };
     let outcome = tokio::time::timeout(
-        RYNK_UNLOCK_TIMEOUT + RYNK_BOOTLOADER_TIMEOUT,
+        RYNK_UNLOCK_TIMEOUT + bootloader_timeout,
         select(driver.run(&client), request),
     )
     .await;
@@ -127,7 +135,7 @@ async fn run_bootloader_device<D: RynkDevice>(device: D, peripheral: bool) -> Re
         Ok(Either::Second(result)) => result,
         Err(_) if queued.get() => bail!(
             "the bootloader request was sent, but the keyboard did not disconnect within {} seconds",
-            RYNK_BOOTLOADER_TIMEOUT.as_secs()
+            bootloader_timeout.as_secs()
         ),
         Err(_) => bail!(
             "timed out waiting {} seconds for the physical-presence unlock",
@@ -210,10 +218,10 @@ async fn jump_peripheral(client: &Client) -> Result<()> {
         if !client.get_peripheral_status(0).await?.connected {
             return Ok(());
         }
-        if started.elapsed() >= RYNK_BOOTLOADER_TIMEOUT {
+        if started.elapsed() >= RYNK_PERIPHERAL_BOOTLOADER_TIMEOUT {
             bail!(
                 "the right-half bootloader request was accepted, but the peripheral stayed connected for {} seconds",
-                RYNK_BOOTLOADER_TIMEOUT.as_secs()
+                RYNK_PERIPHERAL_BOOTLOADER_TIMEOUT.as_secs()
             );
         }
         tokio::time::sleep(Duration::from_millis(100)).await;
