@@ -5,8 +5,8 @@
 
 use std::time::Duration;
 
-use anyhow::{anyhow, bail, Context, Result};
-use embassy_futures::select::{select, Either};
+use anyhow::{Context, Result, anyhow, bail};
+use embassy_futures::select::{Either, select};
 use rynk::rmk_types::action::KeyAction;
 use rynk::rmk_types::protocol::rynk::{
     AbortLightingOverlayReplaceRequest, BeginLightingOverlayReplaceRequest,
@@ -148,8 +148,17 @@ async fn unlock_session(client: &Client) -> Result<()> {
             format_unlock_keys(&status.key_positions)
         );
         let started = tokio::time::Instant::now();
+        let mut last_remaining = None;
         loop {
             let status = client.unlock_poll().await?;
+            if last_remaining != Some(status.remaining_keys) {
+                println!(
+                    "unlock progress: {} of {} challenge key(s) still needed",
+                    status.remaining_keys,
+                    status.key_positions.len()
+                );
+                last_remaining = Some(status.remaining_keys);
+            }
             if !status.locked {
                 println!("physical-presence unlock accepted");
                 break;
@@ -190,7 +199,8 @@ async fn jump_peripheral(client: &Client) -> Result<()> {
 
 fn format_unlock_keys(keys: &[(u8, u8)]) -> String {
     if keys == [(0, 0), (0, 13)] {
-        return "the far-left and far-right keys of the top finger row ((row 0, col 0) + (row 0, col 13))".to_owned();
+        return "F1 + F10 (the far-left and far-right keys of the top row; matrix (0,0) + (0,13))"
+            .to_owned();
     }
     keys.iter()
         .map(|(row, col)| format!("(row {row}, col {col})"))
@@ -480,7 +490,11 @@ fn render_lighting_state(state: LightingState) -> String {
         if state.output_enabled { "on" } else { "off" },
         state.output_brightness,
         state.overlay_len,
-        if state.background.enabled { "on" } else { "off" },
+        if state.background.enabled {
+            "on"
+        } else {
+            "off"
+        },
         background_mode,
         state.background.hue,
         state.background.saturation,
@@ -983,7 +997,7 @@ mod tests {
     fn unlock_challenge_is_rendered_as_physical_matrix_positions() {
         assert_eq!(
             format_unlock_keys(&[(0, 0), (0, 13)]),
-            "the far-left and far-right keys of the top finger row ((row 0, col 0) + (row 0, col 13))"
+            "F1 + F10 (the far-left and far-right keys of the top row; matrix (0,0) + (0,13))"
         );
     }
 
