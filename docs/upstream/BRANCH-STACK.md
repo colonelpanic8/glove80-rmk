@@ -19,7 +19,8 @@ HaoboGu/rmk:feat/rynk
 feat/rynk + lighting + runtime-hooks + rynk-usb-hid
     └── octopus merge + build-info merge
         └── split-bootloader routing + unlock policy
-            └── master
+            └── scene-lighting merge
+                └── master
 ```
 
 `glove80-rmk/lighting` includes `glove80-rmk/split-app`, so Git records the
@@ -36,7 +37,8 @@ the octopus merge.
 | `colonelpanic8/rmk:glove80-rmk/runtime-hooks` | `47922960a9d9ef1c3b088a655d03b986ec78badc` |
 | `colonelpanic8/rmk:glove80-rmk/rynk-usb-hid` | `902c9d630d3b6d10afbd9fe8527a8806f648bf8b` |
 | `colonelpanic8/rmk:glove80-rmk/build-info` | `8b5dd4d00e96e1cceed41d5a8977879c4879673c` |
-| `colonelpanic8/rmk:master` | `27b8bf38444acddfe3d7d6a408ac0f2b102103cb` |
+| `colonelpanic8/rmk:glove80-rmk/scene-lighting` | `c7c090ca24070bcfd59f673d65d4418d8d8a7524` |
+| `colonelpanic8/rmk:master` | `e0711733cad46beb199eea9171bc17cb0a37b53f` |
 
 ## Refresh procedure
 
@@ -63,7 +65,9 @@ the octopus merge.
    Then merge `glove80-rmk/build-info` with the dedicated
    `glove80-rmk: integrate Rynk build info` merge commit and replay the
    split-bootloader routing and unlock-policy fixes already carried by the
-   integration branch.
+   integration branch. Finally merge `glove80-rmk/scene-lighting`, which adds
+   the runtime scene wire surface, engine/storage support, and native/WASM host
+   APIs, with its own merge commit.
 
 6. Push rewritten topic refs with `--force-with-lease`, then push the rebuilt
    integration ref. After the composed tree passes verification, fast-forward

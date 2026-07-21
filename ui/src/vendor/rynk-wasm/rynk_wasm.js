@@ -35,11 +35,27 @@ export class RynkClient {
         return ret;
     }
     /**
+     * @param {AbortLightingSceneReplaceRequest} request
+     * @returns {Promise<void>}
+     */
+    abort_lighting_scene_replace(request) {
+        const ret = wasm.rynkclient_abort_lighting_scene_replace(this.__wbg_ptr, request);
+        return ret;
+    }
+    /**
      * @param {BeginLightingOverlayReplaceRequest} request
      * @returns {Promise<LightingOverlayTransaction>}
      */
     begin_lighting_overlay_replace(request) {
         const ret = wasm.rynkclient_begin_lighting_overlay_replace(this.__wbg_ptr, request);
+        return ret;
+    }
+    /**
+     * @param {BeginLightingSceneReplaceRequest} request
+     * @returns {Promise<LightingSceneTransaction>}
+     */
+    begin_lighting_scene_replace(request) {
+        const ret = wasm.rynkclient_begin_lighting_scene_replace(this.__wbg_ptr, request);
         return ret;
     }
     /**
@@ -71,6 +87,14 @@ export class RynkClient {
      */
     commit_lighting_overlay_replace(request) {
         const ret = wasm.rynkclient_commit_lighting_overlay_replace(this.__wbg_ptr, request);
+        return ret;
+    }
+    /**
+     * @param {CommitLightingSceneReplaceRequest} request
+     * @returns {Promise<LightingState>}
+     */
+    commit_lighting_scene_replace(request) {
+        const ret = wasm.rynkclient_commit_lighting_scene_replace(this.__wbg_ptr, request);
         return ret;
     }
     /**
@@ -258,6 +282,21 @@ export class RynkClient {
         return ret;
     }
     /**
+     * @returns {Promise<LightingSceneStatus>}
+     */
+    get_lighting_scene_status() {
+        const ret = wasm.rynkclient_get_lighting_scene_status(this.__wbg_ptr);
+        return ret;
+    }
+    /**
+     * @param {LightingScenePageRequest} request
+     * @returns {Promise<LightingScenesPage>}
+     */
+    get_lighting_scenes(request) {
+        const ret = wasm.rynkclient_get_lighting_scenes(this.__wbg_ptr, request);
+        return ret;
+    }
+    /**
      * @returns {Promise<LightingState>}
      */
     get_lighting_state() {
@@ -382,6 +421,14 @@ export class RynkClient {
         return ret;
     }
     /**
+     * @param {PutLightingSceneChunkRequest} request
+     * @returns {Promise<void>}
+     */
+    put_lighting_scene_chunk(request) {
+        const ret = wasm.rynkclient_put_lighting_scene_chunk(this.__wbg_ptr, request);
+        return ret;
+    }
+    /**
      * @returns {Promise<void>}
      */
     reboot() {
@@ -460,11 +507,27 @@ export class RynkClient {
         return ret;
     }
     /**
+     * @param {SetLightingLayerPolicyRequest} request
+     * @returns {Promise<LightingState>}
+     */
+    set_lighting_layer_policy(request) {
+        const ret = wasm.rynkclient_set_lighting_layer_policy(this.__wbg_ptr, request);
+        return ret;
+    }
+    /**
      * @param {SetLightingOverlayRequest} request
      * @returns {Promise<LightingState>}
      */
     set_lighting_overlay(request) {
         const ret = wasm.rynkclient_set_lighting_overlay(this.__wbg_ptr, request);
+        return ret;
+    }
+    /**
+     * @param {SetLightingSceneCellRequest} request
+     * @returns {Promise<LightingState>}
+     */
+    set_lighting_scene_cell(request) {
+        const ret = wasm.rynkclient_set_lighting_scene_cell(this.__wbg_ptr, request);
         return ret;
     }
     /**
@@ -530,6 +593,14 @@ export class RynkClient {
      */
     unset_lighting_overlay(request) {
         const ret = wasm.rynkclient_unset_lighting_overlay(this.__wbg_ptr, request);
+        return ret;
+    }
+    /**
+     * @param {UnsetLightingSceneCellRequest} request
+     * @returns {Promise<LightingState>}
+     */
+    unset_lighting_scene_cell(request) {
+        const ret = wasm.rynkclient_unset_lighting_scene_cell(this.__wbg_ptr, request);
         return ret;
     }
 }
@@ -844,7 +915,7 @@ function __wbg_get_imports() {
             console.warn(arg0);
         },
         __wbindgen_cast_0000000000000001: function(arg0, arg1) {
-            // Cast intrinsic for `Closure(Closure { owned: true, function: Function { arguments: [Externref], shim_idx: 426, ret: Result(Unit), inner_ret: Some(Result(Unit)) }, mutable: true }) -> Externref`.
+            // Cast intrinsic for `Closure(Closure { owned: true, function: Function { arguments: [Externref], shim_idx: 468, ret: Result(Unit), inner_ret: Some(Result(Unit)) }, mutable: true }) -> Externref`.
             const ret = makeMutClosure(arg0, arg1, wasm_bindgen_131d9c369ca8bda___convert__closures_____invoke___wasm_bindgen_131d9c369ca8bda___JsValue__core_7d5f0a2ba6a62c33___result__Result_____wasm_bindgen_131d9c369ca8bda___JsError___true_);
             return ret;
         },

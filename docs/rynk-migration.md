@@ -3,8 +3,8 @@
 ## Current decision
 
 Rynk owns live keymap and lighting control. The downstream RMK dependency is
-`colonelpanic8/rmk:master` at `27b8bf38`, pinned as the
-`dependencies/rmk` submodule. It composes upstream Rynk with the five
+`colonelpanic8/rmk:master` at `e0711733`, pinned as the
+`dependencies/rmk` submodule. It composes upstream Rynk with the six
 reviewable topics listed in [upstream/PATCHES.md](./upstream/PATCHES.md).
 
 The older `glove80-rynk` branch and the pre-Rynk `glove80` branch remain
@@ -16,7 +16,7 @@ vendor transport, shared-flash, keymap-operation, CRC, or VBUS patches.
 | Capability | Owner | Transport |
 | --- | --- | --- |
 | Keymap read/write and persistence | Rynk | USB HID; native BLE GATT; browser WebHID |
-| Lighting topology, state, overlays, and readback | RMK lighting through Rynk | USB HID; native BLE GATT; browser WebHID |
+| Lighting topology, state, overlays, per-layer scenes, and readback | RMK lighting through Rynk | USB HID; native BLE GATT; browser WebHID |
 | Vial RGB Matrix compatibility | RMK lighting service | Vial host protocol |
 | Cross-half lighting state and remote boot request | Firmware over `rmk::split_app` | RMK split link |
 | Animation sampling and physical LED output | Each Glove80 half locally | local RMK renderer, WS2812, and power-button PWM drivers |
@@ -33,7 +33,7 @@ Lightbench commits a release `wasm-pack --target web` package under
 
 ```sh
 RUSTUP_TOOLCHAIN=1.97.0 wasm-pack build --release --target web \
-  --out-dir ui/src/vendor/rynk-wasm dependencies/rmk/rynk/rynk-wasm
+  --out-dir "$PWD/ui/src/vendor/rynk-wasm" dependencies/rmk/rynk/rynk-wasm
 ```
 
 `wasm-pack` replaces the directory `.gitignore` and the generated README
