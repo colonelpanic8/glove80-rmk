@@ -4,6 +4,8 @@ default-members = ["tools/glove80-control"]
 # glove80-host-protocol is a path dependency with its own [workspace];
 # exclude it so Cargo keeps it a separate workspace root.
 exclude = [
+  # Agent/task worktrees checked out under the repo root stay separate roots.
+  ".worktrees",
   "crates/glove80-host-protocol",
   "dependencies/rmk/rmk",
   "dependencies/rmk/rmk-config",
