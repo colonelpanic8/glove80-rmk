@@ -107,12 +107,13 @@ mechanisms belong upstream in RMK. Moving generic pieces upstream must preserve
 the downstream Glove80 policy and is deliberately separate from this repository
 extraction.
 
-## Legacy recovery project
+## Firmware recovery
 
-The legacy ZMK/Zephyr sources and known-good recovery workflow remain in the
-separate [glove80-config repository](https://github.com/colonelpanic8/glove80-config).
-They are not build inputs or release outputs of this RMK repository. Keep
-recovery images clearly named and separate from the two RMK half images.
+Keep a known-good pair of RMK UF2 images before testing a new build. Flash the
+right/peripheral half first, wait for it to rejoin, and then flash the
+left/central half. `glove80-control bootloader --peripheral` and
+`glove80-control bootloader` enter the respective UF2 bootloaders after the
+keyboard's physical-presence unlock chord is held.
 
 ## Validation status
 

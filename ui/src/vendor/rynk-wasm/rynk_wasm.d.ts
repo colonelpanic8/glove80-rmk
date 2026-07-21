@@ -988,6 +988,7 @@ export class RynkClient {
      * runs concurrently with the request methods.
      */
     next_topic(): Promise<TopicEvent>;
+    peripheral_bootloader_jump(slot: number): Promise<void>;
     put_lighting_overlay_chunk(request: PutLightingOverlayChunkRequest): Promise<void>;
     reboot(): Promise<void>;
     set_behavior(config: BehaviorConfig): Promise<void>;
@@ -1070,6 +1071,7 @@ export interface InitOutput {
     readonly rynkclient_get_wpm: (a: number) => any;
     readonly rynkclient_lock: (a: number) => any;
     readonly rynkclient_next_topic: (a: number) => any;
+    readonly rynkclient_peripheral_bootloader_jump: (a: number, b: number) => any;
     readonly rynkclient_put_lighting_overlay_chunk: (a: number, b: any) => any;
     readonly rynkclient_reboot: (a: number) => any;
     readonly rynkclient_set_behavior: (a: number, b: any) => any;

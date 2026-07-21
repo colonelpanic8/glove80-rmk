@@ -32,14 +32,14 @@ version="$(sed -nE 's/^version[[:space:]]*=[[:space:]]*"([^"]+)"/\1/p' firmware/
 protocol_version="$(sed -nE 's/^version[[:space:]]*=[[:space:]]*"([^"]+)"/\1/p' crates/glove80-host-protocol/Cargo.toml | head -1)"
 rust_toolchain="$(sed -nE 's/^channel[[:space:]]*=[[:space:]]*"([^"]+)"/\1/p' rust-toolchain.toml | head -1)"
 source_commit="$(git rev-parse HEAD)"
-rmk_version="$(git -C dependencies/rmk describe --tags --always)"
+rmk_version="$(git -C dependencies/rmk describe --tags --always --dirty)"
 config_commit="${GLOVE80_CONFIG_GIT_COMMIT:-standalone}"
 config_dirty="${GLOVE80_CONFIG_GIT_DIRTY:-false}"
 
 (
   cd firmware/glove80-rmk
-  cargo build --release --bin glove80_lh
-  cargo build --release --bin glove80_rh
+  GLOVE80_RMK_GIT_VERSION="$rmk_version" cargo build --release --bin glove80_lh
+  GLOVE80_RMK_GIT_VERSION="$rmk_version" cargo build --release --bin glove80_rh
 )
 
 target_dir="firmware/glove80-rmk/target/thumbv7em-none-eabihf/release"

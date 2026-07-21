@@ -1,7 +1,7 @@
 # glove80-control
 
 CLI for the Glove80. Live keymap editing, topology-aware lighting, state
-queries, and central bootloader entry use RMK's native Rynk protocol.
+queries, and bootloader entry for either half use RMK's native Rynk protocol.
 Persistent lighting config and build-identity commands are legacy compatibility
 paths for older firmware (`PROTOCOL.md` in `crates/glove80-host-protocol/`).
 (The legacy ZMK Studio serial commands were retired after the RMK
@@ -51,8 +51,10 @@ validated against what the device advertises.
   brightness scalar.
 - `lighting toggle` is retained as a legacy parser but rejected because named
   toggle overlays are not part of RMK's standard lighting model.
-- `bootloader [--yes]` — enter the central UF2 bootloader through Rynk. Use the
-  physical right-half bootloader binding for the peripheral.
+- `bootloader [--peripheral] [--yes]` — enter the selected half's UF2
+  bootloader through Rynk. On a locked keyboard the CLI displays the configured
+  physical-presence keys, polls while they are held, and reports success only
+  after the selected half actually disconnects.
 
 ## Canonical configuration file (Rynk keymap + legacy lighting)
 
@@ -187,10 +189,11 @@ overlay writes print the keys still pending on the peripheral.
   version, the application-defined firmware build label, and the structured
   RMK crate version.
 - Glove80's default firmware label is
-  `config <git-hash>[-dirty] / glove80-rmk v<semver> (<git-hash>[-dirty]) / RMK v<semver>`.
+  `config <git-hash>[-dirty] / glove80-rmk v<semver> (<git-hash>[-dirty]) / RMK <git-describe>`.
   Direct product-repository builds use `config standalone`; downstream builds
-  supply `GLOVE80_CONFIG_GIT_COMMIT` and `GLOVE80_CONFIG_GIT_DIRTY`. Firmware
-  can replace the whole bounded label with
+  supply `GLOVE80_CONFIG_GIT_COMMIT` and `GLOVE80_CONFIG_GIT_DIRTY`. The RMK
+  identity names the exact custom integration commit, not only its inherited
+  Cargo semver. Firmware can replace the whole bounded label with
   `HostService::with_build_label` without changing protocol compatibility.
 - The current Rynk endpoint describes the central/application build. Split
   target identity and half-mismatch detection need a future routed or

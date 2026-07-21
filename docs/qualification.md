@@ -1,11 +1,7 @@
-# Phase 7 qualification run-sheet
+# Glove80 RMK qualification run-sheet
 
-> RMK commands and artifacts in this checklist use this repository. ZMK
-> recovery commands refer to the separate legacy `glove80-config` repository
-> and must be run there; its sources are intentionally not vendored here.
-
-Hardware acceptance run-sheet for replacing the Glove80 ZMK baseline with
-RMK. Run from the repository root on branch `codex/rmk-evaluation`.
+Hardware acceptance run-sheet for the Glove80 RMK firmware. Run from the
+repository root on `master`.
 
 ## Execution labels
 
@@ -40,7 +36,7 @@ RMK. Run from the repository root on branch `codex/rmk-evaluation`.
   git rev-parse --short=8 HEAD | tee "$G80_QUAL_DIR/git-hash.txt"
   ```
 
-  - Expected branch: `codex/rmk-evaluation`.
+  - Expected branch: `master`.
   - Keep `G80_QUAL_DIR` until the results and recovery drill are complete.
 
 - [ ] **AUTO, build only:** build both RMK images:
@@ -49,17 +45,6 @@ RMK. Run from the repository root on branch `codex/rmk-evaluation`.
   make dist
   test -f dist/glove80-rmk-0.1.0-lh.uf2
   test -f dist/glove80-rmk-0.1.0-rh.uf2
-  ```
-
-- [ ] **AUTO, build only:** build and retain the four ZMK recovery images:
-
-  ```sh
-  nix build .#firmware --out-link "$G80_QUAL_DIR/zmk-firmware"
-  test -f "$G80_QUAL_DIR/zmk-firmware/glove80-left.uf2"
-  test -f "$G80_QUAL_DIR/zmk-firmware/glove80-right.uf2"
-  test -f "$G80_QUAL_DIR/zmk-firmware/glove80-left-settings-reset.uf2"
-  test -f "$G80_QUAL_DIR/zmk-firmware/glove80-right-settings-reset.uf2"
-  ls -lh "$G80_QUAL_DIR/zmk-firmware"/*.uf2
   ```
 
 - [ ] Record the baseline before changing device state:
@@ -76,15 +61,16 @@ RMK. Run from the repository root on branch `codex/rmk-evaluation`.
 
     ```text
     glove80-control v{semver} ({git-hash}{-dirty})
-    Rynk protocol: v0.3
-    firmware: config {git-hash}{-dirty} / glove80-rmk v{semver} ({git-hash}{-dirty}) / RMK v{semver}
+    Rynk protocol: v0.4
+    firmware: config {git-hash}{-dirty} / glove80-rmk v{semver} ({git-hash}{-dirty}) / RMK {git-describe}
     RMK: v{semver}
     device: {manufacturer} {product} (USB {vid}:{pid})
     serial: {serial}
     ```
 
   - The firmware label must name the intended configuration and product
-    commits; the structured RMK line must name the intended RMK version.
+    commits plus the exact RMK integration commit via `git describe`; the
+    structured RMK line must name the intended RMK semantic version.
   - A dirty suffix is acceptable only for an intentionally retained local build.
   - This query currently identifies the central/application image; verify the
     peripheral artifact separately until Rynk exposes routed split build info.
@@ -116,7 +102,7 @@ RMK. Run from the repository root on branch `codex/rmk-evaluation`.
     `*_lh_*`/`glove80-left*` to `GLV80LHBOOT`.
   - A successful `cp` normally causes the UF2 volume to disappear and the
     half to reboot. Run `sync` before continuing.
-  - Keep normal ZMK, ZMK settings-reset, and both RMK UF2s available throughout
+  - Keep the last known-good and candidate RMK UF2 pairs available throughout
     the run.
 
 ## Optional fresh RMK flash
@@ -124,8 +110,7 @@ RMK. Run from the repository root on branch `codex/rmk-evaluation`.
 - **AUTO, destructive:** use only when both halves already run a compatible
   RMK host protocol. This is also the exact reflash sequence used by the
   bootloader qualification.
-- Safety: the same-build RMK UF2s and all four ZMK recovery UF2s must have
-  passed the preflight checks above.
+- Safety: the same-build RMK UF2s must have passed the preflight checks above.
 
 1. Flash and rejoin the peripheral:
 
@@ -138,9 +123,8 @@ RMK. Run from the repository root on branch `codex/rmk-evaluation`.
    timeout 45 sh -c 'until ./target/debug/glove80-control --usb version >/dev/null 2>&1; do sleep 2; done'
    ```
 
-   - Expected bootloader output: `peripheral half acknowledged the bootloader
-     request` or `no response — the peripheral half most likely reset into its
-     bootloader`.
+   - Hold the physical-presence keys printed by the CLI. Success is reported
+     only after the right half disconnects from the split link.
    - The right UF2 volume appears and disappears after the copy; later split
      typing tests confirm that the peripheral rejoined.
 
@@ -156,9 +140,9 @@ RMK. Run from the repository root on branch `codex/rmk-evaluation`.
    "$G80CTL" --usb version
    ```
 
-   - Expected bootloader output: `central half acknowledged the bootloader
-     request` or `no response — the central half most likely reset into its
-     bootloader`.
+   - Hold the physical-presence keys printed by the CLI. Expected bootloader
+     output confirms the unlock and reports success only after the central
+     actually disconnects.
    - Final `version` must show the expected configuration, application, and RMK
      build identity.
 
@@ -431,14 +415,14 @@ RMK. Run from the repository root on branch `codex/rmk-evaluation`.
     physical right-half reboot route.
   - Wait for the central to re-enumerate and the peripheral to reconnect
     before using the right power switch.
-  - Expected after both rejoin: `version` shows matching, connected halves;
-    `config show` matches its pre-reboot output.
+  - Expected after both rejoin: `version` succeeds on the central, split typing
+    confirms the peripheral is connected, and `config show` matches its
+    pre-reboot output.
 
 - [ ] **PENDING:** factory restore.
   - There is no `config restore` CLI verb and no firmware factory snapshot
     restore command.
-  - ZMK settings-reset UF2s are recovery artifacts, not a qualifying RMK
-    factory-restore implementation.
+  - Reflashing an RMK application UF2 is not a factory-restore implementation.
 
 - [ ] **PENDING:** corrupt-record fallback.
   - The store has CRC-checked A/B generations, but there is no bounded host
@@ -474,8 +458,9 @@ RMK. Run from the repository root on branch `codex/rmk-evaluation`.
   "$G80CTL" --usb version
   ```
 
-  - Both halves must be connected, match semver/hash, and show no mismatch
-    warning.
+  - `version` must report the expected central build, split typing must confirm
+    the peripheral is connected, and the release manifest must show that both
+    UF2 artifacts came from the same product, configuration, and RMK commits.
 
 ## 8. Static / blink / breathe on both halves — HANDS
 
@@ -658,95 +643,20 @@ RMK. Run from the repository root on branch `codex/rmk-evaluation`.
   "$G80CTL" --usb config show
   ```
 
-## 14. Recovery to a known-good image after every destructive test — HANDS
+## 14. Recovery to a known-good RMK image after every destructive test — HANDS
 
-- This item proves the retained ZMK escape path and the return path to RMK.
-- **Destructive:** firmware and settings-reset flashes replace application
-  firmware and/or erase settings/bonds.
-- Safety: never mount both bootloader volumes; ZMK right first, then ZMK
-  left. Returning to RMK also uses right first, then left.
-
-### Recover RMK to known-good ZMK
-
-- [ ] While RMK still runs, enter and flash the peripheral:
-
-  ```sh
-  "$G80CTL" --usb bootloader --peripheral --yes
-  timeout 30 sh -c 'until test -d /run/media/imalison/GLV80RHBOOT; do sleep 1; done'
-  cp "$G80_QUAL_DIR/zmk-firmware/glove80-right.uf2" /run/media/imalison/GLV80RHBOOT/
-  sync
-  timeout 30 sh -c 'while test -d /run/media/imalison/GLV80RHBOOT; do sleep 1; done'
-  ```
-
-- [ ] With the central still on RMK, enter and flash it:
-
-  ```sh
-  "$G80CTL" --usb bootloader --yes
-  timeout 30 sh -c 'until test -d /run/media/imalison/GLV80LHBOOT; do sleep 1; done'
-  cp "$G80_QUAL_DIR/zmk-firmware/glove80-left.uf2" /run/media/imalison/GLV80LHBOOT/
-  sync
-  timeout 30 sh -c 'while test -d /run/media/imalison/GLV80LHBOOT; do sleep 1; done'
-  ```
-
-- [ ] **HANDS:** verify known-good ZMK USB typing, BLE typing, split typing,
-      and physical Magic+bootloader access.
-  - The RMK `version` command is expected to stop working after the central
-    has been replaced by ZMK; that is not a recovery failure.
-
-### Settings-reset recovery, only when settings/bonds are the failure
-
-- [ ] **HANDS:** physically enter the right bootloader with reset-button
-      double-tap or Magic-hold + its `QK_BOOT` key.
-- [ ] Flash reset, then physically re-enter and flash normal ZMK:
-
-  ```sh
-  cp "$G80_QUAL_DIR/zmk-firmware/glove80-right-settings-reset.uf2" /run/media/imalison/GLV80RHBOOT/
-  sync
-  # Physically re-enter GLV80RHBOOT after the reset image runs.
-  cp "$G80_QUAL_DIR/zmk-firmware/glove80-right.uf2" /run/media/imalison/GLV80RHBOOT/
-  sync
-  ```
-
-- [ ] Repeat for the left half only after the right is out of bootloader:
-
-  ```sh
-  cp "$G80_QUAL_DIR/zmk-firmware/glove80-left-settings-reset.uf2" /run/media/imalison/GLV80LHBOOT/
-  sync
-  # Physically re-enter GLV80LHBOOT after the reset image runs.
-  cp "$G80_QUAL_DIR/zmk-firmware/glove80-left.uf2" /run/media/imalison/GLV80LHBOOT/
-  sync
-  ```
-
-  - Settings reset erases bonds/settings. Expect to re-pair BLE.
-  - Do not use settings-reset as an RMK factory-restore substitute.
-
-### Return from ZMK to the RMK candidate
-
-- [ ] **HANDS:** physically enter the right bootloader, then flash RMK:
-
-  ```sh
-  cp dist/glove80-rmk-0.1.0-rh.uf2 /run/media/imalison/GLV80RHBOOT/
-  sync
-  ```
-
-- [ ] **HANDS:** after the right half leaves bootloader, physically enter the
-      left bootloader, then flash RMK:
-
-  ```sh
-  cp dist/glove80-rmk-0.1.0-lh.uf2 /run/media/imalison/GLV80LHBOOT/
-  sync
-  ```
-
-- [ ] Verify the candidate is restored:
-
-  ```sh
-  timeout 45 sh -c 'until ./target/debug/glove80-control --usb version >/dev/null 2>&1; do sleep 2; done'
-  "$G80CTL" --usb version
-  "$G80CTL" --usb config apply "$G80_QUAL_DIR/config-before.toml"
-  ```
-
-  - Expected: both halves connected, matching, and no mismatch warning.
-  - **HANDS:** repeat a short USB and split typing smoke test.
+- Keep the previous known-good left and right RMK UF2 files outside `dist/`
+  before replacing them with a candidate build.
+- **Destructive:** flashing rewrites application firmware. Never mount both
+  bootloader volumes; recover the right half first and wait for it to rejoin,
+  then recover the left half.
+- [ ] Run the same two-half sequence under **Optional fresh RMK flash**, using
+      the known-good right and left UF2 files instead of the candidate files.
+- [ ] If programmatic entry is unavailable, use the physical bootloader chord
+      or reset-button double-tap on one half at a time, then copy the matching
+      known-good RMK UF2.
+- [ ] Verify USB typing, split typing, lighting, and firmware identity after
+      both halves return.
 
 ## Results
 

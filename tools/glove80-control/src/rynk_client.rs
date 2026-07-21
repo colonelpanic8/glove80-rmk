@@ -30,6 +30,8 @@ const GLOVE80_ROWS: u8 = 6;
 const GLOVE80_COLS: u8 = 14;
 const GLOVE80_HOLES: [u8; 4] = [5, 8, 75, 78];
 const RYNK_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
+const RYNK_UNLOCK_TIMEOUT: Duration = Duration::from_secs(15);
+const RYNK_BOOTLOADER_TIMEOUT: Duration = Duration::from_secs(3);
 
 enum Device {
     Hid(HidDevice),
@@ -78,22 +80,14 @@ pub fn run_version(selector: &Selector) -> Result<()> {
     })
 }
 
-/// Enter the central bootloader through Rynk. The right-half request remains
-/// a board-specific split action and is currently only available from the
-/// keyboard's physical bootloader binding.
 pub fn run_bootloader(selector: &Selector, peripheral: bool) -> Result<()> {
-    if peripheral {
-        bail!(
-            "Rynk bootloader entry targets the central half; use the right-half physical bootloader key for the peripheral"
-        );
-    }
     let runtime =
         tokio::runtime::Runtime::new().context("could not create the Rynk async runtime")?;
     runtime.block_on(async {
         match select_device(selector).await? {
-            Device::Hid(device) => run_bootloader_device(device).await,
-            Device::Serial(device) => run_bootloader_device(device).await,
-            Device::Ble(device) => run_bootloader_device(device).await,
+            Device::Hid(device) => run_bootloader_device(device, peripheral).await,
+            Device::Serial(device) => run_bootloader_device(device, peripheral).await,
+            Device::Ble(device) => run_bootloader_device(device, peripheral).await,
         }
     })
 }
@@ -107,25 +101,101 @@ async fn run_lighting_device<D: RynkDevice>(device: D, command: &LightingCommand
     }
 }
 
-async fn run_bootloader_device<D: RynkDevice>(device: D) -> Result<()> {
+async fn run_bootloader_device<D: RynkDevice>(device: D, peripheral: bool) -> Result<()> {
     let label = device.label();
     let (client, mut driver) = connect_device(device, &label).await?;
-    // `bootloader_jump` is deliberately fire-and-forget: success means its
-    // frame reached the driver's queue, not the device. Keep driving long
-    // enough to flush it. A transport disconnect after `queued` becomes true
-    // is the expected proof that the firmware consumed the request and reset.
     let queued = std::cell::Cell::new(false);
     let request = async {
-        client.bootloader_jump().await?;
-        queued.set(true);
-        tokio::time::sleep(Duration::from_millis(500)).await;
-        Ok::<(), rynk::RynkHostError>(())
+        unlock_session(&client).await?;
+        if peripheral {
+            jump_peripheral(&client).await
+        } else {
+            client.bootloader_jump().await?;
+            queued.set(true);
+            std::future::pending::<Result<()>>().await
+        }
     };
-    match select(driver.run(&client), request).await {
-        Either::First(_) if queued.get() => Ok(()),
-        Either::First(error) => Err(anyhow!("Rynk connection to {label} ended: {error}")),
-        Either::Second(result) => result.map_err(Into::into),
+    let outcome = tokio::time::timeout(
+        RYNK_UNLOCK_TIMEOUT + RYNK_BOOTLOADER_TIMEOUT,
+        select(driver.run(&client), request),
+    )
+    .await;
+    match outcome {
+        // A disconnect after the frame was queued is the device reset we need
+        // to observe. Merely filling the host queue is not success.
+        Ok(Either::First(_)) if queued.get() => Ok(()),
+        Ok(Either::First(error)) => Err(anyhow!("Rynk connection to {label} ended: {error}")),
+        Ok(Either::Second(result)) => result,
+        Err(_) if queued.get() => bail!(
+            "the bootloader request was sent, but the keyboard did not disconnect within {} seconds",
+            RYNK_BOOTLOADER_TIMEOUT.as_secs()
+        ),
+        Err(_) => bail!(
+            "timed out waiting {} seconds for the physical-presence unlock",
+            RYNK_UNLOCK_TIMEOUT.as_secs()
+        ),
     }
+}
+
+async fn unlock_session(client: &Client) -> Result<()> {
+    let status = client.get_lock_status().await?;
+    if status.locked {
+        if status.key_positions.is_empty() {
+            bail!("the keyboard permanently locks remote bootloader entry");
+        }
+        println!(
+            "hold the keyboard's Rynk unlock keys for physical presence: {}",
+            format_unlock_keys(&status.key_positions)
+        );
+        let started = tokio::time::Instant::now();
+        loop {
+            let status = client.unlock_poll().await?;
+            if !status.locked {
+                println!("physical-presence unlock accepted");
+                break;
+            }
+            if started.elapsed() >= RYNK_UNLOCK_TIMEOUT {
+                bail!(
+                    "timed out waiting {} seconds for the physical-presence unlock",
+                    RYNK_UNLOCK_TIMEOUT.as_secs()
+                );
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    }
+
+    Ok(())
+}
+
+async fn jump_peripheral(client: &Client) -> Result<()> {
+    let status = client.get_peripheral_status(0).await?;
+    if !status.connected {
+        bail!("the right half is not connected");
+    }
+    client.peripheral_bootloader_jump(0).await?;
+    let started = tokio::time::Instant::now();
+    loop {
+        if !client.get_peripheral_status(0).await?.connected {
+            return Ok(());
+        }
+        if started.elapsed() >= RYNK_BOOTLOADER_TIMEOUT {
+            bail!(
+                "the right-half bootloader request was accepted, but the peripheral stayed connected for {} seconds",
+                RYNK_BOOTLOADER_TIMEOUT.as_secs()
+            );
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+}
+
+fn format_unlock_keys(keys: &[(u8, u8)]) -> String {
+    if keys == [(0, 0), (0, 13)] {
+        return "the far-left and far-right keys of the top finger row ((row 0, col 0) + (row 0, col 13))".to_owned();
+    }
+    keys.iter()
+        .map(|(row, col)| format!("(row {row}, col {col})"))
+        .collect::<Vec<_>>()
+        .join(" + ")
 }
 
 async fn run_version_device<D: RynkDevice>(device: D) -> Result<()> {
@@ -908,6 +978,14 @@ fn one_device<T>(mut devices: Vec<T>, kind: &str) -> Result<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unlock_challenge_is_rendered_as_physical_matrix_positions() {
+        assert_eq!(
+            format_unlock_keys(&[(0, 0), (0, 13)]),
+            "the far-left and far-right keys of the top finger row ((row 0, col 0) + (row 0, col 13))"
+        );
+    }
 
     #[test]
     fn canonical_keymap_clears_every_trailing_device_layer() {

@@ -110,6 +110,9 @@ fn vial_config_generation() {
 ///   downstream configuration commit, or `standalone` when this repository is
 ///   built directly.
 /// - `GLOVE80_CONFIG_GIT_DIRTY`: normalized to `1` or `0`.
+/// - `GLOVE80_RMK_GIT_VERSION`: the pinned RMK submodule's full `git describe`
+///   identity (for example `rmk-v0.8.2-837-g566cbcf9`). Release builds pass
+///   this explicitly; direct Cargo builds derive it from the submodule.
 ///
 /// The semver travels via Cargo's own `CARGO_PKG_VERSION_*` envs; nothing to
 /// emit here. Re-run when the repo's HEAD moves (commit/checkout); a
@@ -118,6 +121,7 @@ fn vial_config_generation() {
 fn version_embedding() {
     println!("cargo:rerun-if-env-changed=GLOVE80_CONFIG_GIT_COMMIT");
     println!("cargo:rerun-if-env-changed=GLOVE80_CONFIG_GIT_DIRTY");
+    println!("cargo:rerun-if-env-changed=GLOVE80_RMK_GIT_VERSION");
 
     // Two levels up: <repo root>/.git/HEAD (this crate is firmware/glove80-rmk).
     // HEAD only changes on checkout/branch switch; ordinary commits move the
@@ -177,4 +181,30 @@ fn version_embedding() {
         "cargo:rustc-env=GLOVE80_CONFIG_GIT_DIRTY={}",
         config_dirty as u8
     );
+
+    let rmk_git_version = env::var("GLOVE80_RMK_GIT_VERSION")
+        .ok()
+        .filter(|value| !value.is_empty())
+        .or_else(|| {
+            Command::new("git")
+                .args([
+                    "-C",
+                    "../../dependencies/rmk",
+                    "describe",
+                    "--tags",
+                    "--always",
+                    "--dirty",
+                ])
+                .output()
+                .ok()
+                .filter(|out| out.status.success())
+                .and_then(|out| String::from_utf8(out.stdout).ok())
+                .map(|value| value.trim().to_owned())
+        })
+        .unwrap_or_else(|| "unknown".to_owned());
+    assert!(
+        rmk_git_version.len() <= 48 && rmk_git_version.bytes().all(|byte| byte.is_ascii_graphic()),
+        "GLOVE80_RMK_GIT_VERSION must be 1-48 printable ASCII characters"
+    );
+    println!("cargo:rustc-env=GLOVE80_RMK_GIT_VERSION={rmk_git_version}");
 }

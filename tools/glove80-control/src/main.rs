@@ -51,7 +51,7 @@ enum Command {
         #[command(subcommand)]
         command: ConfigCommand,
     },
-    /// Reboot the central half into its UF2 bootloader through Rynk.
+    /// Reboot either half into its UF2 bootloader through Rynk.
     Bootloader {
         #[command(flatten)]
         host: lighting::BootloaderArgs,

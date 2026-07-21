@@ -49,7 +49,7 @@ mod tests {
     #[test]
     fn keeps_protocol_application_and_rmk_versions_distinct() {
         let build = BuildInfo {
-            label: "glove80-rmk v0.1.0 (205266c5) / RMK v0.8.2"
+            label: "glove80-rmk v0.1.0 (205266c5) / RMK rmk-v0.8.2-837-g566cbcf9"
                 .try_into()
                 .unwrap(),
         };
@@ -66,9 +66,10 @@ mod tests {
             serial_number: "rynk:glove80".try_into().unwrap(),
         };
 
-        let report = render(ProtocolVersion { major: 0, minor: 3 }, &device, &build);
-        assert!(report.contains("Rynk protocol: v0.3"));
+        let report = render(ProtocolVersion { major: 0, minor: 4 }, &device, &build);
+        assert!(report.contains("Rynk protocol: v0.4"));
         assert!(report.contains("firmware: glove80-rmk v0.1.0"));
+        assert!(report.contains("RMK rmk-v0.8.2-837-g566cbcf9"));
         assert!(report.contains("RMK: v0.8.2"));
         assert!(report.contains("MoErgo Glove80 (USB 16c0:27db)"));
     }

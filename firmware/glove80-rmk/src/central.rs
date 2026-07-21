@@ -8,6 +8,15 @@ mod remote_boot;
 
 use rmk::macros::rmk_central;
 
+fn route_peripheral_bootloader(slot: u8) -> Result<(), rmk::types::protocol::rynk::RynkError> {
+    if slot != 0 {
+        return Err(rmk::types::protocol::rynk::RynkError::Invalid);
+    }
+    crate::central_lighting::REMOTE_BOOT_REQUESTS
+        .try_send(())
+        .map_err(|_| rmk::types::protocol::rynk::RynkError::NotReady)
+}
+
 #[rmk_central]
 mod keyboard_central {
     /// Bind the macro-created Rynk transports to this board's lighting
@@ -29,18 +38,19 @@ mod keyboard_central {
         let mut build_label = ::rmk::heapless::String::<128>::new();
         let _ = write!(
             build_label,
-            "config {}{} / {} v{} ({}{}) / RMK v{}",
+            "config {}{} / {} v{} ({}{}) / RMK {}",
             env!("GLOVE80_CONFIG_GIT_HASH"),
             config_dirty,
             env!("CARGO_PKG_NAME"),
             env!("CARGO_PKG_VERSION"),
             env!("GLOVE80_GIT_HASH"),
             dirty,
-            ::rmk::host::RMK_VERSION_STRING,
+            env!("GLOVE80_RMK_GIT_VERSION"),
         );
 
         ::rmk::host::HostService::new(&keymap, &rmk_config)
             .with_lighting(crate::central_lighting::rynk_controller())
+            .with_peripheral_bootloader(crate::route_peripheral_bootloader)
             .with_build_label(build_label.as_str())
     }
 

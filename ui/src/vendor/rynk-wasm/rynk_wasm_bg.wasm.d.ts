@@ -49,6 +49,7 @@ export const rynkclient_get_version: (a: number) => any;
 export const rynkclient_get_wpm: (a: number) => any;
 export const rynkclient_lock: (a: number) => any;
 export const rynkclient_next_topic: (a: number) => any;
+export const rynkclient_peripheral_bootloader_jump: (a: number, b: number) => any;
 export const rynkclient_put_lighting_overlay_chunk: (a: number, b: any) => any;
 export const rynkclient_reboot: (a: number) => any;
 export const rynkclient_set_behavior: (a: number, b: any) => any;
