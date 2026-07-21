@@ -176,9 +176,11 @@ impl Runnable for RemoteBootDispatcher {
         loop {
             REMOTE_BOOT_REQUESTS.receive().await;
             let message = SplitAppData::new(&[BOOTLOADER_TAG]).expect("one-byte message");
-            if rmk::split_app::SPLIT_APP_TX.try_send(message).is_err() {
-                defmt::warn!("remote-boot: peripheral is offline or split queue is full");
-            }
+            // Lighting deliberately drops frames when the one-slot split
+            // queue is busy, but a bootloader command must not be dropped:
+            // the host has already received an acknowledgement. Wait until
+            // this control message owns the next available queue slot.
+            rmk::split_app::SPLIT_APP_TX.send(message).await;
         }
     }
 }

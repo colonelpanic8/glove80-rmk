@@ -5,18 +5,18 @@
 
 use std::time::Duration;
 
-use anyhow::{Context, Result, anyhow, bail};
-use embassy_futures::select::{Either, select};
+use anyhow::{anyhow, bail, Context, Result};
+use embassy_futures::select::{select, Either};
 use rynk::rmk_types::action::KeyAction;
 use rynk::rmk_types::protocol::rynk::{
     AbortLightingOverlayReplaceRequest, BeginLightingOverlayReplaceRequest,
     ClearLightingOverlayRequest, CommitLightingOverlayReplaceRequest, LightingBackgroundMode,
     LightingEffect, LightingEffectFlags, LightingFeatureFlags, LightingLedId, LightingMutableState,
-    LightingOverlayCell, LightingRgb8, LightingState, PutLightingOverlayChunkRequest,
+    LightingOverlayCell, LightingRgb8, LightingState, PutLightingOverlayChunkRequest, RynkError,
     SetKeymapBulkRequest, SetLightingOverlayRequest, SetLightingStateRequest,
     UnsetLightingOverlayRequest,
 };
-use rynk::{Client, RynkDevice};
+use rynk::{Client, RynkDevice, RynkHostError};
 use rynk_ble::BleDevice;
 use rynk_serial::SerialDevice;
 
@@ -106,11 +106,10 @@ async fn run_bootloader_device<D: RynkDevice>(device: D, peripheral: bool) -> Re
     let (client, mut driver) = connect_device(device, &label).await?;
     let queued = std::cell::Cell::new(false);
     let request = async {
-        unlock_session(&client).await?;
         if peripheral {
             jump_peripheral(&client).await
         } else {
-            client.bootloader_jump().await?;
+            request_bootloader_jump(&client, false).await?;
             queued.set(true);
             std::future::pending::<Result<()>>().await
         }
@@ -134,6 +133,30 @@ async fn run_bootloader_device<D: RynkDevice>(device: D, peripheral: bool) -> Re
             "timed out waiting {} seconds for the physical-presence unlock",
             RYNK_UNLOCK_TIMEOUT.as_secs()
         ),
+    }
+}
+
+/// Try bootloader entry directly first. Deployments may explicitly allow it;
+/// older or locked-down firmware returns `Locked`, in which case retain the
+/// physical-presence fallback instead of imposing it unconditionally.
+async fn request_bootloader_jump(client: &Client, peripheral: bool) -> Result<()> {
+    let result = if peripheral {
+        client.peripheral_bootloader_jump(0).await
+    } else {
+        client.bootloader_jump().await
+    };
+    match result {
+        Ok(()) => Ok(()),
+        Err(RynkHostError::Rejected(RynkError::Locked)) => {
+            unlock_session(client).await?;
+            if peripheral {
+                client.peripheral_bootloader_jump(0).await?;
+            } else {
+                client.bootloader_jump().await?;
+            }
+            Ok(())
+        }
+        Err(error) => Err(error.into()),
     }
 }
 
@@ -181,7 +204,7 @@ async fn jump_peripheral(client: &Client) -> Result<()> {
     if !status.connected {
         bail!("the right half is not connected");
     }
-    client.peripheral_bootloader_jump(0).await?;
+    request_bootloader_jump(client, true).await?;
     let started = tokio::time::Instant::now();
     loop {
         if !client.get_peripheral_status(0).await?.connected {
