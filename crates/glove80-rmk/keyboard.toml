@@ -201,6 +201,12 @@ col_pins = ["P1_06", "P1_04", "P0_02", "P1_07", "P1_05", "P1_03", "P1_01"]
 [lighting]
 topology_revision = 1
 
+[lighting.controls]
+# User13 is bound in the Magic layer below; pressing Magic itself wakes a dark
+# board and presents the status view by activating layer 2.
+output_toggle_user_action = 13
+wake_layer = 2
+
 [[lighting.zone]]
 id = 1
 name = "per-key"
@@ -218,12 +224,12 @@ pixel_count = 40
 capabilities = ["rgb", "addressable"]
 
 [lighting.background]
-# Keep every key visibly lit; sparse per-layer scenes below override this dim
-# white base with their accent colors.
-enabled = true
+# Leave keys without an explicit layer, status, or host-overlay contribution
+# dark. The master output toggle still gates every lighting source together.
+enabled = false
 hue = 0
 saturation = 0
-value = 32
+value = 0
 speed = 128
 mode = "solid"
 
@@ -866,6 +872,256 @@ zones = [1]
 node = 1
 output = 0
 physical_index = 39
+
+# Immutable status rules. These are compiled from configuration, evaluated
+# against live state on both halves, and exposed read-only over Rynk.
+
+# F1-F5 report layers 0-4: green when active, dim red otherwise.
+[[lighting.conditional_scene]]
+layer = { layer = 0, active = false }
+[[lighting.conditional_scene.cell]]
+target = { led = 34 }
+effect = { kind = "solid", color = [64, 0, 0] }
+
+[[lighting.conditional_scene]]
+layer = { layer = 0, active = true }
+[[lighting.conditional_scene.cell]]
+target = { led = 34 }
+effect = { kind = "solid", color = [0, 128, 0] }
+
+[[lighting.conditional_scene]]
+layer = { layer = 1, active = false }
+[[lighting.conditional_scene.cell]]
+target = { led = 28 }
+effect = { kind = "solid", color = [64, 0, 0] }
+
+[[lighting.conditional_scene]]
+layer = { layer = 1, active = true }
+[[lighting.conditional_scene.cell]]
+target = { led = 28 }
+effect = { kind = "solid", color = [0, 128, 0] }
+
+[[lighting.conditional_scene]]
+layer = { layer = 2, active = false }
+[[lighting.conditional_scene.cell]]
+target = { led = 22 }
+effect = { kind = "solid", color = [64, 0, 0] }
+
+[[lighting.conditional_scene]]
+layer = { layer = 2, active = true }
+[[lighting.conditional_scene.cell]]
+target = { led = 22 }
+effect = { kind = "solid", color = [0, 128, 0] }
+
+[[lighting.conditional_scene]]
+layer = { layer = 3, active = false }
+[[lighting.conditional_scene.cell]]
+target = { led = 16 }
+effect = { kind = "solid", color = [64, 0, 0] }
+
+[[lighting.conditional_scene]]
+layer = { layer = 3, active = true }
+[[lighting.conditional_scene.cell]]
+target = { led = 16 }
+effect = { kind = "solid", color = [0, 128, 0] }
+
+[[lighting.conditional_scene]]
+layer = { layer = 4, active = false }
+[[lighting.conditional_scene.cell]]
+target = { led = 10 }
+effect = { kind = "solid", color = [64, 0, 0] }
+
+[[lighting.conditional_scene]]
+layer = { layer = 4, active = true }
+[[lighting.conditional_scene.cell]]
+target = { led = 10 }
+effect = { kind = "solid", color = [0, 128, 0] }
+
+# Games layer: WASD red and the Backspace-position Space action amber.
+[[lighting.conditional_scene]]
+layer = { layer = 3, active = true }
+[[lighting.conditional_scene.cell]]
+target = { led = 24 }
+effect = { kind = "solid", color = [160, 0, 0] }
+[[lighting.conditional_scene.cell]]
+target = { led = 31 }
+effect = { kind = "solid", color = [160, 0, 0] }
+[[lighting.conditional_scene.cell]]
+target = { led = 25 }
+effect = { kind = "solid", color = [160, 0, 0] }
+[[lighting.conditional_scene.cell]]
+target = { led = 19 }
+effect = { kind = "solid", color = [160, 0, 0] }
+[[lighting.conditional_scene.cell]]
+target = { led = 3 }
+effect = { kind = "solid", color = [160, 48, 0] }
+
+# Five-segment bottom-up battery bars, visible while Magic (layer 2) is held.
+# Broad green rules come first; low-level and charging rules below override
+# them in declaration order.
+[[lighting.conditional_scene]]
+layer = { layer = 2, active = true }
+battery = { node = 0, min_level = 1 }
+[[lighting.conditional_scene.cell]]
+target = { led = 39 }
+effect = { kind = "solid", color = [0, 128, 0] }
+[[lighting.conditional_scene]]
+layer = { layer = 2, active = true }
+battery = { node = 0, min_level = 21 }
+[[lighting.conditional_scene.cell]]
+target = { led = 38 }
+effect = { kind = "solid", color = [0, 128, 0] }
+[[lighting.conditional_scene]]
+layer = { layer = 2, active = true }
+battery = { node = 0, min_level = 41 }
+[[lighting.conditional_scene.cell]]
+target = { led = 37 }
+effect = { kind = "solid", color = [0, 128, 0] }
+[[lighting.conditional_scene]]
+layer = { layer = 2, active = true }
+battery = { node = 0, min_level = 61 }
+[[lighting.conditional_scene.cell]]
+target = { led = 36 }
+effect = { kind = "solid", color = [0, 128, 0] }
+[[lighting.conditional_scene]]
+layer = { layer = 2, active = true }
+battery = { node = 0, min_level = 81 }
+[[lighting.conditional_scene.cell]]
+target = { led = 35 }
+effect = { kind = "solid", color = [0, 128, 0] }
+
+[[lighting.conditional_scene]]
+layer = { layer = 2, active = true }
+battery = { node = 1, min_level = 1 }
+[[lighting.conditional_scene.cell]]
+target = { led = 79 }
+effect = { kind = "solid", color = [0, 128, 0] }
+[[lighting.conditional_scene]]
+layer = { layer = 2, active = true }
+battery = { node = 1, min_level = 21 }
+[[lighting.conditional_scene.cell]]
+target = { led = 78 }
+effect = { kind = "solid", color = [0, 128, 0] }
+[[lighting.conditional_scene]]
+layer = { layer = 2, active = true }
+battery = { node = 1, min_level = 41 }
+[[lighting.conditional_scene.cell]]
+target = { led = 77 }
+effect = { kind = "solid", color = [0, 128, 0] }
+[[lighting.conditional_scene]]
+layer = { layer = 2, active = true }
+battery = { node = 1, min_level = 61 }
+[[lighting.conditional_scene.cell]]
+target = { led = 76 }
+effect = { kind = "solid", color = [0, 128, 0] }
+[[lighting.conditional_scene]]
+layer = { layer = 2, active = true }
+battery = { node = 1, min_level = 81 }
+[[lighting.conditional_scene.cell]]
+target = { led = 75 }
+effect = { kind = "solid", color = [0, 128, 0] }
+
+# Low-battery overrides.
+[[lighting.conditional_scene]]
+layer = { layer = 2, active = true }
+battery = { node = 0, min_level = 1, max_level = 40 }
+[[lighting.conditional_scene.cell]]
+target = { led = 39 }
+effect = { kind = "solid", color = [160, 48, 0] }
+[[lighting.conditional_scene]]
+layer = { layer = 2, active = true }
+battery = { node = 0, min_level = 21, max_level = 40 }
+[[lighting.conditional_scene.cell]]
+target = { led = 38 }
+effect = { kind = "solid", color = [160, 48, 0] }
+[[lighting.conditional_scene]]
+layer = { layer = 2, active = true }
+battery = { node = 0, min_level = 1, max_level = 20 }
+[[lighting.conditional_scene.cell]]
+target = { led = 39 }
+effect = { kind = "solid", color = [160, 0, 0] }
+
+[[lighting.conditional_scene]]
+layer = { layer = 2, active = true }
+battery = { node = 1, min_level = 1, max_level = 40 }
+[[lighting.conditional_scene.cell]]
+target = { led = 79 }
+effect = { kind = "solid", color = [160, 48, 0] }
+[[lighting.conditional_scene]]
+layer = { layer = 2, active = true }
+battery = { node = 1, min_level = 21, max_level = 40 }
+[[lighting.conditional_scene.cell]]
+target = { led = 78 }
+effect = { kind = "solid", color = [160, 48, 0] }
+[[lighting.conditional_scene]]
+layer = { layer = 2, active = true }
+battery = { node = 1, min_level = 1, max_level = 20 }
+[[lighting.conditional_scene.cell]]
+target = { led = 79 }
+effect = { kind = "solid", color = [160, 0, 0] }
+
+# Charging overrides all lit segments with blue.
+[[lighting.conditional_scene]]
+layer = { layer = 2, active = true }
+battery = { node = 0, min_level = 1, charge = "charging" }
+[[lighting.conditional_scene.cell]]
+target = { led = 39 }
+effect = { kind = "solid", color = [0, 64, 160] }
+[[lighting.conditional_scene]]
+layer = { layer = 2, active = true }
+battery = { node = 0, min_level = 21, charge = "charging" }
+[[lighting.conditional_scene.cell]]
+target = { led = 38 }
+effect = { kind = "solid", color = [0, 64, 160] }
+[[lighting.conditional_scene]]
+layer = { layer = 2, active = true }
+battery = { node = 0, min_level = 41, charge = "charging" }
+[[lighting.conditional_scene.cell]]
+target = { led = 37 }
+effect = { kind = "solid", color = [0, 64, 160] }
+[[lighting.conditional_scene]]
+layer = { layer = 2, active = true }
+battery = { node = 0, min_level = 61, charge = "charging" }
+[[lighting.conditional_scene.cell]]
+target = { led = 36 }
+effect = { kind = "solid", color = [0, 64, 160] }
+[[lighting.conditional_scene]]
+layer = { layer = 2, active = true }
+battery = { node = 0, min_level = 81, charge = "charging" }
+[[lighting.conditional_scene.cell]]
+target = { led = 35 }
+effect = { kind = "solid", color = [0, 64, 160] }
+
+[[lighting.conditional_scene]]
+layer = { layer = 2, active = true }
+battery = { node = 1, min_level = 1, charge = "charging" }
+[[lighting.conditional_scene.cell]]
+target = { led = 79 }
+effect = { kind = "solid", color = [0, 64, 160] }
+[[lighting.conditional_scene]]
+layer = { layer = 2, active = true }
+battery = { node = 1, min_level = 21, charge = "charging" }
+[[lighting.conditional_scene.cell]]
+target = { led = 78 }
+effect = { kind = "solid", color = [0, 64, 160] }
+[[lighting.conditional_scene]]
+layer = { layer = 2, active = true }
+battery = { node = 1, min_level = 41, charge = "charging" }
+[[lighting.conditional_scene.cell]]
+target = { led = 77 }
+effect = { kind = "solid", color = [0, 64, 160] }
+[[lighting.conditional_scene]]
+layer = { layer = 2, active = true }
+battery = { node = 1, min_level = 61, charge = "charging" }
+[[lighting.conditional_scene.cell]]
+target = { led = 76 }
+effect = { kind = "solid", color = [0, 64, 160] }
+[[lighting.conditional_scene]]
+layer = { layer = 2, active = true }
+battery = { node = 1, min_level = 81, charge = "charging" }
+[[lighting.conditional_scene.cell]]
+target = { led = 75 }
+effect = { kind = "solid", color = [0, 64, 160] }
 
 [[lighting.layer_scene]]
 layer = 0

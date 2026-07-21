@@ -87,6 +87,8 @@ pub const fn rynk_controller() -> RynkLightingController<'static> {
         OVERLAY_CAPACITY as u16,
     )
     .with_scene_capacity(SCENE_CAPACITY as u16)
+    .with_conditional_scenes(&crate::LIGHTING_CONDITIONAL_SCENE_CELLS)
+    .with_controls(crate::LIGHTING_CONTROLS)
 }
 
 /// Latch live battery state for the status source and request a fresh render.
