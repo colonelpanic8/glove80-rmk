@@ -314,3 +314,50 @@ compiled-scene flattening, native/WASM typed methods, bounded native read-all
 helpers, independent compiled/runtime layer policies, complete layer-state
 snapshots (including default-layer invalidation), and full-stack acceptance
 coverage.
+
+## 2026-07-21 — Authoritative live modifier state
+
+Rynkbench cannot accurately render shifted characters from `GetMatrixState`:
+the bitmap reports physical switches, not RMK's resolved modifier state, and a
+layer-changing Shift action may resolve differently after its layer activates.
+One-shot, macro, fork-suppressed, and combined modifier effects are likewise
+not reconstructible from the matrix and keymap.
+
+Concrete additive request:
+
+- `GetModifierState` status endpoint returning the current resolved
+  `ModifierCombination` used for the HID keyboard report.
+- `ModifierChange` topic carrying that same snapshot (or an invalidation that
+  prompts `GetModifierState`) whenever the resolved report modifiers change.
+- Back the endpoint/topic from one authoritative current-value snapshot updated
+  alongside `send_keyboard_report_with_resolved_modifiers`; do not expose only
+  `held_modifiers`, because one-shot/with-modifier/fork/macro effects also
+  affect the actual report.
+- Add rmk-types command/topic rows and golden vectors, RMK handler/topic tests,
+  native Rynk and WASM client methods, and legacy `UnknownCmd` fallback.
+
+RMK already owns `held_modifiers`, computes the final value in
+`resolve_modifiers`, and publishes internal `ModifierEvent`s, but no Rynk wire
+snapshot or topic currently exposes the final resolved state.
+
+## 2026-07-21 — Declarative three-state lighting output policy
+
+Implemented additively in the pinned RMK fork for Glove80 and Rynkbench:
+
+- `GetLightingOutputMode = 0x0920` and
+  `LightingFeatureFlags::OUTPUT_MODE = 1 << 10`.
+- The readback reports `AlwaysOn`, `AlwaysOff`, or `PoweredOnly`, USB/VBUS
+  presence, wake-layer activity, the resulting effective output state, whether
+  power is authoritative or local to each renderer, the configured cycle
+  action and wake layer, and an optional stable-LED indicator with an effect
+  for each mode.
+- `[lighting.controls]` owns the initial mode, cycle action, wake layer, and
+  mode indicator. The wake layer temporarily forces output on without mutating
+  the selected mode.
+- Split renderer snapshots carry the selected mode and authority context. With
+  local power scope configured, each half instead gates its own output from its
+  local VBUS presence while retaining the shared mode and wake-layer state.
+
+The existing `GetLightingState` and conditional-scene control payload remain
+wire-stable. Legacy on/off commands map to `AlwaysOn`/`AlwaysOff`; the new
+three-state metadata lives only behind the new feature bit and endpoint.
