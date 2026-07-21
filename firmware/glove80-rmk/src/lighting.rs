@@ -1,20 +1,42 @@
-//! Shared Glove80 LED hardware and the right-half frame receiver.
+//! Shared Glove80 LED hardware and half-local standard lighting processors.
+
+use core::cell::Cell;
+use core::num::NonZeroU32;
 
 use embassy_nrf::gpio::{Level, Output, OutputDrive, Pin};
 use embassy_nrf::peripherals::{PWM0, SPI3};
 use embassy_nrf::pwm::{DutyCycle, Prescaler, SimpleConfig, SimplePwm};
 use embassy_nrf::spim::{self, Spim};
 use embassy_nrf::{Peri, bind_interrupts, peripherals};
+use embassy_sync::blocking_mutex::Mutex as BlockingMutex;
 use embassy_time::{Duration, Timer};
 use rmk::core_traits::Runnable;
-use rmk::lighting::Rgb8;
-use rmk::split_app::SplitAppData;
+use rmk::lighting::{
+    EmptySource, IndicatorState, LayerState, LightingContext, LightingMailbox, LightingOutput,
+    LightingProcessor, LightingService, LogicalFrame, Rgb8, SnapshotProvider, StandardCommand,
+    StandardError, StandardLightingEngine, StandardReplicaSlot, StandardState,
+};
 
 bind_interrupts!(struct Irqs {
     SPIM3 => spim::InterruptHandler<peripherals::SPI3>;
 });
 
 pub const LEDS_PER_HALF: usize = 40;
+pub const TOTAL_LEDS: usize = LEDS_PER_HALF * 2;
+pub const OVERLAY_CAPACITY: usize = 64;
+pub const COMMAND_CAPACITY: usize = 4;
+
+pub type Engine =
+    StandardLightingEngine<'static, EmptySource, EmptySource, TOTAL_LEDS, OVERLAY_CAPACITY>;
+pub type CoreMailbox = LightingMailbox<
+    StandardCommand<OVERLAY_CAPACITY>,
+    StandardState,
+    StandardError,
+    COMMAND_CAPACITY,
+>;
+
+pub static CORE_MAILBOX: CoreMailbox = LightingMailbox::new();
+pub static REPLICA_SLOT: StandardReplicaSlot<OVERLAY_CAPACITY> = StandardReplicaSlot::new();
 
 /// MoErgo's documented 80% channel ceiling. This remains in the hardware
 /// driver below every user-controlled transform and protocol path.
@@ -27,9 +49,7 @@ const CHAIN_POWER_SETTLE: Duration = Duration::from_millis(120);
 const STATUS_PWM_TOP: u16 = 320;
 const STATUS_PWM_DUTY: u16 = 16;
 
-pub(crate) const FRAME_TAG: u8 = 0x4c;
 pub(crate) const BOOTLOADER_TAG: u8 = 0xb0;
-pub(crate) const FRAME_HEADER: usize = 4;
 
 struct Ws2812Chain {
     spim: Spim<'static>,
@@ -104,11 +124,112 @@ impl LightingHardware {
     }
 }
 
-pub struct PeripheralLighting {
+#[derive(Clone, Copy, Debug)]
+pub enum OutputError {
+    Spi,
+}
+
+/// One physical half's sink for an otherwise board-wide logical frame.
+/// Keeping the same 80 stable slots in both engines avoids a second topology
+/// or layer-scene mapping while all animation sampling remains local.
+pub struct HalfOutput {
     hardware: LightingHardware,
-    staged: [Rgb8; LEDS_PER_HALF],
-    sequence: u8,
-    received: usize,
+    first_slot: usize,
+}
+
+impl HalfOutput {
+    pub fn left(hardware: LightingHardware) -> Self {
+        Self {
+            hardware,
+            first_slot: 0,
+        }
+    }
+
+    pub fn right(hardware: LightingHardware) -> Self {
+        Self {
+            hardware,
+            first_slot: LEDS_PER_HALF,
+        }
+    }
+
+    async fn present_frame(
+        &mut self,
+        frame: &LogicalFrame<Rgb8, TOTAL_LEDS>,
+    ) -> Result<(), OutputError> {
+        let mut local = [Rgb8::BLACK; LEDS_PER_HALF];
+        local.copy_from_slice(&frame.as_slice()[self.first_slot..self.first_slot + LEDS_PER_HALF]);
+        self.hardware
+            .write(&local)
+            .await
+            .map_err(|_| OutputError::Spi)
+    }
+}
+
+impl LightingOutput<LogicalFrame<Rgb8, TOTAL_LEDS>> for HalfOutput {
+    type Error = OutputError;
+
+    async fn initialize(&mut self) -> Result<(), Self::Error> {
+        self.hardware.initialize().await;
+        Ok(())
+    }
+
+    async fn present(&mut self, frame: &LogicalFrame<Rgb8, TOTAL_LEDS>) -> Result<(), Self::Error> {
+        self.present_frame(frame).await
+    }
+
+    async fn suspend(&mut self) -> Result<(), Self::Error> {
+        self.present_frame(&LogicalFrame::new(Rgb8::BLACK)).await
+    }
+
+    async fn resume(&mut self) -> Result<(), Self::Error> {
+        Ok(())
+    }
+
+    fn retry_after(
+        &self,
+        _operation: rmk::lighting::OutputOperation,
+        _error: &Self::Error,
+    ) -> Option<NonZeroU32> {
+        NonZeroU32::new(50)
+    }
+}
+
+pub fn engine() -> Engine {
+    Engine::new(
+        crate::LIGHTING_BACKGROUND,
+        crate::LIGHTING_LAYER_SCENES,
+        EmptySource,
+        EmptySource,
+    )
+}
+
+static PERIPHERAL_CONTEXT: BlockingMutex<rmk::RawMutex, Cell<LightingContext>> =
+    BlockingMutex::new(Cell::new(LightingContext {
+        layers: LayerState::new(0, 0, 1),
+        indicators: IndicatorState {
+            num_lock: false,
+            caps_lock: false,
+            scroll_lock: false,
+            compose: false,
+            kana: false,
+        },
+    }));
+
+#[derive(Clone, Copy)]
+pub struct PeripheralState;
+
+impl PeripheralState {
+    fn set(context: LightingContext) {
+        PERIPHERAL_CONTEXT.lock(|current| current.set(context));
+    }
+}
+
+impl SnapshotProvider for PeripheralState {
+    type Snapshot = LightingContext;
+
+    fn snapshot(&self) -> Self::Snapshot {
+        PERIPHERAL_CONTEXT.lock(Cell::get)
+    }
 }
 
 pub fn init_peripheral(
@@ -117,60 +238,70 @@ pub fn init_peripheral(
     chain_power_pin: Peri<'static, impl Pin>,
     pwm: Peri<'static, PWM0>,
     status_led_pin: Peri<'static, impl Pin>,
-) -> PeripheralLighting {
-    PeripheralLighting {
-        hardware: LightingHardware::new(spi, data_pin, chain_power_pin, pwm, status_led_pin),
-        staged: [Rgb8::BLACK; LEDS_PER_HALF],
-        sequence: 0,
-        received: 0,
+) -> LightingProcessor<'static, PeripheralState, Engine, HalfOutput, COMMAND_CAPACITY> {
+    let service = LightingService::new(PeripheralState, engine(), LogicalFrame::new(Rgb8::BLACK));
+    let output = HalfOutput::right(LightingHardware::new(
+        spi,
+        data_pin,
+        chain_power_pin,
+        pwm,
+        status_led_pin,
+    ));
+    LightingProcessor::new(service, output, &CORE_MAILBOX)
+}
+
+pub struct PeripheralReplication {
+    stage: crate::split_lighting::SnapshotStage,
+}
+
+pub const fn peripheral_replication() -> PeripheralReplication {
+    PeripheralReplication {
+        stage: crate::split_lighting::SnapshotStage::new(),
     }
 }
 
-impl PeripheralLighting {
-    async fn process_message(&mut self, message: SplitAppData) {
-        let payload = message.payload();
-        if payload == [BOOTLOADER_TAG] {
+impl PeripheralReplication {
+    async fn process(&mut self, data: rmk::split_app::SplitAppData) {
+        if data.payload() == [BOOTLOADER_TAG] {
             rmk::boot::jump_to_bootloader();
             return;
         }
-        if payload.len() < FRAME_HEADER || payload[0] != FRAME_TAG {
+        let Ok(message) = crate::split_lighting::Message::decode(data) else {
+            return;
+        };
+        let Some((generation, snapshot)) = self.stage.apply(message) else {
+            return;
+        };
+        PeripheralState::set(snapshot.context);
+        let revision = snapshot.revision;
+        if REPLICA_SLOT.put(snapshot).is_err() {
+            defmt::warn!("lighting: peripheral replica slot busy");
             return;
         }
-        let sequence = payload[1];
-        let start = payload[2] as usize;
-        let count = payload[3] as usize;
-        if count == 0 || payload.len() != FRAME_HEADER + count * 3 {
-            return;
-        }
-        if start == 0 {
-            self.sequence = sequence;
-            self.received = 0;
-        }
-        if sequence != self.sequence || start != self.received || start + count > LEDS_PER_HALF {
-            self.received = 0;
-            return;
-        }
-        for index in 0..count {
-            let offset = FRAME_HEADER + index * 3;
-            self.staged[start + index] =
-                Rgb8::new(payload[offset], payload[offset + 1], payload[offset + 2]);
-        }
-        self.received += count;
-        if self.received == LEDS_PER_HALF {
-            if let Err(error) = self.hardware.write(&self.staged).await {
-                defmt::warn!("lighting: peripheral SPI write failed: {:?}", error);
+        match CORE_MAILBOX
+            .request(StandardCommand::ApplyReplica(&REPLICA_SLOT))
+            .await
+        {
+            Ok(_) => {
+                let ack = crate::split_lighting::Message::Ack {
+                    generation,
+                    revision,
+                }
+                .encode();
+                if rmk::split_app::SPLIT_APP_PERIPH_TX.try_send(ack).is_err() {
+                    defmt::warn!("lighting: peripheral replica ack queue full");
+                }
             }
-            self.received = 0;
+            Err(_) => defmt::warn!("lighting: peripheral rejected replica"),
         }
     }
 }
 
-impl Runnable for PeripheralLighting {
+impl Runnable for PeripheralReplication {
     async fn run(&mut self) -> ! {
-        self.hardware.initialize().await;
         let mut link = rmk::split_app::SPLIT_APP_LINK
             .receiver()
-            .expect("lighting owns one split-link receiver");
+            .expect("lighting replication owns one split-link receiver");
         loop {
             match embassy_futures::select::select(
                 link.changed(),
@@ -179,12 +310,10 @@ impl Runnable for PeripheralLighting {
             .await
             {
                 embassy_futures::select::Either::First(_) => {
-                    self.received = 0;
+                    self.stage.reset();
                     while rmk::split_app::SPLIT_APP_RX.try_receive().is_ok() {}
                 }
-                embassy_futures::select::Either::Second(message) => {
-                    self.process_message(message).await;
-                }
+                embassy_futures::select::Either::Second(message) => self.process(message).await,
             }
         }
     }

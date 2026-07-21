@@ -5,6 +5,7 @@ mod central_lighting;
 #[allow(dead_code)] // This shared module also contains the peripheral receiver.
 mod lighting;
 mod remote_boot;
+mod split_lighting;
 
 use rmk::macros::rmk_central;
 
@@ -54,9 +55,8 @@ mod keyboard_central {
             .with_build_label(build_label.as_str())
     }
 
-    /// Central owner of the board-wide RMK lighting engine. Its output writes
-    /// the left WS2812 chain and forwards the right frame over the split app
-    /// channel.
+    /// Central authority and left-half renderer for the board-wide lighting
+    /// model. The peripheral receives declarative snapshots separately.
     #[register_processor(runnable)]
     fn lighting_processor() {
         let keymap_ref = &keymap;
@@ -68,6 +68,13 @@ mod keyboard_central {
     #[register_processor(runnable)]
     fn lighting_rynk_adapter() {
         crate::central_lighting::rynk_adapter()
+    }
+
+    /// Replicate semantic state on mutations and reconnect; animation frames
+    /// never traverse the split link.
+    #[register_processor(runnable)]
+    fn lighting_replication() {
+        crate::central_lighting::replication()
     }
 
     /// Forward the physical right-half bootloader action.

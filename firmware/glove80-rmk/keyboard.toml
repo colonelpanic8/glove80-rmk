@@ -96,15 +96,26 @@ _ _ _ _ _ _ _ _ _ _ _ _ _ _
 _ _ _ _ _ _ WM(LCtrl, LGui | LAlt) _ _ _ _ _
 """
 
-# The lighting processor (src/lighting.rs) adds a LayerChangeEvent subscriber
-# on both halves. Defaults are base subs = 1 plus an automatic +1 for the
-# split feature, which the central's peripheral-sync subscriber already uses
-# exactly. Raise the base so our subscriber has a slot (plus one spare);
-# channel_size gains headroom so rapid layer flips don't force lag-skips.
+# The local lighting processor and the central semantic-replication task both
+# subscribe. Split and Rynk feature additions are accounted for separately by
+# RMK's subscriber resolver.
 [event.layer_change]
 channel_size = 4
 pubs = 2
+subs = 3
+
+# Replication exports a fresh authoritative snapshot after engine mutations.
+[event.lighting_changed]
+channel_size = 2
+pubs = 1
 subs = 2
+
+# Indicator state is part of the renderer snapshot, so the central replica
+# task needs one slot beyond the existing lighting/Rynk/split consumers.
+[event.led_indicator]
+channel_size = 3
+pubs = 2
+subs = 4
 
 # RemoteBootloaderKey consumes resolved User12 releases on the central.
 [event.action]

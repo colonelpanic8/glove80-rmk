@@ -2,9 +2,9 @@
 
 ## Current decision
 
-Rynk owns live keymap and lighting control. The qualified downstream RMK
-dependency is `colonelpanic8/rmk:glove80-rmk/integration` at `dc2e2425`, pinned
-as the `dependencies/rmk` submodule. It composes upstream Rynk with the four
+Rynk owns live keymap and lighting control. The downstream RMK dependency is
+`colonelpanic8/rmk:glove80-rmk/integration` at `27b8bf38`, pinned as the
+`dependencies/rmk` submodule. It composes upstream Rynk with the five
 reviewable topics listed in [upstream/PATCHES.md](./upstream/PATCHES.md).
 
 The older `glove80-rynk` branch and the pre-Rynk `glove80` branch remain
@@ -18,8 +18,8 @@ vendor transport, shared-flash, keymap-operation, CRC, or VBUS patches.
 | Keymap read/write and persistence | Rynk | USB HID; native BLE GATT; browser WebHID |
 | Lighting topology, state, overlays, and readback | RMK lighting through Rynk | USB HID; native BLE GATT; browser WebHID |
 | Vial RGB Matrix compatibility | RMK lighting service | Vial host protocol |
-| Cross-half lighting frames and remote boot request | Firmware over `rmk::split_app` | RMK split link |
-| Physical LED output | Glove80 firmware | local WS2812 and power-button PWM drivers |
+| Cross-half lighting state and remote boot request | Firmware over `rmk::split_app` | RMK split link |
+| Animation sampling and physical LED output | Each Glove80 half locally | local RMK renderer, WS2812, and power-button PWM drivers |
 
 The RMK lighting service is authoritative. A successful Rynk or Vial mutation
 changes that service state; subsequent Rynk/Vial queries and rendered frames
@@ -48,6 +48,8 @@ and checksum.
   exercised on physical Glove80 hardware.
 - The complete composed RMK feature matrix, Rynk native tests/doctests, WASM
   package/typecheck, and clippy gates pass at the current integration tree.
+- Split renderer replication and both embedded halves compile at the current
+  development pin; physical phase/latency qualification remains pending.
 - The repository check and both release cross-builds are required after every
   pin update.
 - Interactive browser chooser, BLE-only hardware sessions, reconnect/outage,

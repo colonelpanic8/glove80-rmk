@@ -2,8 +2,8 @@
 
 `dependencies/rmk` follows the stable fork branch name
 `glove80-rmk/integration` and pins one exact commit from it. The integration
-branch contains no unique implementation commits: it is rebuilt from the
-upstream Rynk base and the independently reviewable topic branches.
+branch is rebuilt from the upstream Rynk base and independently reviewable
+topic branches, then retains the existing post-composition Rynk fixes.
 
 ## Branch graph
 
@@ -12,26 +12,30 @@ HaoboGu/rmk:feat/rynk
 ├── glove80-rmk/split-app ──┐
 │                           ├── glove80-rmk/lighting
 ├── glove80-rmk/runtime-hooks
-└── glove80-rmk/rynk-usb-hid
+├── glove80-rmk/rynk-usb-hid
+└── glove80-rmk/build-info
 
 feat/rynk + lighting + runtime-hooks + rynk-usb-hid
-    └── glove80-rmk/integration
+    └── octopus merge + build-info merge
+        └── split-bootloader routing + unlock policy
+            └── glove80-rmk/integration
 ```
 
 `glove80-rmk/lighting` includes `glove80-rmk/split-app`, so Git records the
 split tip through the lighting parent rather than adding a redundant parent to
 the octopus merge.
 
-## Current published set
+## Current composed set
 
 | Ref | Commit |
 | --- | --- |
 | `HaoboGu/rmk:feat/rynk` | `8bfc94f715fbb9d68feb5d6f2dc1137800869f03` |
 | `colonelpanic8/rmk:glove80-rmk/split-app` | `6f436cf103929760a3c03ff335cd713856fe7182` |
-| `colonelpanic8/rmk:glove80-rmk/lighting` | `d518ab4c18d5688fee12b845063989b7394d4bde` |
+| `colonelpanic8/rmk:glove80-rmk/lighting` | `aac695ad5438d2b987f6465d972f647e0d567eab` |
 | `colonelpanic8/rmk:glove80-rmk/runtime-hooks` | `47922960a9d9ef1c3b088a655d03b986ec78badc` |
 | `colonelpanic8/rmk:glove80-rmk/rynk-usb-hid` | `902c9d630d3b6d10afbd9fe8527a8806f648bf8b` |
-| `colonelpanic8/rmk:glove80-rmk/integration` | `dc2e242539b21fe553f47b9fc8f610e89defa5cd` |
+| `colonelpanic8/rmk:glove80-rmk/build-info` | `8b5dd4d00e96e1cceed41d5a8977879c4879673c` |
+| `colonelpanic8/rmk:glove80-rmk/integration` | `27b8bf38444acddfe3d7d6a408ac0f2b102103cb` |
 
 ## Refresh procedure
 
@@ -54,6 +58,11 @@ the octopus merge.
      glove80-rmk/runtime-hooks \
      glove80-rmk/rynk-usb-hid
    ```
+
+   Then merge `glove80-rmk/build-info` with the dedicated
+   `glove80-rmk: integrate Rynk build info` merge commit and replay the
+   split-bootloader routing and unlock-policy fixes already carried by the
+   integration branch.
 
 6. Push rewritten topic refs with `--force-with-lease`, then push the rebuilt
    integration ref. Never update the superproject pin before the remote

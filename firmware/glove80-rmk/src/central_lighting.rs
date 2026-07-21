@@ -1,127 +1,37 @@
 //! Central ownership of the board-wide RMK lighting engine and Rynk state.
 //!
-//! A successful presentation writes the local 40-LED chain and queues a
-//! sequence-checked right-half frame over RMK's split application channel.
+//! The central is the configuration/control authority. Both halves render
+//! board-wide declarative state locally; this module mirrors atomic semantic
+//! snapshots rather than streaming sampled right-half RGB frames.
 
-use core::num::NonZeroU32;
-
+use embassy_futures::select::{Either, Either4, select, select4};
 use embassy_nrf::Peri;
 use embassy_nrf::gpio::Pin;
 use embassy_nrf::peripherals::{PWM0, SPI3};
 use rmk::core_traits::Runnable;
+use rmk::event::{
+    EventSubscriber, LayerChangeEvent, LedIndicatorEvent, LightingChangedEvent, SubscribableEvent,
+};
 use rmk::host::{
     RynkLightingController, RynkLightingDescriptor, RynkLightingMailbox,
     StandardRynkLightingAdapter,
 };
 use rmk::keymap::KeyMap;
 use rmk::lighting::{
-    EmptySource, KeymapLightingState, LightingMailbox, LightingOutput, LightingProcessor,
-    LightingService, LogicalFrame, Rgb8, StandardCommand, StandardError, StandardLightingEngine,
-    StandardState,
+    KeymapLightingState, LightingProcessor, LightingService, LogicalFrame, Rgb8, StandardCommand,
 };
-use rmk::split_app::{SPLIT_APP_MSG_MAX, SplitAppData};
+use rmk::split_app::SplitAppData;
 
-use crate::lighting::{BOOTLOADER_TAG, FRAME_HEADER, FRAME_TAG, LEDS_PER_HALF, LightingHardware};
+use crate::lighting::{
+    BOOTLOADER_TAG, COMMAND_CAPACITY, CORE_MAILBOX, Engine, HalfOutput, LightingHardware,
+    OVERLAY_CAPACITY, REPLICA_SLOT,
+};
 
-pub const TOTAL_LEDS: usize = LEDS_PER_HALF * 2;
-pub const OVERLAY_CAPACITY: usize = 64;
-const COMMAND_CAPACITY: usize = 4;
-const PIXELS_PER_CHUNK: usize = (SPLIT_APP_MSG_MAX - FRAME_HEADER) / 3;
-const _: () = assert!(PIXELS_PER_CHUNK > 0);
-
-type Engine =
-    StandardLightingEngine<'static, EmptySource, EmptySource, TOTAL_LEDS, OVERLAY_CAPACITY>;
-type CoreMailbox = LightingMailbox<
-    StandardCommand<OVERLAY_CAPACITY>,
-    StandardState,
-    StandardError,
-    COMMAND_CAPACITY,
->;
-
-static CORE_MAILBOX: CoreMailbox = LightingMailbox::new();
 static RYNK_MAILBOX: RynkLightingMailbox = RynkLightingMailbox::new();
 
 /// Coalescing request from the resolved right-half bootloader key.
 pub static REMOTE_BOOT_REQUESTS: embassy_sync::channel::Channel<rmk::RawMutex, (), 1> =
     embassy_sync::channel::Channel::new();
-
-#[derive(Clone, Copy, Debug)]
-pub(crate) enum OutputError {
-    Spi,
-    SplitQueueFull,
-}
-
-pub(crate) struct CentralOutput {
-    hardware: LightingHardware,
-    sequence: u8,
-}
-
-impl CentralOutput {
-    fn queue_right_frame(&mut self, frame: &[Rgb8]) -> Result<(), OutputError> {
-        self.sequence = self.sequence.wrapping_add(1);
-        for (chunk_index, pixels) in frame.chunks(PIXELS_PER_CHUNK).enumerate() {
-            let start = chunk_index * PIXELS_PER_CHUNK;
-            let mut payload = [0u8; SPLIT_APP_MSG_MAX];
-            payload[0] = FRAME_TAG;
-            payload[1] = self.sequence;
-            payload[2] = start as u8;
-            payload[3] = pixels.len() as u8;
-            for (index, pixel) in pixels.iter().enumerate() {
-                let offset = FRAME_HEADER + index * 3;
-                payload[offset..offset + 3].copy_from_slice(&[pixel.r, pixel.g, pixel.b]);
-            }
-            let len = FRAME_HEADER + pixels.len() * 3;
-            let message = SplitAppData::new(&payload[..len]).expect("bounded lighting chunk");
-            rmk::split_app::SPLIT_APP_TX
-                .try_send(message)
-                .map_err(|_| OutputError::SplitQueueFull)?;
-        }
-        Ok(())
-    }
-
-    async fn present_frame(
-        &mut self,
-        frame: &LogicalFrame<Rgb8, TOTAL_LEDS>,
-    ) -> Result<(), OutputError> {
-        let mut left = [Rgb8::BLACK; LEDS_PER_HALF];
-        left.copy_from_slice(&frame.as_slice()[..LEDS_PER_HALF]);
-        self.hardware
-            .write(&left)
-            .await
-            .map_err(|_| OutputError::Spi)?;
-        self.queue_right_frame(&frame.as_slice()[LEDS_PER_HALF..])
-    }
-}
-
-impl LightingOutput<LogicalFrame<Rgb8, TOTAL_LEDS>> for CentralOutput {
-    type Error = OutputError;
-
-    async fn initialize(&mut self) -> Result<(), Self::Error> {
-        self.hardware.initialize().await;
-        Ok(())
-    }
-
-    async fn present(&mut self, frame: &LogicalFrame<Rgb8, TOTAL_LEDS>) -> Result<(), Self::Error> {
-        self.present_frame(frame).await
-    }
-
-    async fn suspend(&mut self) -> Result<(), Self::Error> {
-        let frame = LogicalFrame::new(Rgb8::BLACK);
-        self.present_frame(&frame).await
-    }
-
-    async fn resume(&mut self) -> Result<(), Self::Error> {
-        Ok(())
-    }
-
-    fn retry_after(
-        &self,
-        _operation: rmk::lighting::OutputOperation,
-        _error: &Self::Error,
-    ) -> Option<NonZeroU32> {
-        NonZeroU32::new(50)
-    }
-}
 
 pub fn init<'keymap, 'data>(
     keymap: &'keymap KeyMap<'data>,
@@ -134,22 +44,20 @@ pub fn init<'keymap, 'data>(
     'static,
     KeymapLightingState<'keymap, 'data>,
     Engine,
-    CentralOutput,
+    HalfOutput,
     COMMAND_CAPACITY,
 > {
     let provider =
         KeymapLightingState::new(keymap).expect("Glove80 layer count fits lighting state");
-    let engine = Engine::new(
-        crate::LIGHTING_BACKGROUND,
-        crate::LIGHTING_LAYER_SCENES,
-        EmptySource,
-        EmptySource,
-    );
+    let engine = crate::lighting::engine();
     let service = LightingService::new(provider, engine, LogicalFrame::new(Rgb8::BLACK));
-    let output = CentralOutput {
-        hardware: LightingHardware::new(spi, data_pin, chain_power_pin, pwm, status_led_pin),
-        sequence: 0,
-    };
+    let output = HalfOutput::left(LightingHardware::new(
+        spi,
+        data_pin,
+        chain_power_pin,
+        pwm,
+        status_led_pin,
+    ));
     LightingProcessor::new(service, output, &CORE_MAILBOX)
 }
 
@@ -167,6 +75,103 @@ pub const fn rynk_controller() -> RynkLightingController<'static> {
         },
         OVERLAY_CAPACITY as u16,
     )
+}
+
+/// Mirrors authoritative declarative state to the peripheral. Unit events
+/// are only invalidations: every transfer exports a fresh atomic snapshot,
+/// and an acknowledgement or timeout makes reconnect/loss convergence
+/// explicit.
+pub struct CentralReplication {
+    generation: u8,
+}
+
+pub const fn replication() -> CentralReplication {
+    CentralReplication { generation: 0 }
+}
+
+impl CentralReplication {
+    async fn try_send_snapshot(&mut self) -> Option<(u8, u32)> {
+        if CORE_MAILBOX
+            .request(StandardCommand::ExportReplica(&REPLICA_SLOT))
+            .await
+            .is_err()
+        {
+            return None;
+        }
+        let snapshot = REPLICA_SLOT.take().ok()?;
+        self.generation = self.generation.wrapping_add(1);
+        if crate::split_lighting::try_queue_snapshot(self.generation, &snapshot) {
+            Some((self.generation, snapshot.revision))
+        } else {
+            None
+        }
+    }
+}
+
+impl Runnable for CentralReplication {
+    async fn run(&mut self) -> ! {
+        let mut link = rmk::split_app::SPLIT_APP_LINK
+            .receiver()
+            .expect("lighting replication owns one split-link receiver");
+        let mut lighting = LightingChangedEvent::subscriber();
+        let mut layers = LayerChangeEvent::subscriber();
+        let mut indicators = LedIndicatorEvent::subscriber();
+        let mut link_up = false;
+        let mut dirty = true;
+        let mut awaiting_ack = None;
+
+        loop {
+            if link_up && dirty && awaiting_ack.is_none() {
+                match self.try_send_snapshot().await {
+                    Some(generation_and_revision) => {
+                        awaiting_ack = Some(generation_and_revision);
+                        dirty = false;
+                    }
+                    None => {
+                        embassy_time::Timer::after_millis(50).await;
+                        continue;
+                    }
+                }
+            }
+
+            let timeout = async {
+                if awaiting_ack.is_some() {
+                    embassy_time::Timer::after_millis(500).await;
+                } else {
+                    core::future::pending::<()>().await;
+                }
+            };
+            match select4(
+                link.changed(),
+                lighting.next_event(),
+                select(layers.next_event(), indicators.next_event()),
+                select(rmk::split_app::SPLIT_APP_RX.receive(), timeout),
+            )
+            .await
+            {
+                Either4::First(up) => {
+                    link_up = up;
+                    awaiting_ack = None;
+                    dirty = up;
+                }
+                Either4::Second(_) | Either4::Third(_) => dirty = true,
+                Either4::Fourth(Either::First(data)) => {
+                    if let Ok(crate::split_lighting::Message::Ack {
+                        generation,
+                        revision,
+                    }) = crate::split_lighting::Message::decode(data)
+                        && awaiting_ack == Some((generation, revision))
+                    {
+                        awaiting_ack = None;
+                    }
+                }
+                Either4::Fourth(Either::Second(())) => {
+                    awaiting_ack = None;
+                    dirty = link_up;
+                }
+            }
+        }
+    }
 }
 
 pub struct RemoteBootDispatcher;
