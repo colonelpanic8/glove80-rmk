@@ -1,8 +1,5 @@
-//! Compatibility conversion between the CLI's QMK/VIA `u16` keycode text
-//! format and Rynk's native typed `KeyAction` values.
-//!
-//! This mirrors RMK's Vial conversion at the migration boundary. Once the
-//! canonical config format stores native Rynk actions, this module can go away.
+//! Compatibility conversion between the CLI's familiar QMK/VIA `u16` keycode
+//! notation and Rynk's native typed `KeyAction` values.
 
 use rynk::rmk_types::action::{Action, KeyAction, KeyboardAction};
 use rynk::rmk_types::keycode::{HidKeyCode, KeyCode, SpecialKey};
@@ -154,7 +151,6 @@ pub fn from_via_keycode(code: u16) -> KeyAction {
         0x7c77 => KeyAction::Single(Action::TriLayerLower),
         0x7c78 => KeyAction::Single(Action::TriLayerUpper),
         0x7c79 => KeyAction::Single(Action::Special(SpecialKey::Repeat)),
-        0x7c02..=0x7c5f => KeyAction::No,
         0x7e00..=0x7e1f => KeyAction::Single(Action::User(code as u8 & 0x1f)),
         _ => KeyAction::No,
     }

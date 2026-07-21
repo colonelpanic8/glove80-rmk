@@ -1,7 +1,6 @@
 //! Rynk-backed keymap, lighting, and bootloader operations.
 //!
-//! The transactional Glove80 configuration format remains a legacy path, but
-//! live keymap and lighting state each have one owner: Rynk.
+//! Rynk is the sole protocol used by the current firmware and CLI.
 
 use std::time::Duration;
 
@@ -13,16 +12,14 @@ use rynk::rmk_types::protocol::rynk::{
     ClearLightingOverlayRequest, CommitLightingOverlayReplaceRequest, LightingBackgroundMode,
     LightingEffect, LightingEffectFlags, LightingFeatureFlags, LightingLedId, LightingMutableState,
     LightingOverlayCell, LightingRgb8, LightingState, PutLightingOverlayChunkRequest, RynkError,
-    SetKeymapBulkRequest, SetLightingOverlayRequest, SetLightingStateRequest,
-    UnsetLightingOverlayRequest,
+    SetLightingOverlayRequest, SetLightingStateRequest, UnsetLightingOverlayRequest,
 };
 use rynk::{Client, RynkDevice, RynkHostError};
 use rynk_ble::BleDevice;
 use rynk_serial::SerialDevice;
 
 use crate::keymap::{self, KeymapCommand};
-use crate::keymapcfg::{KeymapReport, KeymapStage, LayerPlan};
-use crate::lighting::{EffectArg, LightingCommand};
+use crate::lighting::{EffectArg, EffectSpec, LightingCommand};
 use crate::rynk_hid::HidDevice;
 use crate::transport::{Preference, Selector};
 
@@ -422,7 +419,7 @@ async fn operate_lighting(client: &Client, command: &LightingCommand) -> Result<
                             .cells
                             .push(LightingOverlayCell {
                                 led_id: LightingLedId(u16::from(cell.key)),
-                                effect: legacy_effect(cell.effect),
+                                effect: effect_to_rynk(cell.effect),
                                 ttl_ms,
                             })
                             .map_err(|_| anyhow!("lighting transaction chunk overflow"))?;
@@ -474,9 +471,6 @@ async fn operate_lighting(client: &Client, command: &LightingCommand) -> Result<
                 state.output_brightness, state.revision
             );
         }
-        LightingCommand::Toggle { .. } => {
-            bail!("named toggle overlays are not part of the RMK lighting model")
-        }
     }
     Ok(())
 }
@@ -495,25 +489,26 @@ fn rynk_effect(
     phase: Option<u16>,
     duty: Option<u8>,
 ) -> Result<LightingEffect> {
-    let legacy = crate::lighting::build_effect(kind.kind(), rgb, period, phase, duty)?;
-    Ok(legacy_effect(legacy))
+    Ok(effect_to_rynk(crate::lighting::build_effect(
+        kind, rgb, period, phase, duty,
+    )?))
 }
 
-fn legacy_effect(effect: glove80_host_protocol::Effect) -> LightingEffect {
+fn effect_to_rynk(effect: EffectSpec) -> LightingEffect {
     let color = LightingRgb8 {
-        r: effect.r,
-        g: effect.g,
-        b: effect.b,
+        r: effect.red,
+        g: effect.green,
+        b: effect.blue,
     };
     match effect.kind {
-        glove80_host_protocol::EffectKind::Solid => LightingEffect::Solid { color },
-        glove80_host_protocol::EffectKind::Blink => LightingEffect::Blink {
+        EffectArg::Solid => LightingEffect::Solid { color },
+        EffectArg::Blink => LightingEffect::Blink {
             color,
             period_ms: u32::from(effect.period_ms),
             phase_ms: u32::from(effect.phase_ms),
             duty: effect.duty_percent,
         },
-        glove80_host_protocol::EffectKind::Breathe => LightingEffect::Breathe {
+        EffectArg::Breathe => LightingEffect::Breathe {
             color,
             period_ms: u32::from(effect.period_ms),
             phase_ms: u32::from(effect.phase_ms),
@@ -553,74 +548,10 @@ fn read_stdin() -> Result<String> {
     Ok(text)
 }
 
-/// Read every Rynk keymap layer and convert it to the canonical config's
-/// transitional VIA `u16` representation.
-pub fn read_all_layers(selector: &Selector) -> Result<Vec<Vec<u16>>> {
-    let runtime =
-        tokio::runtime::Runtime::new().context("could not create the Rynk async runtime")?;
-    runtime.block_on(async {
-        match select_device(selector).await? {
-            Device::Hid(device) => read_layers_device(device).await,
-            Device::Serial(device) => read_layers_device(device).await,
-            Device::Ble(device) => read_layers_device(device).await,
-        }
-    })
-}
-
-/// Apply canonical layer plans through Rynk, returning the same report shape
-/// the previous Glove80 keymap bridge used.
-pub fn apply_plans(
-    selector: &Selector,
-    plans: &[LayerPlan],
-    declared_layer_count: usize,
-    mut stage: impl FnMut(KeymapStage),
-) -> Result<KeymapReport> {
-    let runtime =
-        tokio::runtime::Runtime::new().context("could not create the Rynk async runtime")?;
-    let (report, stages) = runtime.block_on(async {
-        match select_device(selector).await? {
-            Device::Hid(device) => apply_plans_device(device, plans, declared_layer_count).await,
-            Device::Serial(device) => apply_plans_device(device, plans, declared_layer_count).await,
-            Device::Ble(device) => apply_plans_device(device, plans, declared_layer_count).await,
-        }
-    })?;
-    for event in stages {
-        stage(event);
-    }
-    Ok(report)
-}
-
 async fn run_device<D: RynkDevice>(device: D, command: &KeymapCommand) -> Result<()> {
     let label = device.label();
     let (client, mut driver) = connect_device(device, &label).await?;
     match select(driver.run(&client), operate(&client, command)).await {
-        Either::First(error) => Err(anyhow!("Rynk connection to {label} ended: {error}")),
-        Either::Second(result) => result,
-    }
-}
-
-async fn read_layers_device<D: RynkDevice>(device: D) -> Result<Vec<Vec<u16>>> {
-    let label = device.label();
-    let (client, mut driver) = connect_device(device, &label).await?;
-    match select(driver.run(&client), read_layers(&client)).await {
-        Either::First(error) => Err(anyhow!("Rynk connection to {label} ended: {error}")),
-        Either::Second(result) => result,
-    }
-}
-
-async fn apply_plans_device<D: RynkDevice>(
-    device: D,
-    plans: &[LayerPlan],
-    declared_layer_count: usize,
-) -> Result<(KeymapReport, Vec<KeymapStage>)> {
-    let label = device.label();
-    let (client, mut driver) = connect_device(device, &label).await?;
-    match select(
-        driver.run(&client),
-        apply(&client, plans, declared_layer_count),
-    )
-    .await
-    {
         Either::First(error) => Err(anyhow!("Rynk connection to {label} ended: {error}")),
         Either::Second(result) => result,
     }
@@ -764,155 +695,13 @@ async fn read_all_actions(
     Ok(actions)
 }
 
-async fn read_layers(client: &Client) -> Result<Vec<Vec<u16>>> {
-    let capabilities = client.get_capabilities().await?;
-    check_grid(
-        capabilities.num_rows,
-        capabilities.num_cols,
-        capabilities.num_layers,
-    )?;
-    let actions = read_all_actions(client, &capabilities).await?;
-    let layer_size = usize::from(capabilities.num_rows) * usize::from(capabilities.num_cols);
-    actions
-        .chunks(layer_size)
-        .enumerate()
-        .map(|(layer, actions)| {
-            actions
-                .iter()
-                .copied()
-                .enumerate()
-                .map(|(offset, action)| action_to_via(action, layer as u8, offset))
-                .collect()
-        })
-        .collect()
-}
-
-async fn apply(
-    client: &Client,
-    plans: &[LayerPlan],
-    declared_layer_count: usize,
-) -> Result<(KeymapReport, Vec<KeymapStage>)> {
-    let capabilities = client.get_capabilities().await?;
-    check_grid(
-        capabilities.num_rows,
-        capabilities.num_cols,
-        capabilities.num_layers,
-    )?;
-    if let Some(plan) = plans
-        .iter()
-        .find(|plan| plan.slot >= capabilities.num_layers)
-    {
-        bail!(
-            "layer \"{}\" occupies slot {} but Rynk reports only {} layer(s)",
-            plan.id,
-            plan.slot,
-            capabilities.num_layers
-        );
-    }
-    let exact_plans = plans_with_trailing_clears(
-        plans,
-        declared_layer_count,
-        capabilities.num_layers,
-        capabilities.num_rows,
-        capabilities.num_cols,
-    )?;
-
-    let mut report = KeymapReport::default();
-    let mut stages = Vec::new();
-    let page_size = if capabilities.bulk_transfer_supported {
-        usize::from(capabilities.max_bulk_keys.max(1))
-    } else {
-        1
-    };
-    for plan in &exact_plans {
-        stages.push(KeymapStage::LayerBegun {
-            slot: plan.slot,
-            id: plan.id.clone(),
-        });
-        let actions: Vec<KeyAction> = plan
-            .codes
-            .iter()
-            .copied()
-            .map(crate::rynk_keycode::from_via_keycode)
-            .collect();
-        let mut layer_lossy = 0usize;
-        for (page_index, page) in actions.chunks(page_size).enumerate() {
-            let start = page_index * page_size;
-            let row = (start / usize::from(capabilities.num_cols)) as u8;
-            let col = (start % usize::from(capabilities.num_cols)) as u8;
-            if capabilities.bulk_transfer_supported {
-                client
-                    .set_keymap_bulk(SetKeymapBulkRequest {
-                        layer: plan.slot,
-                        start_row: row,
-                        start_col: col,
-                        actions: page.to_vec(),
-                    })
-                    .await?;
-            } else {
-                client.set_key(plan.slot, row, col, page[0]).await?;
-            }
-
-            for (offset, requested) in page.iter().copied().enumerate() {
-                let flat = start + offset;
-                let read_row = (flat / usize::from(capabilities.num_cols)) as u8;
-                let read_col = (flat % usize::from(capabilities.num_cols)) as u8;
-                let stored = client.get_key(plan.slot, read_row, read_col).await?;
-                let requested_code = crate::rynk_keycode::to_via_keycode(requested);
-                let stored_code = crate::rynk_keycode::to_via_keycode(stored);
-                if requested_code != stored_code {
-                    layer_lossy += 1;
-                    report
-                        .lossy
-                        .push((plan.slot, flat as u8, requested_code, stored_code));
-                }
-            }
-            report.entries_written += page.len();
-            stages.push(KeymapStage::Batch {
-                slot: plan.slot,
-                written: (start + page.len()).min(actions.len()),
-                total: actions.len(),
-            });
-        }
-        stages.push(KeymapStage::LayerDone {
-            slot: plan.slot,
-            lossy: layer_lossy,
-        });
-    }
-    Ok((report, stages))
-}
-
-fn plans_with_trailing_clears(
-    plans: &[LayerPlan],
-    declared_layer_count: usize,
-    device_layer_count: u8,
-    rows: u8,
-    cols: u8,
-) -> Result<Vec<LayerPlan>> {
-    if declared_layer_count > usize::from(device_layer_count) {
-        bail!(
-            "the canonical config declares {declared_layer_count} layer(s), but Rynk reports only {device_layer_count} layer(s)"
-        );
-    }
-    let mut exact_plans = plans.to_vec();
-    for slot in declared_layer_count..usize::from(device_layer_count) {
-        exact_plans.push(LayerPlan {
-            slot: slot as u8,
-            id: "clear trailing".to_string(),
-            name: None,
-            codes: vec![0; usize::from(rows) * usize::from(cols)],
-        });
-    }
-    Ok(exact_plans)
-}
-
 fn action_to_via(action: KeyAction, layer: u8, offset: usize) -> Result<u16> {
     let code = crate::rynk_keycode::to_via_keycode(action);
     if code == 0 && !matches!(action, KeyAction::No) {
         let row = offset / usize::from(GLOVE80_COLS);
         let col = offset % usize::from(GLOVE80_COLS);
         bail!(
-            "Rynk action {action:?} at layer {layer} r{row},c{col} cannot be represented by the CLI's legacy VIA keycode format"
+            "Rynk action {action:?} at layer {layer} r{row},c{col} cannot be represented by the CLI's VIA-compatible keycode notation"
         );
     }
     Ok(code)
@@ -984,8 +773,6 @@ fn select_hid(requested: Option<&str>) -> Result<HidDevice> {
                 .nth(index)
                 .expect("index came from devices"));
         }
-        // Combined config commands pass the sibling product-protocol hidraw
-        // node, so a unique Rynk HID interface is still an unambiguous match.
     }
     one_device(devices, "Rynk USB HID")
 }
@@ -996,15 +783,6 @@ fn select_serial(requested: Option<&str>) -> Result<SerialDevice> {
     }
     let devices = SerialDevice::discover().context("Rynk USB discovery failed")?;
     if let Some(path) = requested {
-        if path.starts_with("/dev/hidraw") {
-            // Combined config operations use the hidraw path for the Glove80
-            // lighting transport. Older Rynk firmware exposes a sibling CDC
-            // interface, so select it by its immutable RYNK serial marker.
-            return one_device(
-                devices,
-                "Rynk USB serial associated with the selected hidraw device",
-            );
-        }
         return devices
             .into_iter()
             .find(|device| device.path == path)
@@ -1055,29 +833,5 @@ mod tests {
             format_unlock_keys(&[(0, 0), (0, 13)]),
             "F1 + F10 (the far-left and far-right keys of the top row; matrix (0,0) + (0,13))"
         );
-    }
-
-    #[test]
-    fn canonical_keymap_clears_every_trailing_device_layer() {
-        let plans = vec![LayerPlan {
-            slot: 0,
-            id: "base".into(),
-            name: Some("Base".into()),
-            codes: vec![4; 84],
-        }];
-        let exact = plans_with_trailing_clears(&plans, 5, 8, 6, 14).unwrap();
-        assert_eq!(exact.len(), 4);
-        assert_eq!(exact[0], plans[0]);
-        assert_eq!(
-            exact[1..].iter().map(|plan| plan.slot).collect::<Vec<_>>(),
-            vec![5, 6, 7]
-        );
-        assert!(exact[1..].iter().all(|plan| plan.codes == vec![0; 84]));
-    }
-
-    #[test]
-    fn canonical_keymap_rejects_more_layers_than_the_device() {
-        let error = plans_with_trailing_clears(&[], 9, 8, 6, 14).unwrap_err();
-        assert!(error.to_string().contains("declares 9 layer(s)"));
     }
 }

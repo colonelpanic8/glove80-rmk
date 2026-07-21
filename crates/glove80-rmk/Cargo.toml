@@ -3,7 +3,7 @@ name = "glove80-rmk"
 version = "0.1.0"
 edition = "2024"
 license = "MIT"
-description = "RMK firmware spike for the MoErgo Glove80 (see docs/rmk-evaluation.md)"
+description = "RMK firmware for the MoErgo Glove80"
 
 # Standalone workspace: the repo root workspace builds host tools for the
 # native target; this crate cross-compiles for thumbv7em-none-eabihf.

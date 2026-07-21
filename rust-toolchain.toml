@@ -1,8 +1,8 @@
 [toolchain]
-# Pinned like crates/glove80-host-protocol and crates/glove80-rmk: this machine's
+# Pinned like crates/glove80-rmk: this machine's
 # rustup "stable" channel install is broken (channel sync fails), and a
 # concrete version keeps builds reproducible. Nested rust-toolchain.toml
-# files (rmk/, protocol/) still take precedence for builds run inside them.
+# files (such as the firmware's) still take precedence when entered directly.
 channel = "1.97.0"
 components = ["clippy", "rust-src", "rustfmt"]
-targets = ["thumbv7em-none-eabihf", "wasm32-unknown-unknown"]
+targets = ["thumbv7em-none-eabihf"]

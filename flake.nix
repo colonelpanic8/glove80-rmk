@@ -26,7 +26,7 @@
         devShells.default = pkgs.mkShell {
           packages = [
             rustToolchain
-            pkgs.nodejs
+            pkgs.just
             pkgs.nixpkgs-fmt
             pkgs.pkg-config
             pkgs.dbus.dev

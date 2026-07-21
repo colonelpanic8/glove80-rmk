@@ -2,25 +2,15 @@
 name = "glove80-control"
 version = "0.1.0"
 edition = "2021"
-description = "Control Glove80 keymaps and lighting over Rynk, with legacy config tooling"
+description = "Control Glove80 keymaps, lighting, versions, and bootloaders over Rynk"
 license = "MIT"
 
 [dependencies]
 anyhow = "1.0"
 clap = { version = "4.5", features = ["derive"] }
-crc32fast = "1.4"
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
-toml = "0.8"
-# RMK host protocol (Phase 2): shared wire codec + transports.
-glove80-host-protocol = { path = "../glove80-host-protocol", features = ["std"] }
-heapless = { version = "0.8", default-features = false }
 # USB transport: direct hidraw ioctls (no libudev/hidapi C dependency).
 libc = "0.2"
-# BLE transport: BlueZ over D-Bus via pure-Rust zbus (no libdbus C dependency).
-zbus = "5"
-# RMK-native configuration protocol. This owns live keymap and lighting
-# operations; the older product protocol remains for legacy persisted configs.
+# RMK-native configuration protocol for USB, serial, and BLE operations.
 rynk = { path = "../../dependencies/rmk/rynk" }
 rynk-serial = { path = "../../dependencies/rmk/rynk/rynk-serial" }
 rynk-ble = { path = "../../dependencies/rmk/rynk/rynk-ble" }

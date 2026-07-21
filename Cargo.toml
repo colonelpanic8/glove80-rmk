@@ -1,12 +1,11 @@
 [workspace]
-members = ["crates/glove80-control"]
+members = ["crates/glove80-control", "crates/xtask"]
 default-members = ["crates/glove80-control"]
-# glove80-host-protocol is a path dependency with its own [workspace];
-# exclude it so Cargo keeps it a separate workspace root.
+# The embedded firmware is a standalone workspace because it cross-compiles.
 exclude = [
   # Agent/task worktrees checked out under the repo root stay separate roots.
   ".worktrees",
-  "crates/glove80-host-protocol",
+  "crates/glove80-rmk",
   "dependencies/rmk/rmk",
   "dependencies/rmk/rmk-config",
   "dependencies/rmk/rmk-macro",
