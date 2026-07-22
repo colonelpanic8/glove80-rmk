@@ -76,8 +76,8 @@ keys = """
 User10 No No No No User2 No No No No No User11
 No No No No No No User3 No No No No No No No
 No No No No No No No No No No No No No No
-Bootloader No No No No No User0 No No No No No No User12
-Reboot No No No No No User1 No No No No No No Reboot
+Bootloader User13 BacklightDown BacklightUp No No User0 No No No No No No User12
+Reboot No RgbTog RgbModeForward RgbHui No User1 No No No No No No Reboot
 No No No No No OutputUsb No No No No No TO(3)
 """
 
@@ -100,7 +100,7 @@ _ _ _ _ _ _ _ TG(4) _ _ _ _ _ _
 _ _ _ _ _ _ _ _ _ _ _ _ _ _
 _ _ _ _ _ _ _ _ _ _ _ _ _ _
 _ _ _ _ _ _ _ _ _ _ _ _ _ _
-_ _ _ _ _ _ WM(LCtrl, LGui | LAlt) _ _ _ _ _
+_ _ _ _ _ _ WM(LCtrl, LGui | LAlt | LShift) _ _ _ _ _
 """
 
 # Each half's Reactive-lighting key-hit processor subscribes in addition to

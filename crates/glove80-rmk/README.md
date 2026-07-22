@@ -22,8 +22,9 @@ only after a complete 40-pixel frame arrives.
 
 `src/lighting.rs` contains the shared WS2812 hardware driver and peripheral
 receiver. Both halves use SPIM3 at 4 MHz with GRB wire order. Every channel is
-hard-clamped to 204/255 (80%) in the final driver, below all host-controlled
-state. Chain power settles for 120 ms before the first frame.
+proportionally scaled to a maximum of 230/255 (about 90%) in the final driver,
+below all host-controlled state. Chain power settles for 120 ms before the
+first frame.
 
 The firmware uses RMK's native Rynk protocol for keymap, lighting, version,
 and bootloader operations; no separate product protocol is maintained here.

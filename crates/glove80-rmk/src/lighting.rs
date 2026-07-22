@@ -125,9 +125,15 @@ impl BatteryStatusProvider for GloveBatteryProvider {
     }
 }
 
-/// MoErgo's documented 80% channel ceiling. This remains in the hardware
-/// driver below every user-controlled transform and protocol path.
-const CHANNEL_CEILING: u8 = 204;
+/// Ivan's 90% hardware-output limit. This remains in the hardware driver below
+/// every user-controlled transform and protocol path while retaining some
+/// headroom. Scale rather than clamp so RMK's global brightness has no dead
+/// zone at the top of its range and RGB ratios remain intact.
+const CHANNEL_CEILING: u8 = 230;
+
+const fn limit_channel(channel: u8) -> u8 {
+    ((channel as u16 * CHANNEL_CEILING as u16 + u8::MAX as u16 / 2) / u8::MAX as u16) as u8
+}
 const ONE_FRAME: u8 = 0x70;
 const ZERO_FRAME: u8 = 0x40;
 const RESET_BYTES: usize = 48;
@@ -159,7 +165,7 @@ impl Ws2812Chain {
         let mut encoded = 0;
         for pixel in frame {
             for channel in [pixel.g, pixel.r, pixel.b] {
-                let channel = channel.min(CHANNEL_CEILING);
+                let channel = limit_channel(channel);
                 for bit in (0..8).rev() {
                     self.buf[encoded] = if channel & (1 << bit) == 0 {
                         ZERO_FRAME
@@ -282,14 +288,14 @@ impl LightingOutput<LogicalFrame<Rgb8, TOTAL_LEDS>> for HalfOutput {
 }
 
 pub fn engine() -> Engine {
-    // Half brightness (0x80) as the initial value: the hardware driver's 204
-    // channel ceiling and the per-key diffusors make full-scale PaletteFx
-    // output harsher than useful; the default speed and first palette match
-    // the effect pack's own boot state.
+    // Start PaletteFX disabled. Toggling it on restores half brightness
+    // (0x80): the hardware output limit and per-key diffusors make full-scale
+    // effect output harsher than useful.
     let palettefx = PaletteFxSource::new(
         TopologyLayout::new(&topology_config::LIGHTING_TOPOLOGY),
         &HIT_QUEUE,
         PaletteFxConfig {
+            initial_enabled: false,
             initial_val: 0x80,
             initial_palette: 0,
             ..PaletteFxConfig::default()
@@ -302,6 +308,7 @@ pub fn engine() -> Engine {
         ConditionalScenes::new(&crate::LIGHTING_CONDITIONAL_SCENE_CELLS, &GLOVE_BATTERIES),
     )
     .with_controls(crate::LIGHTING_CONTROLS)
+    .with_battery_status_provider(&GLOVE_BATTERIES)
 }
 
 /// Feed pressed keys to the Reactive PaletteFx effect on this half's own

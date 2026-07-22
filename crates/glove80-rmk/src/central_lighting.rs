@@ -15,14 +15,17 @@ use rmk::event::{
 };
 use rmk::host::{
     RynkLightingController, RynkLightingDescriptor, RynkLightingMailbox,
-    StandardRynkLightingAdapter, install_lighting_scenes,
+    StandardRynkLightingAdapter, install_lighting_runtime_conditional_scenes,
+    install_lighting_scenes,
 };
 use rmk::keymap::KeyMap;
 use rmk::lighting::{
     KeymapLightingState, LightingProcessor, LightingService, LogicalFrame, Rgb8, StandardCommand,
 };
 use rmk::split_app::SplitAppData;
-use rmk::types::protocol::rynk::{LightingLayerPolicy, LightingSceneCell};
+use rmk::types::protocol::rynk::{
+    LightingConditionalSceneCell, LightingLayerPolicy, LightingSceneCell,
+};
 
 use crate::lighting::{
     BOOTLOADER_TAG, COMMAND_CAPACITY, CORE_MAILBOX, Engine, HalfOutput, LightingHardware,
@@ -35,10 +38,12 @@ static RYNK_MAILBOX: RynkLightingMailbox = RynkLightingMailbox::new();
 pub static REMOTE_BOOT_REQUESTS: embassy_sync::channel::Channel<rmk::RawMutex, (), 1> =
     embassy_sync::channel::Channel::new();
 
+#[allow(clippy::too_many_arguments)]
 pub fn init<'keymap, 'data>(
     keymap: &'keymap KeyMap<'data>,
     persisted_scenes: &[LightingSceneCell],
     persisted_policy: Option<LightingLayerPolicy>,
+    persisted_runtime_conditional_scenes: &[LightingConditionalSceneCell],
     spi: Peri<'static, SPI3>,
     data_pin: Peri<'static, impl Pin>,
     chain_power_pin: Peri<'static, impl Pin>,
@@ -59,6 +64,11 @@ pub fn init<'keymap, 'data>(
         &crate::LIGHTING_TOPOLOGY,
         persisted_scenes,
         persisted_policy,
+    );
+    install_lighting_runtime_conditional_scenes(
+        &mut engine,
+        &crate::LIGHTING_TOPOLOGY,
+        persisted_runtime_conditional_scenes,
     );
     let service = LightingService::new(provider, engine, LogicalFrame::new(Rgb8::BLACK));
     let output = HalfOutput::left(LightingHardware::new(
@@ -87,6 +97,7 @@ pub const fn rynk_controller() -> RynkLightingController<'static> {
         OVERLAY_CAPACITY as u16,
     )
     .with_scene_capacity(SCENE_CAPACITY as u16)
+    .with_runtime_conditional_scene_capacity(SCENE_CAPACITY as u16)
     .with_conditional_scenes(&crate::LIGHTING_CONDITIONAL_SCENE_CELLS)
     .with_controls(crate::LIGHTING_CONTROLS)
     .with_extension_effects()

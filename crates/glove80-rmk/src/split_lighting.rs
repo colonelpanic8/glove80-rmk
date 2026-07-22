@@ -9,19 +9,21 @@ use core::num::NonZeroU32;
 
 use rmk::lighting::compositor::ExtensionState;
 use rmk::lighting::{
-    BackgroundMode, BackgroundState, BuiltinEffect, IndicatorState, LayerPolicy, LayerState,
-    LedSlot, LightingContext, OutputMode, OverlayBatch, OverlayCell, Rgb8, SceneTable,
-    SceneTableCell, StandardMutableState, StandardReplicaState,
+    BackgroundMode, BackgroundState, BatteryCondition, BuiltinEffect, ChargeCondition,
+    ConditionSet, IndicatorState, LayerCondition, LayerPolicy, LayerState, LedSlot,
+    LightingContext, OutputMode, OverlayBatch, OverlayCell, Rgb8, RuntimeConditionalSceneCell,
+    RuntimeConditionalSceneTable, SceneTable, SceneTableCell, StandardMutableState,
+    StandardReplicaState,
 };
 use rmk::split_app::{SPLIT_APP_MSG_MAX, SplitAppData};
 use rmk::types::battery::{BatteryStatus, ChargeState};
 
 use crate::lighting::{BatteryPair, LEDS_PER_HALF, OVERLAY_CAPACITY, SCENE_CAPACITY, TOTAL_LEDS};
 
-// Version 5 adds the staged Extension packet carrying the extension-source
-// selection. A stale half rejects the mismatched version and simply keeps
+// Version 6 adds the staged Extension packet and runtime conditional-scene
+// packets. A stale half rejects the mismatched version and simply keeps
 // its previous state until both halves are reflashed together.
-const VERSION: u8 = 5;
+const VERSION: u8 = 6;
 const TAG_BEGIN: u8 = 1;
 const TAG_CONTEXT: u8 = 2;
 const TAG_CELL: u8 = 3;
@@ -29,15 +31,20 @@ const TAG_COMMIT: u8 = 4;
 const TAG_ACK: u8 = 5;
 const TAG_SCENE_CELL: u8 = 6;
 const TAG_EXTENSION: u8 = 7;
+const TAG_CONDITIONAL_SCENE_BEGIN: u8 = 8;
+const TAG_CONDITIONAL_SCENE_CELL: u8 = 9;
 
 const BEGIN_LEN: usize = 26;
 const CONTEXT_LEN: usize = 23;
 const EXTENSION_LEN: usize = 12;
 const CELL_LEN: usize = 26;
 const SCENE_CELL_LEN: usize = 23;
+const CONDITIONAL_SCENE_BEGIN_LEN: usize = 8;
+const CONDITIONAL_SCENE_CELL_LEN: usize = 25;
 const COMMIT_LEN: usize = 9;
 const ACK_LEN: usize = 7;
 const _: () = assert!(CELL_LEN <= SPLIT_APP_MSG_MAX);
+const _: () = assert!(CONDITIONAL_SCENE_CELL_LEN <= SPLIT_APP_MSG_MAX);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Message {
@@ -74,6 +81,16 @@ pub enum Message {
         generation: u8,
         revision: u32,
         cell: SceneTableCell,
+    },
+    ConditionalSceneBegin {
+        generation: u8,
+        revision: u32,
+        cell_count: u8,
+    },
+    ConditionalSceneCell {
+        generation: u8,
+        revision: u32,
+        cell: RuntimeConditionalSceneCell,
     },
     Commit {
         generation: u8,
@@ -238,6 +255,66 @@ impl Message {
                 put_u32(&mut out, 17, phase_ms);
                 put_u16(&mut out, 21, auxiliary);
                 SCENE_CELL_LEN
+            }
+            Message::ConditionalSceneBegin {
+                generation,
+                revision,
+                cell_count,
+            } => {
+                out[1] = TAG_CONDITIONAL_SCENE_BEGIN;
+                out[2] = generation;
+                put_u32(&mut out, 3, revision);
+                out[7] = cell_count;
+                CONDITIONAL_SCENE_BEGIN_LEN
+            }
+            Message::ConditionalSceneCell {
+                generation,
+                revision,
+                cell,
+            } => {
+                out[1] = TAG_CONDITIONAL_SCENE_CELL;
+                out[2] = generation;
+                put_u32(&mut out, 3, revision);
+                let (kind, color, period_ms, phase_ms, auxiliary) = match cell.effect {
+                    BuiltinEffect::Solid { color } => (0, color, 0, 0, 0),
+                    BuiltinEffect::Blink {
+                        color,
+                        period_ms,
+                        phase_ms,
+                        duty,
+                    } => (1, color, period_ms, phase_ms, duty as u16),
+                    BuiltinEffect::Breathe {
+                        color,
+                        period_ms,
+                        phase_ms,
+                        step_ms,
+                    } => (2, color, period_ms, phase_ms, step_ms),
+                };
+                out[7] = cell.slot.0 as u8 | (kind & 1) << 7;
+                out[8] = cell
+                    .conditions
+                    .layer
+                    .map(|condition| condition.layer & 0x3f | (condition.active as u8) << 6)
+                    .unwrap_or(0x3f)
+                    | (kind & 2) << 6;
+                if let Some(condition) = cell.conditions.battery {
+                    let charge = match condition.charge {
+                        ChargeCondition::Any => 0,
+                        ChargeCondition::Charging => 1,
+                        ChargeCondition::Discharging => 2,
+                        ChargeCondition::Unknown => 3,
+                    };
+                    out[9] = condition.node & 0x3f | charge << 6;
+                    out[10] = condition.min_level.unwrap_or(u8::MAX);
+                    out[11] = condition.max_level.unwrap_or(u8::MAX);
+                } else {
+                    out[9..12].fill(u8::MAX);
+                }
+                out[12..15].copy_from_slice(&[color.r, color.g, color.b]);
+                put_u32(&mut out, 15, period_ms);
+                put_u32(&mut out, 19, phase_ms);
+                put_u16(&mut out, 23, auxiliary);
+                CONDITIONAL_SCENE_CELL_LEN
             }
             Message::Commit {
                 generation,
@@ -406,6 +483,74 @@ impl Message {
                     },
                 })
             }
+            TAG_CONDITIONAL_SCENE_BEGIN if bytes.len() == CONDITIONAL_SCENE_BEGIN_LEN => {
+                Ok(Message::ConditionalSceneBegin {
+                    generation: bytes[2],
+                    revision: get_u32(bytes, 3),
+                    cell_count: bytes[7],
+                })
+            }
+            TAG_CONDITIONAL_SCENE_CELL if bytes.len() == CONDITIONAL_SCENE_CELL_LEN => {
+                let slot = (bytes[7] & 0x7f) as usize;
+                if !(LEDS_PER_HALF..TOTAL_LEDS).contains(&slot) {
+                    return Err(DecodeError::Value);
+                }
+                let layer_id = bytes[8] & 0x3f;
+                let layer = if layer_id == 0x3f {
+                    None
+                } else {
+                    Some(LayerCondition {
+                        layer: layer_id,
+                        active: bytes[8] & 0x40 != 0,
+                    })
+                };
+                let battery = if bytes[9] == u8::MAX {
+                    None
+                } else {
+                    Some(BatteryCondition {
+                        node: bytes[9] & 0x3f,
+                        min_level: (bytes[10] != u8::MAX).then_some(bytes[10]),
+                        max_level: (bytes[11] != u8::MAX).then_some(bytes[11]),
+                        charge: match bytes[9] >> 6 {
+                            0 => ChargeCondition::Any,
+                            1 => ChargeCondition::Charging,
+                            2 => ChargeCondition::Discharging,
+                            3 => ChargeCondition::Unknown,
+                            _ => return Err(DecodeError::Value),
+                        },
+                    })
+                };
+                let color = Rgb8::new(bytes[12], bytes[13], bytes[14]);
+                let period_ms = get_u32(bytes, 15);
+                let phase_ms = get_u32(bytes, 19);
+                let auxiliary = get_u16(bytes, 23);
+                let kind = bytes[7] >> 7 | (bytes[8] >> 7) << 1;
+                let effect = match kind {
+                    0 => BuiltinEffect::Solid { color },
+                    1 if auxiliary <= 100 => BuiltinEffect::Blink {
+                        color,
+                        period_ms,
+                        phase_ms,
+                        duty: auxiliary as u8,
+                    },
+                    2 => BuiltinEffect::Breathe {
+                        color,
+                        period_ms,
+                        phase_ms,
+                        step_ms: auxiliary,
+                    },
+                    _ => return Err(DecodeError::Value),
+                };
+                Ok(Message::ConditionalSceneCell {
+                    generation: bytes[2],
+                    revision: get_u32(bytes, 3),
+                    cell: RuntimeConditionalSceneCell {
+                        conditions: ConditionSet { layer, battery },
+                        slot: LedSlot(slot as u16),
+                        effect,
+                    },
+                })
+            }
             TAG_COMMIT if bytes.len() == COMMIT_LEN => Ok(Message::Commit {
                 generation: bytes[2],
                 revision: get_u32(bytes, 3),
@@ -416,8 +561,15 @@ impl Message {
                 generation: bytes[2],
                 revision: get_u32(bytes, 3),
             }),
-            TAG_BEGIN | TAG_CONTEXT | TAG_CELL | TAG_COMMIT | TAG_ACK | TAG_SCENE_CELL
-            | TAG_EXTENSION => Err(DecodeError::Length),
+            TAG_BEGIN
+            | TAG_CONTEXT
+            | TAG_CELL
+            | TAG_COMMIT
+            | TAG_ACK
+            | TAG_SCENE_CELL
+            | TAG_EXTENSION
+            | TAG_CONDITIONAL_SCENE_BEGIN
+            | TAG_CONDITIONAL_SCENE_CELL => Err(DecodeError::Length),
             _ => Err(DecodeError::Tag),
         }
     }
@@ -446,6 +598,15 @@ pub fn try_queue_snapshot(
         .filter(|cell| cell.slot.index() >= LEDS_PER_HALF)
         .count();
     if scene_count > SCENE_CAPACITY {
+        return false;
+    }
+    let conditional_scene_count = snapshot
+        .runtime_conditional_scenes
+        .as_slice()
+        .iter()
+        .filter(|cell| cell.slot.index() >= LEDS_PER_HALF)
+        .count();
+    if conditional_scene_count > SCENE_CAPACITY {
         return false;
     }
     let queue = |message: Message| {
@@ -502,6 +663,29 @@ pub fn try_queue_snapshot(
             return false;
         }
     }
+    // These packets are part of the versioned replica snapshot. Both halves
+    // must run the same protocol version before the transaction is accepted.
+    if !queue(Message::ConditionalSceneBegin {
+        generation,
+        revision: snapshot.revision,
+        cell_count: conditional_scene_count as u8,
+    }) {
+        return false;
+    }
+    for &cell in snapshot
+        .runtime_conditional_scenes
+        .as_slice()
+        .iter()
+        .filter(|cell| cell.slot.index() >= LEDS_PER_HALF)
+    {
+        if !queue(Message::ConditionalSceneCell {
+            generation,
+            revision: snapshot.revision,
+            cell,
+        }) {
+            return false;
+        }
+    }
     queue(Message::Commit {
         generation,
         revision: snapshot.revision,
@@ -515,6 +699,7 @@ struct Stage {
     snapshot: StandardReplicaState<OVERLAY_CAPACITY, SCENE_CAPACITY>,
     expected_overlay_cells: usize,
     expected_scene_cells: usize,
+    expected_conditional_scene_cells: Option<usize>,
     context_received: bool,
     extension_received: bool,
     batteries: BatteryPair,
@@ -558,12 +743,14 @@ impl SnapshotStage {
                         output_mode,
                         overlay: OverlayBatch::new(),
                         scenes,
+                        runtime_conditional_scenes: RuntimeConditionalSceneTable::new(),
                         context: LightingContext::default(),
                         sample_time_ms,
                         extension: None,
                     },
                     expected_overlay_cells: cell_count as usize,
                     expected_scene_cells: scene_count as usize,
+                    expected_conditional_scene_cells: None,
                     context_received: false,
                     extension_received: false,
                     batteries: BatteryPair::UNAVAILABLE,
@@ -642,6 +829,46 @@ impl SnapshotStage {
                 }
                 None
             }
+            Message::ConditionalSceneBegin {
+                generation,
+                revision,
+                cell_count,
+            } => {
+                let stage = self.stage.as_mut()?;
+                if stage.generation != generation
+                    || stage.snapshot.revision != revision
+                    || cell_count as usize > SCENE_CAPACITY
+                {
+                    self.stage = None;
+                } else {
+                    stage.expected_conditional_scene_cells = Some(cell_count as usize);
+                    stage.snapshot.runtime_conditional_scenes.clear();
+                }
+                None
+            }
+            Message::ConditionalSceneCell {
+                generation,
+                revision,
+                cell,
+            } => {
+                let stage = self.stage.as_mut()?;
+                if stage.generation != generation
+                    || stage.snapshot.revision != revision
+                    || stage
+                        .expected_conditional_scene_cells
+                        .is_none_or(|expected| {
+                            stage.snapshot.runtime_conditional_scenes.as_slice().len() >= expected
+                        })
+                    || stage
+                        .snapshot
+                        .runtime_conditional_scenes
+                        .push(cell)
+                        .is_err()
+                {
+                    self.stage = None;
+                }
+                None
+            }
             Message::Commit {
                 generation,
                 revision,
@@ -657,6 +884,12 @@ impl SnapshotStage {
                         && stage.expected_scene_cells == scene_count as usize
                         && stage.snapshot.overlay.as_slice().len() == stage.expected_overlay_cells
                         && stage.snapshot.scenes.as_slice().len() == stage.expected_scene_cells
+                        && stage
+                            .expected_conditional_scene_cells
+                            .is_none_or(|expected| {
+                                stage.snapshot.runtime_conditional_scenes.as_slice().len()
+                                    == expected
+                            })
                 });
                 if valid {
                     self.stage
