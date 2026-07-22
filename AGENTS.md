@@ -42,12 +42,7 @@ overlay commits for changes that depend on the full downstream stack. Keep
 generic upstream candidates independently reviewable before composing them
 into this line.
 
-## Shared Rynk protocol coordination
-
-Read the append-only [`PROTOCOL_NEEDS.md`](PROTOCOL_NEEDS.md) before allocating
-commands, topics, feature bits, or changing shared payloads. Do not rewrite or
-remove another task's entry. Coordinate overlapping requirements in one
-endpoint-table change instead of landing colliding WIP branches.
+## Rynk protocol compatibility
 
 - Keep existing postcard layouts and endpoint meanings stable; prefer new
   commands and new types.
@@ -57,9 +52,6 @@ endpoint-table change instead of landing colliding WIP branches.
 - Regenerate wire values, wire frames, and the generated protocol reference
   for intentional protocol additions, while retaining the upstream-owned
   protocol version established by the normalization commit.
-- Treat worktrees named in `PROTOCOL_NEEDS.md` as patch/reference sources only.
-  Their dirty gitlinks and outer branches are not landed work and should not be
-  merged wholesale.
 
 ## Moving the outer pin
 
