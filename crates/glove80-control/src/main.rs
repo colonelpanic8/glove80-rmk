@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 
+mod config;
 mod keycodes;
 mod keymap;
 mod lighting;
@@ -33,6 +34,11 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Validate, compare, pull, or apply managed runtime configuration.
+    Config {
+        #[command(subcommand)]
+        command: config::ConfigCommand,
+    },
     /// Reboot either half into its UF2 bootloader through Rynk.
     Bootloader {
         #[command(flatten)]
@@ -71,6 +77,7 @@ fn selector(cli: &Cli) -> transport::Selector {
 
 fn run(cli: Cli) -> Result<()> {
     match &cli.command {
+        Command::Config { command } => config::run(&selector(&cli), command),
         Command::Lighting { command } => lighting::run(&selector(&cli), command),
         Command::Keymap { command } => keymap::run(&selector(&cli), command),
         Command::Version => version::run(&selector(&cli)),
@@ -82,7 +89,9 @@ fn run(cli: Cli) -> Result<()> {
 
 fn main() {
     if let Err(error) = run(Cli::parse()) {
-        eprintln!("error: {error:#}");
+        if error.downcast_ref::<config::DiffFound>().is_none() {
+            eprintln!("error: {error:#}");
+        }
         std::process::exit(1);
     }
 }

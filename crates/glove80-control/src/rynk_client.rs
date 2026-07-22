@@ -10,16 +10,19 @@ use rynk::rmk_types::action::KeyAction;
 use rynk::rmk_types::protocol::rynk::{
     AbortLightingOverlayReplaceRequest, BeginLightingOverlayReplaceRequest,
     ClearLightingOverlayRequest, CommitLightingOverlayReplaceRequest, LightingBackgroundMode,
-    LightingEffect, LightingEffectFlags, LightingFeatureFlags, LightingLedId, LightingMutableState,
-    LightingOverlayCell, LightingRgb8, LightingState, PutLightingOverlayChunkRequest, RynkError,
-    SetLightingOverlayRequest, SetLightingStateRequest, UnsetLightingOverlayRequest,
+    LightingEffect, LightingEffectFlags, LightingFeatureFlags, LightingLayerPolicy, LightingLedId,
+    LightingMutableState, LightingOverlayCell, LightingRgb8, LightingSceneCell, LightingState,
+    PutLightingOverlayChunkRequest, RynkError, SetLightingLayerPolicyRequest,
+    SetLightingOverlayRequest, SetLightingSceneCellRequest, SetLightingStateRequest,
+    UnsetLightingOverlayRequest, UnsetLightingSceneCellRequest,
 };
 use rynk::{Client, RynkDevice, RynkHostError};
 use rynk_ble::BleDevice;
 use rynk_serial::SerialDevice;
 
+use crate::config::ConfigCommand;
 use crate::keymap::{self, KeymapCommand};
-use crate::lighting::{EffectArg, EffectSpec, LightingCommand};
+use crate::lighting::{EffectArg, EffectSpec, LayerPolicyArg, LightingCommand};
 use crate::rynk_hid::HidDevice;
 use crate::transport::{Preference, Selector};
 
@@ -47,6 +50,18 @@ pub fn run_keymap(selector: &Selector, command: &KeymapCommand) -> Result<()> {
             Device::Hid(device) => run_device(device, command).await,
             Device::Serial(device) => run_device(device, command).await,
             Device::Ble(device) => run_device(device, command).await,
+        }
+    })
+}
+
+pub fn run_config(selector: &Selector, command: &ConfigCommand) -> Result<()> {
+    let runtime =
+        tokio::runtime::Runtime::new().context("could not create the Rynk async runtime")?;
+    runtime.block_on(async {
+        match select_device(selector).await? {
+            Device::Hid(device) => run_config_device(device, command).await,
+            Device::Serial(device) => run_config_device(device, command).await,
+            Device::Ble(device) => run_config_device(device, command).await,
         }
     })
 }
@@ -96,6 +111,20 @@ async fn run_lighting_device<D: RynkDevice>(device: D, command: &LightingCommand
     let label = device.label();
     let (client, mut driver) = connect_device(device, &label).await?;
     match select(driver.run(&client), operate_lighting(&client, command)).await {
+        Either::First(error) => Err(anyhow!("Rynk connection to {label} ended: {error}")),
+        Either::Second(result) => result,
+    }
+}
+
+async fn run_config_device<D: RynkDevice>(device: D, command: &ConfigCommand) -> Result<()> {
+    let label = device.label();
+    let (client, mut driver) = connect_device(device, &label).await?;
+    match select(
+        driver.run(&client),
+        crate::config::operate(&client, command),
+    )
+    .await
+    {
         Either::First(error) => Err(anyhow!("Rynk connection to {label} ended: {error}")),
         Either::Second(result) => result,
     }
@@ -166,6 +195,10 @@ async fn request_bootloader_jump(client: &Client, peripheral: bool) -> Result<()
 }
 
 async fn unlock_session(client: &Client) -> Result<()> {
+    unlock_session_with_timeout(client, RYNK_UNLOCK_TIMEOUT).await
+}
+
+async fn unlock_session_with_timeout(client: &Client, timeout: Duration) -> Result<()> {
     let status = client.get_lock_status().await?;
     if status.locked {
         if status.key_positions.is_empty() {
@@ -191,10 +224,10 @@ async fn unlock_session(client: &Client) -> Result<()> {
                 println!("physical-presence unlock accepted");
                 break;
             }
-            if started.elapsed() >= RYNK_UNLOCK_TIMEOUT {
+            if started.elapsed() >= timeout {
                 bail!(
                     "timed out waiting {} seconds for the physical-presence unlock",
-                    RYNK_UNLOCK_TIMEOUT.as_secs()
+                    timeout.as_secs()
                 );
             }
             tokio::time::sleep(Duration::from_millis(100)).await;
@@ -286,6 +319,7 @@ async fn operate_lighting(client: &Client, command: &LightingCommand) -> Result<
                     "atomic replace",
                 ),
                 (LightingFeatureFlags::LAYER_AWARE, "layer-aware"),
+                (LightingFeatureFlags::LAYER_SCENES, "durable layer scenes"),
                 (LightingFeatureFlags::PHYSICAL_GEOMETRY, "physical geometry"),
                 (LightingFeatureFlags::ZONES, "zones"),
                 (LightingFeatureFlags::ROUTING, "routing"),
@@ -471,8 +505,142 @@ async fn operate_lighting(client: &Client, command: &LightingCommand) -> Result<
                 state.output_brightness, state.revision
             );
         }
+        LightingCommand::SceneRead => {
+            let status = client.get_lighting_scene_status().await?;
+            let (_, cells) = client.read_all_lighting_scenes().await?;
+            println!(
+                "revision: {}\ncapacity: {}\nscene cells: {}\npolicy: {}",
+                status.revision,
+                status.capacity,
+                status.scene_len,
+                render_layer_policy(status.policy),
+            );
+            for cell in cells {
+                println!(
+                    "layer {} LED {} {}",
+                    cell.layer,
+                    cell.led_id.0,
+                    render_effect(cell.effect),
+                );
+            }
+        }
+        LightingCommand::SceneSet {
+            layer,
+            keys,
+            color,
+            effect,
+            period,
+            phase,
+            duty,
+        } => {
+            let keys = crate::lighting::parse_key_list(keys)?;
+            let effect = rynk_effect(
+                *effect,
+                crate::lighting::parse_color(color)?,
+                *period,
+                *phase,
+                *duty,
+            )?;
+            let mut state = client.get_lighting_state().await?;
+            for key in &keys {
+                state = client
+                    .set_lighting_scene_cell(SetLightingSceneCellRequest {
+                        expected_revision: state.revision,
+                        cell: LightingSceneCell {
+                            layer: *layer,
+                            led_id: LightingLedId(u16::from(*key)),
+                            effect,
+                        },
+                    })
+                    .await?;
+            }
+            println!(
+                "set {} durable layer-scene cell(s); revision: {}",
+                keys.len(),
+                state.revision,
+            );
+        }
+        LightingCommand::SceneUnset { layer, keys } => {
+            let mut ids = Vec::new();
+            for list in keys {
+                ids.extend(crate::lighting::parse_key_list(list)?);
+            }
+            ids.sort_unstable();
+            ids.dedup();
+            let mut state = client.get_lighting_state().await?;
+            for id in &ids {
+                state = client
+                    .unset_lighting_scene_cell(UnsetLightingSceneCellRequest {
+                        expected_revision: state.revision,
+                        layer: *layer,
+                        led_id: LightingLedId(u16::from(*id)),
+                    })
+                    .await?;
+            }
+            println!(
+                "unset {} durable layer-scene cell(s); revision: {}",
+                ids.len(),
+                state.revision,
+            );
+        }
+        LightingCommand::ScenePolicy { policy } => {
+            let status = client.get_lighting_scene_status().await?;
+            let policy = if let Some(policy) = policy {
+                let policy = layer_policy_to_rynk(*policy);
+                client
+                    .set_lighting_layer_policy(SetLightingLayerPolicyRequest {
+                        expected_revision: status.revision,
+                        policy,
+                    })
+                    .await?;
+                policy
+            } else {
+                status.policy
+            };
+            println!("scene policy: {}", render_layer_policy(policy));
+        }
     }
     Ok(())
+}
+
+fn layer_policy_to_rynk(policy: LayerPolicyArg) -> LightingLayerPolicy {
+    match policy {
+        LayerPolicyArg::EffectiveOnly => LightingLayerPolicy::EffectiveOnly,
+        LayerPolicyArg::ActiveStack => LightingLayerPolicy::ActiveStack,
+    }
+}
+
+fn render_layer_policy(policy: LightingLayerPolicy) -> &'static str {
+    match policy {
+        LightingLayerPolicy::EffectiveOnly => "effective-only",
+        LightingLayerPolicy::ActiveStack => "active-stack",
+    }
+}
+
+fn render_effect(effect: LightingEffect) -> String {
+    match effect {
+        LightingEffect::Solid { color } => {
+            format!("#{:02x}{:02x}{:02x} solid", color.r, color.g, color.b)
+        }
+        LightingEffect::Blink {
+            color,
+            period_ms,
+            phase_ms,
+            duty,
+        } => format!(
+            "#{:02x}{:02x}{:02x} blink period={} phase={} duty={}",
+            color.r, color.g, color.b, period_ms, phase_ms, duty,
+        ),
+        LightingEffect::Breathe {
+            color,
+            period_ms,
+            phase_ms,
+            step_ms,
+        } => format!(
+            "#{:02x}{:02x}{:02x} breathe period={} phase={} step={}",
+            color.r, color.g, color.b, period_ms, phase_ms, step_ms,
+        ),
+    }
 }
 
 fn positive_ttl(value: u32) -> Result<u32> {
@@ -666,6 +834,29 @@ async fn operate(client: &Client, command: &KeymapCommand) -> Result<()> {
             }
             let stored = client.get_default_layer().await?;
             println!("default layer: {stored}");
+        }
+        KeymapCommand::Monitor { seconds } => {
+            unlock_session_with_timeout(client, Duration::from_secs(60)).await?;
+            let duration = Duration::from_secs(*seconds);
+            let started = tokio::time::Instant::now();
+            let mut previous = None;
+            println!(
+                "monitoring the {}x{} matrix for {seconds}s",
+                capabilities.num_rows, capabilities.num_cols
+            );
+            while started.elapsed() < duration {
+                let state = client.get_matrix_state().await?;
+                let positions = keymap::pressed_positions(
+                    &state.pressed_bitmap,
+                    capabilities.num_rows,
+                    capabilities.num_cols,
+                );
+                if previous.as_ref() != Some(&positions) {
+                    println!("{}", keymap::render_pressed(&positions));
+                    previous = Some(positions);
+                }
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
         }
         KeymapCommand::Find { fragment } => println!("{}", keymap::render_find(fragment)),
     }

@@ -32,8 +32,45 @@ pub enum KeymapCommand {
     },
     /// Read or set the persistent default layer.
     Default { layer: Option<u8> },
+    /// Report physical matrix presses for a short diagnostic window.
+    Monitor {
+        /// Number of seconds to monitor.
+        #[arg(long, default_value_t = 15)]
+        seconds: u64,
+    },
     /// Search the keycode name table without connecting to a keyboard.
     Find { fragment: String },
+}
+
+pub fn pressed_positions(bitmap: &[u8], rows: u8, cols: u8) -> Vec<(u8, u8)> {
+    let bytes_per_row = usize::from(cols).div_ceil(8);
+    let mut positions = Vec::new();
+    for row in 0..rows {
+        for col in 0..cols {
+            let byte = usize::from(row) * bytes_per_row + usize::from(col) / 8;
+            if bitmap
+                .get(byte)
+                .is_some_and(|value| value & (1 << (col % 8)) != 0)
+            {
+                positions.push((row, col));
+            }
+        }
+    }
+    positions
+}
+
+pub fn render_pressed(positions: &[(u8, u8)]) -> String {
+    if positions.is_empty() {
+        return "released".to_owned();
+    }
+    format!(
+        "pressed: {}",
+        positions
+            .iter()
+            .map(|(row, col)| format!("r{row},c{col}"))
+            .collect::<Vec<_>>()
+            .join(" ")
+    )
 }
 
 pub fn parse_key_position(text: &str, rows: u8, cols: u8) -> Result<u8> {
@@ -195,5 +232,15 @@ mod tests {
             keycode: 0x0004,
         }];
         assert!(render_write_outcome(&entries, &[0], 14).contains("LOSSY"));
+    }
+
+    #[test]
+    fn decodes_row_major_pressed_bitmap() {
+        assert_eq!(
+            pressed_positions(&[0x01, 0x02, 0x40, 0x20], 2, 14),
+            vec![(0, 0), (0, 9), (1, 6), (1, 13)]
+        );
+        assert_eq!(render_pressed(&[]), "released");
+        assert_eq!(render_pressed(&[(2, 3), (4, 5)]), "pressed: r2,c3 r4,c5");
     }
 }

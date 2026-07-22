@@ -53,6 +53,35 @@ pub enum LightingCommand {
     },
     /// Read or set global brightness (0-255).
     Brightness { value: Option<u8> },
+    /// Read durable per-layer scene cells.
+    SceneRead,
+    /// Set one or more durable scene cells on a layer.
+    SceneSet {
+        layer: u8,
+        /// LED indices as comma-separated values and ranges.
+        keys: String,
+        /// #RRGGBB, RRGGBB, or a named color.
+        color: String,
+        #[arg(long, value_enum, default_value_t = EffectArg::Solid)]
+        effect: EffectArg,
+        #[arg(long, value_name = "MS")]
+        period: Option<u16>,
+        #[arg(long, value_name = "MS")]
+        phase: Option<u16>,
+        #[arg(long, value_name = "PCT")]
+        duty: Option<u8>,
+    },
+    /// Remove one or more durable scene cells from a layer.
+    SceneUnset {
+        layer: u8,
+        #[arg(required = true)]
+        keys: Vec<String>,
+    },
+    /// Read or set how active layer scenes are composed.
+    ScenePolicy {
+        #[arg(value_enum)]
+        policy: Option<LayerPolicyArg>,
+    },
 }
 
 #[derive(Args, Clone, Copy)]
@@ -70,6 +99,12 @@ pub enum EffectArg {
     Solid,
     Blink,
     Breathe,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
+pub enum LayerPolicyArg {
+    EffectiveOnly,
+    ActiveStack,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

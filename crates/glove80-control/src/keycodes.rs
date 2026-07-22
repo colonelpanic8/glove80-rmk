@@ -16,6 +16,12 @@
 //!   `PDF(n)`
 //! - `0x5700..=0x57FF` tap dance / morse — `TD(n)`
 //! - `0x7700..=0x771F` macros — `MACRO(n)`
+//! - `0x7780..=0x7786` output selection — `QK_OUTPUT_AUTO`,
+//!   `QK_OUTPUT_USB`, and `QK_OUTPUT_BLUETOOTH`
+//! - `0x7800..=0x7806` keyboard lighting — `BL_ON`, `BL_OFF`, `BL_TOGG`,
+//!   `BL_DOWN`, `BL_UP`, `BL_STEP`, `BL_BRTG`
+//! - `0x7820..=0x7834` RGB effects — `UG_TOGG`, `UG_NEXT`, `UG_PREV`,
+//!   hue/saturation/value/speed controls, and fixed RGB modes
 //! - `0x7C00..` QMK magic keys the firmware supports (`QK_BOOT`, `CW_TOGG`,
 //!   space cadet, …)
 //! - `0x7E00..=0x7E1F` user/custom keys — `USER(n)`
@@ -248,6 +254,49 @@ const BASIC: &[(u16, &str, &[&str])] = &[
 
 /// Named non-basic keycodes the firmware understands (QMK "magic" range).
 const EXTRA: &[(u16, &str, &[&str])] = &[
+    (0x7780, "QK_OUTPUT_AUTO", &["OUT_AUTO"]),
+    (0x7784, "QK_OUTPUT_USB", &["OUT_USB"]),
+    (0x7786, "QK_OUTPUT_BLUETOOTH", &["OUT_BT"]),
+    (0x7800, "BL_ON", &["QK_BACKLIGHT_ON"]),
+    (0x7801, "BL_OFF", &["QK_BACKLIGHT_OFF"]),
+    (0x7802, "BL_TOGG", &["QK_BACKLIGHT_TOGGLE"]),
+    (0x7803, "BL_DOWN", &["QK_BACKLIGHT_DOWN"]),
+    (0x7804, "BL_UP", &["QK_BACKLIGHT_UP"]),
+    (0x7805, "BL_STEP", &["QK_BACKLIGHT_STEP"]),
+    (0x7806, "BL_BRTG", &["QK_BACKLIGHT_TOGGLE_BREATHING"]),
+    (0x7820, "UG_TOGG", &["QK_UNDERGLOW_TOGGLE", "RGB_TOG"]),
+    (0x7821, "UG_NEXT", &["QK_UNDERGLOW_MODE_NEXT", "RGB_MOD"]),
+    (
+        0x7822,
+        "UG_PREV",
+        &["QK_UNDERGLOW_MODE_PREVIOUS", "RGB_RMOD"],
+    ),
+    (0x7823, "UG_HUEU", &["QK_UNDERGLOW_HUE_UP", "RGB_HUI"]),
+    (0x7824, "UG_HUED", &["QK_UNDERGLOW_HUE_DOWN", "RGB_HUD"]),
+    (
+        0x7825,
+        "UG_SATU",
+        &["QK_UNDERGLOW_SATURATION_UP", "RGB_SAI"],
+    ),
+    (
+        0x7826,
+        "UG_SATD",
+        &["QK_UNDERGLOW_SATURATION_DOWN", "RGB_SAD"],
+    ),
+    (0x7827, "UG_VALU", &["QK_UNDERGLOW_VALUE_UP", "RGB_VAI"]),
+    (0x7828, "UG_VALD", &["QK_UNDERGLOW_VALUE_DOWN", "RGB_VAD"]),
+    (0x7829, "UG_SPDU", &["QK_UNDERGLOW_SPEED_UP", "RGB_SPI"]),
+    (0x782A, "UG_SPDD", &["QK_UNDERGLOW_SPEED_DOWN", "RGB_SPD"]),
+    (0x782B, "RGB_M_P", &["RGB_MODE_PLAIN"]),
+    (0x782C, "RGB_M_B", &["RGB_MODE_BREATHE"]),
+    (0x782D, "RGB_M_R", &["RGB_MODE_RAINBOW"]),
+    (0x782E, "RGB_M_SW", &["RGB_MODE_SWIRL"]),
+    (0x782F, "RGB_M_SN", &["RGB_MODE_SNAKE"]),
+    (0x7830, "RGB_M_K", &["RGB_MODE_KNIGHT"]),
+    (0x7831, "RGB_M_X", &["RGB_MODE_XMAS"]),
+    (0x7832, "RGB_M_G", &["RGB_MODE_GRADIENT"]),
+    (0x7833, "RGB_M_T", &["RGB_MODE_RGBTEST"]),
+    (0x7834, "RGB_M_TW", &["RGB_MODE_TWINKLE"]),
     (0x7C00, "QK_BOOT", &["QK_BOOTLOADER", "RESET"]),
     (0x7C01, "QK_RBT", &["QK_REBOOT"]),
     (0x7C03, "EE_CLR", &["QK_CLEAR_EEPROM"]),
@@ -651,6 +700,12 @@ mod tests {
         assert_eq!(format_keycode(0x7E10), "USER(16)");
         assert_eq!(format_keycode(0x7C00), "QK_BOOT");
         assert_eq!(format_keycode(0x7C73), "CW_TOGG");
+        assert_eq!(format_keycode(0x7803), "BL_DOWN");
+        assert_eq!(format_keycode(0x7804), "BL_UP");
+        assert_eq!(format_keycode(0x7820), "UG_TOGG");
+        assert_eq!(format_keycode(0x7821), "UG_NEXT");
+        assert_eq!(format_keycode(0x7827), "UG_VALU");
+        assert_eq!(format_keycode(0x7828), "UG_VALD");
     }
 
     #[test]
@@ -664,6 +719,12 @@ mod tests {
         assert_eq!(parse_keycode("0X1104").unwrap(), 0x1104);
         assert_eq!(parse_keycode("4").unwrap(), 4);
         assert_eq!(parse_keycode("QK_BOOT").unwrap(), 0x7C00);
+        assert_eq!(parse_keycode("BL_DOWN").unwrap(), 0x7803);
+        assert_eq!(parse_keycode("QK_BACKLIGHT_UP").unwrap(), 0x7804);
+        assert_eq!(parse_keycode("RGB_TOG").unwrap(), 0x7820);
+        assert_eq!(parse_keycode("RGB_MOD").unwrap(), 0x7821);
+        assert_eq!(parse_keycode("RGB_VAI").unwrap(), 0x7827);
+        assert_eq!(parse_keycode("RGB_VAD").unwrap(), 0x7828);
         assert_eq!(parse_keycode("_______").unwrap(), 0x0001);
         assert!(parse_keycode("KC_NOPE").is_err());
         assert!(parse_keycode("").is_err());
@@ -721,7 +782,8 @@ mod tests {
         for code in [
             0x0000u16, 0x0001, 0x0004, 0x00E7, 0x00AE, 0x0104, 0x1104, 0x0704, 0x0F04, 0x0304,
             0x2204, 0x3228, 0x2704, 0x2F04, 0x2604, 0x4304, 0x5022, 0x5201, 0x5223, 0x5243, 0x5262,
-            0x5283, 0x52A2, 0x52B1, 0x52E3, 0x5705, 0x7705, 0x7C00, 0x7C73, 0x7E10,
+            0x5283, 0x52A2, 0x52B1, 0x52E3, 0x5705, 0x7705, 0x7803, 0x7804, 0x7820, 0x7821, 0x7827,
+            0x7828, 0x7834, 0x7C00, 0x7C73, 0x7E10,
             // Unknown codes round-trip through their hex rendering.
             0x0083, 0x6FFF,
         ] {
