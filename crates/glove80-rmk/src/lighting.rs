@@ -11,13 +11,26 @@ use embassy_nrf::{Peri, bind_interrupts, peripherals};
 use embassy_sync::blocking_mutex::Mutex as BlockingMutex;
 use embassy_time::{Duration, Timer};
 use rmk::core_traits::Runnable;
+use rmk::event::{KeyboardEvent, KeyboardEventPos};
+use rmk::lighting::topology::MatrixPosition;
 use rmk::lighting::{
-    BatteryStatusProvider, BuiltinEffect, ConditionalScenes, EmptySource, IndicatorState,
-    LayerState, LightingContext, LightingMailbox, LightingOutput, LightingProcessor,
-    LightingService, LogicalFrame, Rgb8, SnapshotProvider, StandardCommand, StandardError,
-    StandardLightingEngine, StandardReplicaSlot, StandardReply,
+    BatteryStatusProvider, BuiltinEffect, ConditionalScenes, IndicatorState, LayerState,
+    LightingContext, LightingMailbox, LightingOutput, LightingProcessor, LightingService,
+    LogicalFrame, Rgb8, SnapshotProvider, StandardCommand, StandardError, StandardLightingEngine,
+    StandardReplicaSlot, StandardReply,
 };
 use rmk::types::battery::BatteryStatus;
+use rmk_palettefx::rmk_lighting::{HitQueue, PaletteFxConfig, PaletteFxSource, TopologyLayout};
+
+/// Board-wide lighting topology for both binaries. `#[rmk_central]` emits
+/// `crate::LIGHTING_TOPOLOGY` for the central, but the peripheral macro only
+/// emits renderer configuration; the standalone macro reads the same
+/// `KEYBOARD_TOML_PATH` and makes identical statics available to both halves.
+/// The central binary carries a duplicate flash copy under this namespace,
+/// which the nRF52840's 1 MB flash absorbs without contortions.
+pub mod topology_config {
+    rmk::macros::rmk_lighting_config!();
+}
 
 bind_interrupts!(struct Irqs {
     SPIM3 => spim::InterruptHandler<peripherals::SPI3>;
@@ -29,9 +42,14 @@ pub const OVERLAY_CAPACITY: usize = 64;
 pub const SCENE_CAPACITY: usize = 64;
 pub const COMMAND_CAPACITY: usize = 4;
 
+/// Number of simultaneous key hits the Reactive effect remembers between
+/// frames. Each hit fades over ~1.3 s at the default speed, so 16 covers
+/// sustained fast typing on one half.
+pub const REACTIVE_HITS: usize = 16;
+
 pub type Engine = StandardLightingEngine<
     'static,
-    EmptySource,
+    PaletteFxSource<TopologyLayout<TOTAL_LEDS>, TOTAL_LEDS, REACTIVE_HITS>,
     ConditionalScenes<'static, BuiltinEffect, GloveBatteryProvider>,
     TOTAL_LEDS,
     OVERLAY_CAPACITY,
@@ -47,6 +65,10 @@ pub type CoreMailbox = LightingMailbox<
 pub static CORE_MAILBOX: CoreMailbox = LightingMailbox::new();
 pub static REPLICA_SLOT: StandardReplicaSlot<OVERLAY_CAPACITY, SCENE_CAPACITY> =
     StandardReplicaSlot::new();
+
+/// Pending Reactive key hits for this half's own engine instance. Each
+/// binary drains its local queue on its next rendered frame.
+static HIT_QUEUE: HitQueue<REACTIVE_HITS> = HitQueue::new();
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct BatteryPair {
@@ -260,13 +282,93 @@ impl LightingOutput<LogicalFrame<Rgb8, TOTAL_LEDS>> for HalfOutput {
 }
 
 pub fn engine() -> Engine {
+    // Half brightness (0x80) as the initial value: the hardware driver's 204
+    // channel ceiling and the per-key diffusors make full-scale PaletteFx
+    // output harsher than useful; the default speed and first palette match
+    // the effect pack's own boot state.
+    let palettefx = PaletteFxSource::new(
+        TopologyLayout::new(&topology_config::LIGHTING_TOPOLOGY),
+        &HIT_QUEUE,
+        PaletteFxConfig {
+            initial_val: 0x80,
+            initial_palette: 0,
+            ..PaletteFxConfig::default()
+        },
+    );
     Engine::new(
         crate::LIGHTING_BACKGROUND,
         crate::LIGHTING_LAYER_SCENES,
-        EmptySource,
+        palettefx,
         ConditionalScenes::new(&crate::LIGHTING_CONDITIONAL_SCENE_CELLS, &GLOVE_BATTERIES),
     )
     .with_controls(crate::LIGHTING_CONTROLS)
+}
+
+/// Feed pressed keys to the Reactive PaletteFx effect on this half's own
+/// engine. Key positions arrive in the local event bus's coordinates:
+/// board-wide on the central (the split driver re-publishes peripheral keys
+/// with their `[[split.peripheral]]` offsets applied), half-local on the
+/// peripheral (its matrix scanner publishes unshifted scan positions).
+/// Offsets shift them into the board-wide lighting matrix and the column
+/// bounds keep each engine's hits on its physical half. Recording is
+/// render-neutral unless Reactive is active; the source drains the queue
+/// either way and timestamps hits in the engine animation-clock domain.
+#[rmk::macros::processor(subscribe = [KeyboardEvent])]
+pub struct ReactiveKeyHits {
+    row_offset: u8,
+    col_offset: u8,
+    first_col: u8,
+    last_col: u8,
+}
+
+impl ReactiveKeyHits {
+    /// Central event bus: positions are already board-wide, including
+    /// re-published peripheral events. Keep only this engine's left half.
+    pub const fn central() -> Self {
+        Self {
+            row_offset: 0,
+            col_offset: 0,
+            first_col: 0,
+            last_col: 7,
+        }
+    }
+
+    /// Peripheral event bus: shift local scans by the right half's
+    /// `[[split.peripheral]]` offsets from keyboard.toml.
+    pub const fn peripheral() -> Self {
+        Self {
+            row_offset: 0,
+            col_offset: 7,
+            first_col: 7,
+            last_col: 14,
+        }
+    }
+
+    async fn on_keyboard_event(&mut self, event: KeyboardEvent) {
+        if !event.pressed {
+            return;
+        }
+        let KeyboardEventPos::Key(pos) = event.pos else {
+            return;
+        };
+        let (Some(row), Some(col)) = (
+            pos.row.checked_add(self.row_offset),
+            pos.col.checked_add(self.col_offset),
+        ) else {
+            return;
+        };
+        if !(self.first_col..self.last_col).contains(&col) {
+            return;
+        }
+        let key = MatrixPosition::new(row, col);
+        let mut queued = false;
+        for (slot, _) in topology_config::LIGHTING_TOPOLOGY.leds_for_key(key) {
+            queued |= HIT_QUEUE.record(slot.0 as u8);
+        }
+        if queued {
+            CORE_MAILBOX.snapshot_changed();
+        }
+    }
 }
 
 static PERIPHERAL_CONTEXT: BlockingMutex<rmk::RawMutex, Cell<LightingContext>> =

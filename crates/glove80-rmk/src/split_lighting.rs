@@ -7,6 +7,7 @@
 
 use core::num::NonZeroU32;
 
+use rmk::lighting::compositor::ExtensionState;
 use rmk::lighting::{
     BackgroundMode, BackgroundState, BuiltinEffect, IndicatorState, LayerPolicy, LayerState,
     LedSlot, LightingContext, OutputMode, OverlayBatch, OverlayCell, Rgb8, SceneTable,
@@ -17,16 +18,21 @@ use rmk::types::battery::{BatteryStatus, ChargeState};
 
 use crate::lighting::{BatteryPair, LEDS_PER_HALF, OVERLAY_CAPACITY, SCENE_CAPACITY, TOTAL_LEDS};
 
-const VERSION: u8 = 4;
+// Version 5 adds the staged Extension packet carrying the extension-source
+// selection. A stale half rejects the mismatched version and simply keeps
+// its previous state until both halves are reflashed together.
+const VERSION: u8 = 5;
 const TAG_BEGIN: u8 = 1;
 const TAG_CONTEXT: u8 = 2;
 const TAG_CELL: u8 = 3;
 const TAG_COMMIT: u8 = 4;
 const TAG_ACK: u8 = 5;
 const TAG_SCENE_CELL: u8 = 6;
+const TAG_EXTENSION: u8 = 7;
 
 const BEGIN_LEN: usize = 26;
 const CONTEXT_LEN: usize = 23;
+const EXTENSION_LEN: usize = 12;
 const CELL_LEN: usize = 26;
 const SCENE_CELL_LEN: usize = 23;
 const COMMIT_LEN: usize = 9;
@@ -50,6 +56,14 @@ pub enum Message {
         revision: u32,
         context: LightingContext,
         batteries: BatteryPair,
+    },
+    /// Extension-source selection at snapshot time. Always part of a staged
+    /// snapshot (the Context packet has no spare bytes for it); `None` means
+    /// the authority has no selectable extension source.
+    Extension {
+        generation: u8,
+        revision: u32,
+        extension: Option<ExtensionState>,
     },
     Cell {
         generation: u8,
@@ -143,6 +157,23 @@ impl Message {
                 put_battery(&mut out, 20, batteries.right);
                 out[22] = context.powered as u8;
                 CONTEXT_LEN
+            }
+            Message::Extension {
+                generation,
+                revision,
+                extension,
+            } => {
+                out[1] = TAG_EXTENSION;
+                out[2] = generation;
+                put_u32(&mut out, 3, revision);
+                if let Some(extension) = extension {
+                    out[7] = 1;
+                    out[8] = extension.effect;
+                    out[9] = extension.palette;
+                    out[10] = extension.value;
+                    out[11] = extension.speed;
+                }
+                EXTENSION_LEN
             }
             Message::Cell {
                 generation,
@@ -291,6 +322,20 @@ impl Message {
                     right: get_battery(bytes, 20)?,
                 },
             }),
+            TAG_EXTENSION if bytes.len() == EXTENSION_LEN => Ok(Message::Extension {
+                generation: bytes[2],
+                revision: get_u32(bytes, 3),
+                extension: if flag(bytes[7])? {
+                    Some(ExtensionState {
+                        effect: bytes[8],
+                        palette: bytes[9],
+                        value: bytes[10],
+                        speed: bytes[11],
+                    })
+                } else {
+                    None
+                },
+            }),
             TAG_CELL if bytes.len() == CELL_LEN => {
                 let slot = bytes[7] as usize;
                 if !(LEDS_PER_HALF..TOTAL_LEDS).contains(&slot) {
@@ -371,9 +416,8 @@ impl Message {
                 generation: bytes[2],
                 revision: get_u32(bytes, 3),
             }),
-            TAG_BEGIN | TAG_CONTEXT | TAG_CELL | TAG_COMMIT | TAG_ACK | TAG_SCENE_CELL => {
-                Err(DecodeError::Length)
-            }
+            TAG_BEGIN | TAG_CONTEXT | TAG_CELL | TAG_COMMIT | TAG_ACK | TAG_SCENE_CELL
+            | TAG_EXTENSION => Err(DecodeError::Length),
             _ => Err(DecodeError::Tag),
         }
     }
@@ -423,6 +467,10 @@ pub fn try_queue_snapshot(
         revision: snapshot.revision,
         context: snapshot.context,
         batteries,
+    }) || !queue(Message::Extension {
+        generation,
+        revision: snapshot.revision,
+        extension: snapshot.extension,
     }) {
         return false;
     }
@@ -468,6 +516,7 @@ struct Stage {
     expected_overlay_cells: usize,
     expected_scene_cells: usize,
     context_received: bool,
+    extension_received: bool,
     batteries: BatteryPair,
 }
 
@@ -511,10 +560,12 @@ impl SnapshotStage {
                         scenes,
                         context: LightingContext::default(),
                         sample_time_ms,
+                        extension: None,
                     },
                     expected_overlay_cells: cell_count as usize,
                     expected_scene_cells: scene_count as usize,
                     context_received: false,
+                    extension_received: false,
                     batteries: BatteryPair::UNAVAILABLE,
                 });
                 None
@@ -533,6 +584,20 @@ impl SnapshotStage {
                 stage.snapshot.context = context;
                 stage.batteries = batteries;
                 stage.context_received = true;
+                None
+            }
+            Message::Extension {
+                generation,
+                revision,
+                extension,
+            } => {
+                let stage = self.stage.as_mut()?;
+                if stage.generation != generation || stage.snapshot.revision != revision {
+                    self.stage = None;
+                    return None;
+                }
+                stage.snapshot.extension = extension;
+                stage.extension_received = true;
                 None
             }
             Message::Cell {
@@ -587,6 +652,7 @@ impl SnapshotStage {
                     stage.generation == generation
                         && stage.snapshot.revision == revision
                         && stage.context_received
+                        && stage.extension_received
                         && stage.expected_overlay_cells == cell_count as usize
                         && stage.expected_scene_cells == scene_count as usize
                         && stage.snapshot.overlay.as_slice().len() == stage.expected_overlay_cells

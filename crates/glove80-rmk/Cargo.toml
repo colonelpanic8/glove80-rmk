@@ -36,6 +36,12 @@ nrf-mpsl = { git = "https://github.com/alexmoon/nrf-sdc", rev = "abe49d22ebfc85f
 ] }
 bt-hci = { version = "0.9", features = ["defmt"] }
 
+# PaletteFx effect pack for the standard engine's extension band, pinned by
+# the dependencies/rmk-palettefx submodule.
+rmk-palettefx = { path = "../../dependencies/rmk-palettefx", features = [
+    "rmk-lighting",
+] }
+
 cortex-m = "0.7.7"
 cortex-m-rt = "0.7.5"
 embassy-futures = "0.1"
@@ -60,6 +66,11 @@ defmt = "1"
 defmt-rtt = "1"
 panic-probe = { version = "1", features = ["print-defmt"] }
 static_cell = "2"
+
+# rmk-palettefx's adapter names the fork by git URL; resolve it to the same
+# vendored submodule this firmware builds against.
+[patch."https://github.com/colonelpanic8/rmk"]
+rmk = { path = "../../dependencies/rmk/rmk" }
 
 [build-dependencies]
 xz2 = "0.1.7"
