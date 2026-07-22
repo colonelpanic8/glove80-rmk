@@ -64,7 +64,7 @@ fn repo_root() -> Result<PathBuf> {
 }
 
 fn check(root: &Path) -> Result<()> {
-    validate_submodule(root)?;
+    validate_submodule(root, false)?;
     validate_local_paths(root)?;
 
     run_command(
@@ -77,7 +77,7 @@ fn check(root: &Path) -> Result<()> {
     Ok(())
 }
 
-fn validate_submodule(root: &Path) -> Result<String> {
+fn validate_submodule(root: &Path, allow_dirty: bool) -> Result<String> {
     let line = git(root, &["submodule", "status", "--", "dependencies/rmk"])?;
     // `git()` trims output, including the leading space that `git submodule
     // status` uses for a clean checkout. Dirty/uninitialized/conflicted
@@ -95,7 +95,7 @@ fn validate_submodule(root: &Path) -> Result<String> {
         return Err(format!("RMK checkout {actual} does not match gitlink {expected}").into());
     }
     let status = git(root, &["-C", "dependencies/rmk", "status", "--porcelain"])?;
-    if !status.is_empty() {
+    if !status.is_empty() && !allow_dirty {
         return Err("dependencies/rmk has local changes".into());
     }
     Ok(actual)
@@ -180,9 +180,10 @@ fn normalize(path: &Path) -> PathBuf {
 }
 
 fn dist(root: &Path) -> Result<()> {
-    let rmk_commit = validate_submodule(root)?;
+    let allow_dirty = env::var("GLOVE80_ALLOW_DIRTY").as_deref() == Ok("1");
+    let rmk_commit = validate_submodule(root, allow_dirty)?;
     let dirty = !git(root, &["status", "--porcelain", "--untracked-files=normal"])?.is_empty();
-    if dirty && env::var("GLOVE80_ALLOW_DIRTY").as_deref() != Ok("1") {
+    if dirty && !allow_dirty {
         return Err(
             "release bundles require a clean repository (set GLOVE80_ALLOW_DIRTY=1 only for local validation)"
                 .into(),
