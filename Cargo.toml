@@ -15,5 +15,6 @@ exclude = [
   "dependencies/rmk/rynk/rynk-kle",
   "dependencies/rmk/rynk/rynk-serial",
   "dependencies/rmk/rynk/rynk-wasm",
+  "dependencies/rmk-palettefx",
 ]
 resolver = "2"

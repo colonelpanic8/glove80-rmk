@@ -309,21 +309,27 @@ pub fn engine() -> Engine {
 /// board-wide on the central (the split driver re-publishes peripheral keys
 /// with their `[[split.peripheral]]` offsets applied), half-local on the
 /// peripheral (its matrix scanner publishes unshifted scan positions).
-/// `row_offset`/`col_offset` shift them into the board-wide lighting matrix
-/// before the topology lookup. Recording is render-neutral unless Reactive
-/// is the active effect; the source drains the queue either way.
+/// Offsets shift them into the board-wide lighting matrix and the column
+/// bounds keep each engine's hits on its physical half. Recording is
+/// render-neutral unless Reactive is active; the source drains the queue
+/// either way and timestamps hits in the engine animation-clock domain.
 #[rmk::macros::processor(subscribe = [KeyboardEvent])]
 pub struct ReactiveKeyHits {
     row_offset: u8,
     col_offset: u8,
+    first_col: u8,
+    last_col: u8,
 }
 
 impl ReactiveKeyHits {
-    /// Central event bus: positions are already board-wide.
-    pub const fn board() -> Self {
+    /// Central event bus: positions are already board-wide, including
+    /// re-published peripheral events. Keep only this engine's left half.
+    pub const fn central() -> Self {
         Self {
             row_offset: 0,
             col_offset: 0,
+            first_col: 0,
+            last_col: 7,
         }
     }
 
@@ -333,6 +339,8 @@ impl ReactiveKeyHits {
         Self {
             row_offset: 0,
             col_offset: 7,
+            first_col: 7,
+            last_col: 14,
         }
     }
 
@@ -343,14 +351,19 @@ impl ReactiveKeyHits {
         let KeyboardEventPos::Key(pos) = event.pos else {
             return;
         };
-        let key = MatrixPosition::new(
-            pos.row.wrapping_add(self.row_offset),
-            pos.col.wrapping_add(self.col_offset),
-        );
-        let timer_ms = embassy_time::Instant::now().as_millis() as u32;
+        let (Some(row), Some(col)) = (
+            pos.row.checked_add(self.row_offset),
+            pos.col.checked_add(self.col_offset),
+        ) else {
+            return;
+        };
+        if !(self.first_col..self.last_col).contains(&col) {
+            return;
+        }
+        let key = MatrixPosition::new(row, col);
         let mut queued = false;
         for (slot, _) in topology_config::LIGHTING_TOPOLOGY.leds_for_key(key) {
-            queued |= HIT_QUEUE.record(slot.0 as u8, timer_ms);
+            queued |= HIT_QUEUE.record(slot.0 as u8);
         }
         if queued {
             CORE_MAILBOX.snapshot_changed();
