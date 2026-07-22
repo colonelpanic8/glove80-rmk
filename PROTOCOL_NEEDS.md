@@ -361,3 +361,30 @@ Implemented additively in the pinned RMK fork for Glove80 and Rynkbench:
 The existing `GetLightingState` and conditional-scene control payload remain
 wire-stable. Legacy on/off commands map to `AlwaysOn`/`AlwaysOff`; the new
 three-state metadata lives only behind the new feature bit and endpoint.
+
+## 2026-07-21 — Extension-effects discovery and control
+
+Implemented additively in the pinned RMK fork for the Glove80's PaletteFx
+extension source (rmk-palettefx) and any future animated extension band:
+
+- `GetLightingExtension = 0x0921`, `GetLightingExtensionNames = 0x0922`,
+  `SetLightingExtensionState = 0x0923`, and
+  `LightingFeatureFlags::EXTENSION_EFFECTS = 1 << 11`. Boards advertise the
+  bit through `RynkLightingController::with_extension_effects()`; older
+  firmware answers `UnknownCmd` and no `ProtocolVersion` is minted.
+- The readback carries the extension source's descriptor (paged effect and
+  palette name lists) plus the current `ExtensionState` selection
+  (`effect`/`palette` indices and `value`/`speed` 0-255), pinned to the
+  lighting revision so hosts render controls without compiled-in assumptions.
+- Engine surface: three defaulted `LightingSource` hooks
+  (`extension_descriptor`, `extension_state`, `apply_extension_state`) plus
+  `StandardCommand::{ReadExtension, SetExtensionIfRevision}`. Sources that
+  are not user-selectable (e.g. `EmptySource`) report nothing and the
+  endpoints degrade cleanly.
+- `StandardReplicaState` gains `extension: Option<ExtensionState>`, exported
+  and applied by the existing `ExportReplica`/`ApplyReplica` commands. The
+  Glove80 split codec forwards it in a new staged `Extension` packet
+  (codec-local version 4 → 5, not a wire-protocol version); a stale half
+  rejects the version byte and keeps its previous state until both halves
+  are reflashed together, so effect/palette/value/speed changes on the
+  central propagate to the peripheral renderer.

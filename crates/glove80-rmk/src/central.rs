@@ -109,4 +109,11 @@ mod keyboard_central {
     fn battery_lighting_state() {
         crate::central_lighting::BatteryLightingState
     }
+
+    /// Feed both halves' key presses (board-wide on this bus) to the local
+    /// engine's Reactive PaletteFx effect.
+    #[register_processor(event)]
+    fn reactive_key_hits() {
+        crate::lighting::ReactiveKeyHits::board()
+    }
 }

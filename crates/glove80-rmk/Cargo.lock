@@ -1194,6 +1194,7 @@ dependencies = [
  "nrf-sdc",
  "panic-probe",
  "rmk",
+ "rmk-palettefx",
  "static_cell",
  "xz2",
 ]
@@ -1486,6 +1487,12 @@ name = "memchr"
 version = "2.8.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cf8baf1c55e62ffcace7a9f06f4bd9cd3f0c4beb022d3b367256b91b87513d98"
+
+[[package]]
+name = "micromath"
+version = "2.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c3c8dda44ff03a2f238717214da50f65d5a53b45cd213a7370424ffdb6fae815"
 
 [[package]]
 name = "minimal-lexical"
@@ -1869,6 +1876,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "63b8176103e19a2643978565ca18b50549f6101881c443590420e4dc998a3c69"
 
 [[package]]
+name = "rand_pcg"
+version = "0.10.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "caa0f4137e1c0a72f4c651489402276c8e8e1cf081f3b0ba156d2cbeef09e86a"
+dependencies = [
+ "rand_core 0.10.1",
+]
+
+[[package]]
 name = "regex"
 version = "1.13.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1959,6 +1975,20 @@ dependencies = [
  "rmk-types",
  "strum",
  "syn 2.0.119",
+]
+
+[[package]]
+name = "rmk-palettefx"
+version = "0.1.0"
+dependencies = [
+ "embassy-sync",
+ "heapless 0.9.3",
+ "micromath",
+ "rand_core 0.10.1",
+ "rand_pcg",
+ "rmk",
+ "serde",
+ "toml",
 ]
 
 [[package]]
