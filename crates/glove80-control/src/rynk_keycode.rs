@@ -19,6 +19,10 @@ pub fn to_via_keycode(key_action: KeyAction) -> u16 {
             Action::KeyWithModifier(key, modifiers) => {
                 ((modifiers.into_packed_bits() as u16) << 8) | key as u16
             }
+            // Host-side extension over an otherwise unsupported QMK function
+            // range. The CLI converts it to Rynk's native typed action before
+            // writing it to the keyboard.
+            Action::Modifier(modifiers) => 0x7000 | modifiers.into_packed_bits() as u16,
             Action::LayerToggleOnly(layer) => 0x5200 | layer as u16,
             Action::LayerOn(layer) => 0x5220 | layer as u16,
             Action::DefaultLayer(layer) => 0x5240 | layer as u16,
@@ -154,7 +158,9 @@ pub fn from_via_keycode(code: u16) -> KeyAction {
         0x52c0..=0x52df => KeyAction::No,
         0x52e0..=0x52ff => KeyAction::Single(Action::PersistentDefaultLayer(code as u8 & 0xf)),
         0x5700..=0x57ff => KeyAction::Morse((code & 0xff) as u8),
-        0x7000..=0x701f => KeyAction::No,
+        0x7000..=0x701f => KeyAction::Single(Action::Modifier(
+            ModifierCombination::from_packed_bits((code & 0x1f) as u8),
+        )),
         0x7700..=0x771f => KeyAction::Single(Action::TriggerMacro(code as u8 & 0x1f)),
         0x7800 => KeyAction::Single(Action::Light(LightAction::BacklightOn)),
         0x7801 => KeyAction::Single(Action::Light(LightAction::BacklightOff)),
@@ -233,8 +239,9 @@ mod tests {
     fn representative_via_actions_round_trip() {
         for code in [
             0x0000, 0x0001, 0x0004, 0x0104, 0x2104, 0x4304, 0x5223, 0x5264, 0x5283, 0x52a2, 0x52e3,
-            0x5702, 0x7704, 0x7780, 0x7784, 0x7786, 0x7800, 0x7801, 0x7802, 0x7803, 0x7804, 0x7805,
-            0x7806, 0x7820, 0x7821, 0x7827, 0x7828, 0x7834, 0x7c00, 0x7c02, 0x7c18, 0x7c79, 0x7e10,
+            0x5702, 0x700d, 0x7704, 0x7780, 0x7784, 0x7786, 0x7800, 0x7801, 0x7802, 0x7803, 0x7804,
+            0x7805, 0x7806, 0x7820, 0x7821, 0x7827, 0x7828, 0x7834, 0x7c00, 0x7c02, 0x7c18, 0x7c79,
+            0x7e10,
         ] {
             assert_eq!(to_via_keycode(from_via_keycode(code)), code, "0x{code:04x}");
         }

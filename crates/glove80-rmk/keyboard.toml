@@ -94,13 +94,14 @@ _ _ _ _ _ _ _ _ _ _ _ _
 
 [[keymap.layer]]
 name = "Mac Hyper"
+# MOD(...) directly holds the modifier combination until the key is released.
 keys = """
 _ _ _ _ _ _ _ _ _ _ _ _
 _ _ _ _ _ _ _ TG(4) _ _ _ _ _ _
 _ _ _ _ _ _ _ _ _ _ _ _ _ _
 _ _ _ _ _ _ _ _ _ _ _ _ _ _
 _ _ _ _ _ _ _ _ _ _ _ _ _ _
-_ _ _ _ _ _ WM(LCtrl, LGui | LAlt | LShift) _ _ _ _ _
+_ _ _ _ _ _ MOD(LCtrl | LAlt | LGui) _ _ _ _ _
 """
 
 # Each half's Reactive-lighting key-hit processor subscribes in addition to

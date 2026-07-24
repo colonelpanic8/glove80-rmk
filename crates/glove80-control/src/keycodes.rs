@@ -15,6 +15,7 @@
 //!   `OSM(MOD_…)`, `TT(n)` (named, but the firmware stores it as `KC_NO`),
 //!   `PDF(n)`
 //! - `0x5700..=0x57FF` tap dance / morse — `TD(n)`
+//! - `0x7000..=0x701F` held modifier combinations — `MOD(MOD_…)`
 //! - `0x7700..=0x771F` macros — `MACRO(n)`
 //! - `0x7780..=0x7786` output selection — `QK_OUTPUT_AUTO`,
 //!   `QK_OUTPUT_USB`, and `QK_OUTPUT_BLUETOOTH`
@@ -435,6 +436,9 @@ pub fn format_keycode(code: u16) -> String {
         0x52C0..=0x52DF => format!("TT({})", code & 0xF),
         0x52E0..=0x52FF => format!("PDF({})", code & 0xF),
         0x5700..=0x57FF => format!("TD({})", code & 0xFF),
+        0x7000..=0x701F if code & 0x1F != 0 => {
+            format!("MOD({})", format_mod_list((code & 0x1F) as u8))
+        }
         0x7700..=0x771F => format!("MACRO({})", code & 0x1F),
         0x7E00..=0x7E1F => format!("USER({})", code & 0x1F),
         _ => format!("0x{code:04X}"),
@@ -502,7 +506,8 @@ fn parse_basic(text: &str) -> Result<u16> {
 /// Parse a keycode from any accepted spelling: `0x`-prefixed hex, bare
 /// decimal, a `KC_*`/magic name or alias (case-insensitive, `KC_` optional),
 /// or a composite like `MO(2)`, `LT(1, KC_A)`, `LSFT(KC_1)`, `LCTL_T(KC_A)`,
-/// `MT(MOD_LCTL|MOD_LSFT, KC_A)`, `OSM(MOD_LSFT)`, `LM(1, MOD_LALT)`.
+/// `MT(MOD_LCTL|MOD_LSFT, KC_A)`, `MOD(MOD_LCTL|MOD_LALT)`,
+/// `OSM(MOD_LSFT)`, `LM(1, MOD_LALT)`.
 pub fn parse_keycode(text: &str) -> Result<u16> {
     let text = text.trim();
     if text.is_empty() {
@@ -554,6 +559,7 @@ fn parse_composite(name: &str, args: &str, original: &str) -> Result<u16> {
         "TD" => return Ok(0x5700 | parse_layer(args, "tap-dance index", 255)?),
         "MACRO" | "M" => return Ok(0x7700 | parse_layer(args, "macro index", 31)?),
         "USER" | "CUSTOM" => return Ok(0x7E00 | parse_layer(args, "user-key index", 31)?),
+        "MOD" => return Ok(0x7000 | u16::from(parse_mod_list(args)?)),
         "OSM" => return Ok(0x52A0 | u16::from(parse_mod_list(args)?)),
         _ => {}
     }
@@ -755,6 +761,10 @@ mod tests {
             0x2604
         );
         assert_eq!(parse_keycode("LM(1, MOD_LSFT)").unwrap(), 0x5022);
+        assert_eq!(
+            parse_keycode("MOD(MOD_LCTL|MOD_LALT|MOD_LGUI)").unwrap(),
+            0x700D
+        );
         assert_eq!(parse_keycode("OSM(MOD_RCTL)").unwrap(), 0x52B1);
         assert_eq!(parse_keycode("TD(5)").unwrap(), 0x5705);
         assert_eq!(parse_keycode("MACRO(5)").unwrap(), 0x7705);
@@ -782,8 +792,8 @@ mod tests {
         for code in [
             0x0000u16, 0x0001, 0x0004, 0x00E7, 0x00AE, 0x0104, 0x1104, 0x0704, 0x0F04, 0x0304,
             0x2204, 0x3228, 0x2704, 0x2F04, 0x2604, 0x4304, 0x5022, 0x5201, 0x5223, 0x5243, 0x5262,
-            0x5283, 0x52A2, 0x52B1, 0x52E3, 0x5705, 0x7705, 0x7803, 0x7804, 0x7820, 0x7821, 0x7827,
-            0x7828, 0x7834, 0x7C00, 0x7C73, 0x7E10,
+            0x5283, 0x52A2, 0x52B1, 0x52E3, 0x5705, 0x700D, 0x7705, 0x7803, 0x7804, 0x7820, 0x7821,
+            0x7827, 0x7828, 0x7834, 0x7C00, 0x7C73, 0x7E10,
             // Unknown codes round-trip through their hex rendering.
             0x0083, 0x6FFF,
         ] {
