@@ -8,7 +8,7 @@ use std::os::unix::io::AsRawFd;
 use std::path::{Path, PathBuf};
 
 use rynk::io::{ErrorType, Read, Write};
-use rynk::rmk_types::protocol::rynk::{RynkHeader, RYNK_HID_REPORT_SIZE};
+use rynk::rmk_types::protocol::rynk::RYNK_HID_REPORT_SIZE;
 use rynk::{RynkDevice, RynkHostError};
 use tokio::io::unix::AsyncFd;
 
@@ -87,7 +87,6 @@ impl RynkDevice for HidDevice {
                 report: [0; RYNK_HID_REPORT_SIZE],
                 pos: 0,
                 end: 0,
-                remaining: 0,
             },
             HidWriter { file: writer },
         ))
@@ -99,7 +98,6 @@ pub struct HidReader {
     report: [u8; RYNK_HID_REPORT_SIZE],
     pos: usize,
     end: usize,
-    remaining: usize,
 }
 
 impl ErrorType for HidReader {
@@ -132,15 +130,11 @@ impl Read for HidReader {
             if n == 0 {
                 return Ok(0);
             }
-            if self.remaining == 0 {
-                let Some(frame_len) = RynkHeader::peek_frame_len(&self.report[..n]) else {
-                    continue;
-                };
-                self.remaining = frame_len;
-            }
+            // Report padding is zero bytes; the COBS deframer in the rynk
+            // driver treats them as inter-frame delimiters, so pass the whole
+            // report through.
             self.pos = 0;
-            self.end = self.remaining.min(n);
-            self.remaining -= self.end;
+            self.end = n;
         }
     }
 }
