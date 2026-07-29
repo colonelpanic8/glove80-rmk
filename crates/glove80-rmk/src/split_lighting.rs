@@ -8,6 +8,7 @@
 use core::num::NonZeroU32;
 
 use rmk::lighting::compositor::ExtensionState;
+use rmk::lighting::standard::{EXTENSION_PARAM_CHUNK, ExtensionReplicaParams};
 use rmk::lighting::{
     BackgroundMode, BackgroundState, BatteryCondition, BuiltinEffect, ChargeCondition,
     ConditionSet, IndicatorState, LayerCondition, LayerPolicy, LayerState, LedSlot,
@@ -20,10 +21,11 @@ use rmk::types::battery::{BatteryStatus, ChargeState};
 
 use crate::lighting::{BatteryPair, LEDS_PER_HALF, OVERLAY_CAPACITY, SCENE_CAPACITY, TOTAL_LEDS};
 
-// Version 6 adds the staged Extension packet and runtime conditional-scene
-// packets. A stale half rejects the mismatched version and simply keeps
-// its previous state until both halves are reflashed together.
-const VERSION: u8 = 6;
+// Version 7 widens the staged Extension packet with the active effect's
+// tuning parameters; version 6 added that packet and the runtime
+// conditional-scene packets. A stale half rejects the mismatched version and
+// simply keeps its previous state until both halves are reflashed together.
+const VERSION: u8 = 7;
 const TAG_BEGIN: u8 = 1;
 const TAG_CONTEXT: u8 = 2;
 const TAG_CELL: u8 = 3;
@@ -36,7 +38,9 @@ const TAG_CONDITIONAL_SCENE_CELL: u8 = 9;
 
 const BEGIN_LEN: usize = 26;
 const CONTEXT_LEN: usize = 23;
-const EXTENSION_LEN: usize = 12;
+/// Selection (5 bytes after the header) plus the parameter block: one
+/// length byte, the effect the values belong to, and the values themselves.
+const EXTENSION_LEN: usize = 14 + EXTENSION_PARAM_CHUNK;
 const CELL_LEN: usize = 26;
 const SCENE_CELL_LEN: usize = 23;
 const CONDITIONAL_SCENE_BEGIN_LEN: usize = 8;
@@ -44,6 +48,7 @@ const CONDITIONAL_SCENE_CELL_LEN: usize = 25;
 const COMMIT_LEN: usize = 9;
 const ACK_LEN: usize = 7;
 const _: () = assert!(CELL_LEN <= SPLIT_APP_MSG_MAX);
+const _: () = assert!(EXTENSION_LEN <= SPLIT_APP_MSG_MAX);
 const _: () = assert!(CONDITIONAL_SCENE_CELL_LEN <= SPLIT_APP_MSG_MAX);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -64,13 +69,18 @@ pub enum Message {
         context: LightingContext,
         batteries: BatteryPair,
     },
-    /// Extension-source selection at snapshot time. Always part of a staged
-    /// snapshot (the Context packet has no spare bytes for it); `None` means
-    /// the authority has no selectable extension source.
+    /// Extension-source selection and the active effect's tuning at snapshot
+    /// time. Always part of a staged snapshot (the Context packet has no
+    /// spare bytes for it); `extension: None` means the authority has no
+    /// selectable extension source, and `params: None` means the active
+    /// effect exposes no parameters. Both travel together because the
+    /// peripheral's effect pack cannot render the authority's Rain or Storm
+    /// identically without the tuning that goes with the selection.
     Extension {
         generation: u8,
         revision: u32,
         extension: Option<ExtensionState>,
+        params: Option<ExtensionReplicaParams>,
     },
     Cell {
         generation: u8,
@@ -179,6 +189,7 @@ impl Message {
                 generation,
                 revision,
                 extension,
+                params,
             } => {
                 out[1] = TAG_EXTENSION;
                 out[2] = generation;
@@ -189,6 +200,14 @@ impl Message {
                     out[9] = extension.palette;
                     out[10] = extension.value;
                     out[11] = extension.speed;
+                }
+                // A zero length means "no parameters"; the values array is
+                // fixed-size so the packet length never varies.
+                if let Some(params) = params {
+                    let values = params.values();
+                    out[12] = values.len() as u8;
+                    out[13] = params.effect;
+                    out[14..14 + values.len()].copy_from_slice(values);
                 }
                 EXTENSION_LEN
             }
@@ -399,20 +418,33 @@ impl Message {
                     right: get_battery(bytes, 20)?,
                 },
             }),
-            TAG_EXTENSION if bytes.len() == EXTENSION_LEN => Ok(Message::Extension {
-                generation: bytes[2],
-                revision: get_u32(bytes, 3),
-                extension: if flag(bytes[7])? {
-                    Some(ExtensionState {
-                        effect: bytes[8],
-                        palette: bytes[9],
-                        value: bytes[10],
-                        speed: bytes[11],
-                    })
-                } else {
-                    None
-                },
-            }),
+            TAG_EXTENSION if bytes.len() == EXTENSION_LEN => {
+                let param_len = bytes[12] as usize;
+                if param_len > EXTENSION_PARAM_CHUNK {
+                    return Err(DecodeError::Value);
+                }
+                let mut values = [0u8; EXTENSION_PARAM_CHUNK];
+                values[..param_len].copy_from_slice(&bytes[14..14 + param_len]);
+                Ok(Message::Extension {
+                    generation: bytes[2],
+                    revision: get_u32(bytes, 3),
+                    extension: if flag(bytes[7])? {
+                        Some(ExtensionState {
+                            effect: bytes[8],
+                            palette: bytes[9],
+                            value: bytes[10],
+                            speed: bytes[11],
+                        })
+                    } else {
+                        None
+                    },
+                    params: (param_len != 0).then_some(ExtensionReplicaParams {
+                        effect: bytes[13],
+                        len: param_len as u8,
+                        values,
+                    }),
+                })
+            }
             TAG_CELL if bytes.len() == CELL_LEN => {
                 let slot = bytes[7] as usize;
                 if !(LEDS_PER_HALF..TOTAL_LEDS).contains(&slot) {
@@ -632,6 +664,7 @@ pub fn try_queue_snapshot(
         generation,
         revision: snapshot.revision,
         extension: snapshot.extension,
+        params: snapshot.extension_params,
     }) {
         return false;
     }
@@ -747,6 +780,7 @@ impl SnapshotStage {
                         context: LightingContext::default(),
                         sample_time_ms,
                         extension: None,
+                        extension_params: None,
                     },
                     expected_overlay_cells: cell_count as usize,
                     expected_scene_cells: scene_count as usize,
@@ -777,6 +811,7 @@ impl SnapshotStage {
                 generation,
                 revision,
                 extension,
+                params,
             } => {
                 let stage = self.stage.as_mut()?;
                 if stage.generation != generation || stage.snapshot.revision != revision {
@@ -784,6 +819,7 @@ impl SnapshotStage {
                     return None;
                 }
                 stage.snapshot.extension = extension;
+                stage.snapshot.extension_params = params;
                 stage.extension_received = true;
                 None
             }
