@@ -20,6 +20,7 @@ use rmk::lighting::{
     StandardReplicaSlot, StandardReply,
 };
 use rmk::types::battery::BatteryStatus;
+use rmk_palettefx::effects::Effect;
 use rmk_palettefx::rmk_lighting::{HitQueue, PaletteFxConfig, PaletteFxSource, TopologyLayout};
 
 /// Board-wide lighting topology for both binaries. `#[rmk_central]` emits
@@ -290,7 +291,8 @@ impl LightingOutput<LogicalFrame<Rgb8, TOTAL_LEDS>> for HalfOutput {
 pub fn engine() -> Engine {
     // Start PaletteFX disabled. Toggling it on restores half brightness
     // (0x80): the hardware output limit and per-key diffusors make full-scale
-    // effect output harsher than useful.
+    // effect output harsher than useful. Nothing persists the live selection,
+    // so `initial_effect` is what every boot (and every RgbTog) comes up on.
     let palettefx = PaletteFxSource::new(
         TopologyLayout::new(&topology_config::LIGHTING_TOPOLOGY),
         &HIT_QUEUE,
@@ -298,6 +300,7 @@ pub fn engine() -> Engine {
             initial_enabled: false,
             initial_val: 0x80,
             initial_palette: 0,
+            initial_effect: Effect::<REACTIVE_HITS>::STORM_INDEX,
             ..PaletteFxConfig::default()
         },
     );
