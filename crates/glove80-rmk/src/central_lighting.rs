@@ -44,6 +44,7 @@ pub fn init<'keymap, 'data>(
     persisted_scenes: &[LightingSceneCell],
     persisted_policy: Option<LightingLayerPolicy>,
     persisted_runtime_conditional_scenes: &[LightingConditionalSceneCell],
+    persisted_extension: Option<::rmk::storage::LightingExtensionRecord>,
     spi: Peri<'static, SPI3>,
     data_pin: Peri<'static, impl Pin>,
     chain_power_pin: Peri<'static, impl Pin>,
@@ -58,7 +59,7 @@ pub fn init<'keymap, 'data>(
 > {
     let provider =
         KeymapLightingState::new(keymap).expect("Glove80 layer count fits lighting state");
-    let mut engine = crate::lighting::engine();
+    let mut engine = crate::lighting::engine(persisted_extension);
     install_lighting_scenes(
         &mut engine,
         &crate::LIGHTING_TOPOLOGY,

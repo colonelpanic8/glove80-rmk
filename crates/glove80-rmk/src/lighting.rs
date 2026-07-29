@@ -19,6 +19,7 @@ use rmk::lighting::{
     LogicalFrame, Rgb8, SnapshotProvider, StandardCommand, StandardError, StandardLightingEngine,
     StandardReplicaSlot, StandardReply,
 };
+use rmk::storage::LightingExtensionRecord;
 use rmk::types::battery::BatteryStatus;
 use rmk_palettefx::effects::Effect;
 use rmk_palettefx::rmk_lighting::{HitQueue, PaletteFxConfig, PaletteFxSource, TopologyLayout};
@@ -288,21 +289,48 @@ impl LightingOutput<LogicalFrame<Rgb8, TOTAL_LEDS>> for HalfOutput {
     }
 }
 
-pub fn engine() -> Engine {
-    // Start PaletteFX disabled. Toggling it on restores half brightness
-    // (0x80): the hardware output limit and per-key diffusors make full-scale
-    // effect output harsher than useful. Nothing persists the live selection,
-    // so `initial_effect` is what every boot (and every RgbTog) comes up on.
+/// Compiled-in effect defaults, used on a board that has never persisted a
+/// selection: Storm (rain plus reactive key hits), lit, at half brightness.
+///
+/// Toggling PaletteFX on restores half brightness (0x80): the hardware output
+/// limit and per-key diffusors make full-scale effect output harsher than
+/// useful.
+const DEFAULT_EFFECT: u8 = Effect::<REACTIVE_HITS>::STORM_INDEX;
+const DEFAULT_EFFECT_VAL: u8 = 0x80;
+
+pub fn engine(persisted_extension: Option<LightingExtensionRecord>) -> Engine {
+    // A persisted selection wins over the compiled defaults, so changing what
+    // the board boots into never means rebuilding firmware. Every index is
+    // re-validated downstream against the live effect/palette/parameter lists,
+    // because a record written before an effect was inserted would otherwise
+    // name a different one.
+    let mut config = PaletteFxConfig {
+        initial_enabled: true,
+        initial_val: DEFAULT_EFFECT_VAL,
+        initial_palette: 0,
+        initial_effect: DEFAULT_EFFECT,
+        ..PaletteFxConfig::default()
+    };
+    if let Some(record) = persisted_extension {
+        config.initial_effect = record.effect;
+        config.initial_palette = record.palette as usize;
+        config.initial_speed = record.speed;
+        // A persisted zero means the user left the effects toggled off; keep
+        // them off, and let RgbTog come back at the compiled brightness.
+        config.initial_enabled = record.value != 0;
+        config.initial_val = if record.value != 0 {
+            record.value
+        } else {
+            DEFAULT_EFFECT_VAL
+        };
+        let restored = record.params();
+        config.initial_param_len = restored.len() as u8;
+        config.initial_params[..restored.len()].copy_from_slice(restored);
+    }
     let palettefx = PaletteFxSource::new(
         TopologyLayout::new(&topology_config::LIGHTING_TOPOLOGY),
         &HIT_QUEUE,
-        PaletteFxConfig {
-            initial_enabled: false,
-            initial_val: 0x80,
-            initial_palette: 0,
-            initial_effect: Effect::<REACTIVE_HITS>::STORM_INDEX,
-            ..PaletteFxConfig::default()
-        },
+        config,
     );
     Engine::new(
         crate::LIGHTING_BACKGROUND,
@@ -458,7 +486,13 @@ pub fn init_peripheral(
     pwm: Peri<'static, PWM0>,
     status_led_pin: Peri<'static, impl Pin>,
 ) -> LightingProcessor<'static, PeripheralState, Engine, HalfOutput, COMMAND_CAPACITY> {
-    let service = LightingService::new(PeripheralState, engine(), LogicalFrame::new(Rgb8::BLACK));
+    // The peripheral never persists a selection: it renders whatever the
+    // central replicates to it, so it boots on the compiled defaults.
+    let service = LightingService::new(
+        PeripheralState,
+        engine(None),
+        LogicalFrame::new(Rgb8::BLACK),
+    );
     let output = HalfOutput::right(LightingHardware::new(
         spi,
         data_pin,
