@@ -7,13 +7,14 @@ use anyhow::{bail, Context, Result};
 use clap::Subcommand;
 use rynk::rmk_types::action::KeyAction;
 use rynk::rmk_types::protocol::rynk::{
-    LightingBackgroundMode, LightingBackgroundState, LightingEffect, LightingExtensionNameKind,
-    LightingExtensionState, LightingFeatureFlags, LightingLayerPolicy, LightingLedId,
-    LightingMutableState, LightingOutputMode, LightingRgb8, LightingSceneCell,
-    SetLightingExtensionStateRequest, SetLightingLayerPolicyRequest, SetLightingOutputModeRequest,
-    SetLightingStateRequest,
+    Cmd, LightingBackgroundMode, LightingBackgroundState, LightingEffect, LightingError,
+    LightingExtensionNameKind, LightingExtensionParamsRequest, LightingExtensionState,
+    LightingFeatureFlags, LightingLayerPolicy, LightingLedId, LightingMutableState,
+    LightingOutputMode, LightingRgb8, LightingSceneCell, RynkError,
+    SetLightingExtensionParamRequest, SetLightingExtensionStateRequest,
+    SetLightingLayerPolicyRequest, SetLightingOutputModeRequest, SetLightingStateRequest,
 };
-use rynk::Client;
+use rynk::{Client, RynkHostError};
 use serde::{Deserialize, Serialize};
 
 use crate::transport::Selector;
@@ -120,6 +121,60 @@ pub struct EffectsConfig {
     pub palette: String,
     pub value: u8,
     pub speed: u8,
+    /// Per-effect tunable parameters, keyed by the effect name and then by the
+    /// parameter name the firmware advertises:
+    ///
+    /// ```toml
+    /// [lighting.effects.params.Rain]
+    /// Density = 6
+    /// ```
+    ///
+    /// A file owns only the parameters it lists. Parameters it omits keep
+    /// whatever value the keyboard already holds; they are never reset to
+    /// their firmware defaults. `pull` records only parameters that differ
+    /// from their default so pulled files stay small.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub params: BTreeMap<String, BTreeMap<String, u8>>,
+}
+
+impl EffectsConfig {
+    /// The extension selection without the parameter tables, so parameter
+    /// differences are reported per parameter instead of as one opaque blob.
+    fn selection(&self) -> EffectSelection<'_> {
+        EffectSelection {
+            effect: &self.effect,
+            palette: &self.palette,
+            value: self.value,
+            speed: self.speed,
+        }
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct EffectSelection<'a> {
+    effect: &'a str,
+    palette: &'a str,
+    value: u8,
+    speed: u8,
+}
+
+/// One extension effect's advertised parameters, as read from a keyboard.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct EffectParams {
+    /// Index of the effect within the advertised effect-name list.
+    pub index: u8,
+    pub effect: String,
+    pub params: Vec<ParamSpec>,
+}
+
+/// One parameter's static descriptor plus its live value.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ParamSpec {
+    pub name: String,
+    pub min: u8,
+    pub max: u8,
+    pub default: u8,
+    pub value: u8,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq, PartialOrd, Ord)]
@@ -165,6 +220,9 @@ struct LightingSnapshot {
     scene_policy: ScenePolicyConfig,
     background: BackgroundConfig,
     effects: Option<EffectsConfig>,
+    /// Parameters the keyboard advertises. `None` in a file snapshot, and also
+    /// on firmware that does not implement the parameter commands at all.
+    params: Option<Vec<EffectParams>>,
     scenes: Vec<SceneConfig>,
 }
 
@@ -266,12 +324,23 @@ impl LightingConfig {
                 pair[0].led
             );
         }
+        if let Some(effects) = &self.effects {
+            for (effect, table) in &effects.params {
+                if effect.trim().is_empty() {
+                    bail!("[lighting.effects.params] has an empty effect name");
+                }
+                if table.keys().any(|name| name.trim().is_empty()) {
+                    bail!("effect '{effect}' has an empty parameter name");
+                }
+            }
+        }
         Ok(LightingSnapshot {
             brightness: self.brightness,
             output_mode: self.output_mode,
             scene_policy: self.scene_policy,
             background: self.background.clone(),
             effects: self.effects.clone(),
+            params: None,
             scenes,
         })
     }
@@ -285,6 +354,40 @@ impl LightingConfig {
             effects: snapshot.effects.clone(),
             scenes: snapshot.scenes.clone(),
         }
+    }
+}
+
+impl RuntimeConfig {
+    /// Drop parameters that still hold their firmware default, so a pulled
+    /// file records only what the user actually tuned.
+    fn retain_non_default_params(&mut self, snapshot: &Snapshot) {
+        let Some(effects) = self
+            .lighting
+            .as_mut()
+            .and_then(|lighting| lighting.effects.as_mut())
+        else {
+            return;
+        };
+        let advertised = snapshot
+            .lighting
+            .as_ref()
+            .and_then(|lighting| lighting.params.as_ref());
+        let Some(advertised) = advertised else {
+            effects.params.clear();
+            return;
+        };
+        for set in advertised {
+            let Some(table) = effects.params.get_mut(&set.effect) else {
+                continue;
+            };
+            table.retain(|name, value| {
+                set.params
+                    .iter()
+                    .find(|spec| spec.name == *name)
+                    .is_none_or(|spec| spec.default != *value)
+            });
+        }
+        effects.params.retain(|_, table| !table.is_empty());
     }
 }
 
@@ -310,7 +413,9 @@ pub async fn operate(client: &Client, command: &ConfigCommand) -> Result<()> {
         ConfigCommand::Pull { file } => {
             let snapshot = read_snapshot(client).await?;
             let labels = RuntimeConfig::parse(file).ok();
-            let text = RuntimeConfig::from_snapshot(&snapshot, labels.as_ref()).to_toml()?;
+            let mut config = RuntimeConfig::from_snapshot(&snapshot, labels.as_ref());
+            config.retain_non_default_params(&snapshot);
+            let text = config.to_toml()?;
             std::fs::write(file, text)
                 .with_context(|| format!("could not write {}", file.display()))?;
             println!("pulled live runtime configuration into {}", file.display());
@@ -411,33 +516,35 @@ async fn read_snapshot(client: &Client) -> Result<Snapshot> {
         .map(scene_from_wire)
         .collect::<Vec<_>>();
     scenes.sort();
-    let effects = if lighting_caps
+    let (effects, extension_params) = if lighting_caps
         .features
         .contains(LightingFeatureFlags::EXTENSION_EFFECTS)
     {
         let extension = client.get_lighting_extension().await?;
-        let effect_names = client
-            .read_all_lighting_extension_names(LightingExtensionNameKind::Effects)
-            .await?;
-        let palette_names = client
-            .read_all_lighting_extension_names(LightingExtensionNameKind::Palettes)
-            .await?;
+        let effect_names = read_extension_names(client, LightingExtensionNameKind::Effects).await?;
+        let palette_names =
+            read_extension_names(client, LightingExtensionNameKind::Palettes).await?;
         let effect = effect_names
             .get(usize::from(extension.state.effect))
             .context("extension effect index is outside its advertised name list")?
-            .to_string();
+            .clone();
         let palette = palette_names
             .get(usize::from(extension.state.palette))
             .context("extension palette index is outside its advertised name list")?
-            .to_string();
-        Some(EffectsConfig {
-            effect,
-            palette,
-            value: extension.state.value,
-            speed: extension.state.speed,
-        })
+            .clone();
+        let extension_params = read_extension_params(client, &effect_names).await?;
+        (
+            Some(EffectsConfig {
+                effect,
+                palette,
+                value: extension.state.value,
+                speed: extension.state.speed,
+                params: live_param_tables(extension_params.as_deref()),
+            }),
+            extension_params,
+        )
     } else {
-        None
+        (None, None)
     };
     Ok(Snapshot {
         default_layer: client.get_default_layer().await?,
@@ -448,9 +555,109 @@ async fn read_snapshot(client: &Client) -> Result<Snapshot> {
             scene_policy: scene_policy_from_wire(scene_status.policy),
             background: background_from_wire(state.background),
             effects,
+            params: extension_params,
             scenes,
         }),
     })
+}
+
+/// Read every extension name of one kind as owned strings.
+pub(crate) async fn read_extension_names(
+    client: &Client,
+    kind: LightingExtensionNameKind,
+) -> Result<Vec<String>> {
+    Ok(client
+        .read_all_lighting_extension_names(kind)
+        .await?
+        .iter()
+        .map(|name| name.as_str().to_owned())
+        .collect())
+}
+
+/// Read the parameters of every effect that advertises any, or `None` when the
+/// keyboard has no parameter surface at all. Effects without parameters are
+/// omitted rather than recorded as empty lists.
+pub(crate) async fn read_extension_params(
+    client: &Client,
+    effect_names: &[String],
+) -> Result<Option<Vec<EffectParams>>> {
+    let mut sets = Vec::new();
+    for (index, effect) in effect_names.iter().enumerate() {
+        let index = u8::try_from(index).context("effect index exceeds u8")?;
+        let params = match read_effect_params(client, index).await {
+            Ok(params) => params,
+            Err(error) if params_unsupported(&error) => return Ok(None),
+            Err(error) => return Err(error.into()),
+        };
+        if !params.is_empty() {
+            sets.push(EffectParams {
+                index,
+                effect: effect.clone(),
+                params,
+            });
+        }
+    }
+    Ok(Some(sets))
+}
+
+/// Page one effect's parameter list. Pages are shaped like extension-name
+/// pages, so they are walked the same way: advance by the items returned and
+/// stop at the advertised total.
+async fn read_effect_params(client: &Client, effect: u8) -> Result<Vec<ParamSpec>, RynkHostError> {
+    let mut params = Vec::new();
+    let mut offset: u8 = 0;
+    loop {
+        let page = client
+            .get_lighting_extension_params(LightingExtensionParamsRequest { effect, offset })
+            .await?;
+        if offset >= page.total {
+            break;
+        }
+        if page.items.is_empty() || usize::from(offset) + page.items.len() > usize::from(page.total)
+        {
+            return Err(RynkHostError::InconsistentResponse {
+                cmd: Cmd::GetLightingExtensionParams,
+                reason: "parameter page is empty or extends beyond the advertised total",
+            });
+        }
+        offset += page.items.len() as u8;
+        params.extend(page.items.iter().map(|item| ParamSpec {
+            name: item.name.as_str().to_owned(),
+            min: item.min,
+            max: item.max,
+            default: item.default,
+            value: item.value,
+        }));
+    }
+    Ok(params)
+}
+
+/// Firmware without the parameter commands answers `UnknownCmd`, and firmware
+/// whose lighting source advertises no parameter descriptor answers
+/// `Unsupported`. Both mean the same thing to a host: there is nothing to read.
+fn params_unsupported(error: &RynkHostError) -> bool {
+    matches!(
+        error,
+        RynkHostError::Rejected(RynkError::UnknownCmd | RynkError::Unimplemented)
+            | RynkHostError::LightingRejected(LightingError::Unsupported)
+            | RynkHostError::Unsupported(..)
+    )
+}
+
+/// Render live parameter values as the schema's `[lighting.effects.params.…]`
+/// tables. `show` prints these as-is; `pull` prunes defaults from them first.
+fn live_param_tables(sets: Option<&[EffectParams]>) -> BTreeMap<String, BTreeMap<String, u8>> {
+    sets.unwrap_or_default()
+        .iter()
+        .map(|set| {
+            let table = set
+                .params
+                .iter()
+                .map(|param| (param.name.clone(), param.value))
+                .collect();
+            (set.effect.clone(), table)
+        })
+        .collect()
 }
 
 async fn apply_snapshot(client: &Client, desired: &Snapshot, before: &Snapshot) -> Result<()> {
@@ -520,24 +727,24 @@ async fn apply_snapshot(client: &Client, desired: &Snapshot, before: &Snapshot) 
                 })
                 .await?;
         }
-        if wanted.effects != present.effects {
+        let selection_differs = wanted.effects.as_ref().map(EffectsConfig::selection)
+            != present.effects.as_ref().map(EffectsConfig::selection);
+        if selection_differs {
             let wanted = wanted
                 .effects
                 .as_ref()
                 .context("cannot remove a firmware-provided effects extension")?;
-            let effect_names = client
-                .read_all_lighting_extension_names(LightingExtensionNameKind::Effects)
-                .await?;
-            let palette_names = client
-                .read_all_lighting_extension_names(LightingExtensionNameKind::Palettes)
-                .await?;
+            let effect_names =
+                read_extension_names(client, LightingExtensionNameKind::Effects).await?;
+            let palette_names =
+                read_extension_names(client, LightingExtensionNameKind::Palettes).await?;
             let effect = effect_names
                 .iter()
-                .position(|name| name.as_str() == wanted.effect)
+                .position(|name| *name == wanted.effect)
                 .with_context(|| format!("unknown extension effect '{}'", wanted.effect))?;
             let palette = palette_names
                 .iter()
-                .position(|name| name.as_str() == wanted.palette)
+                .position(|name| *name == wanted.palette)
                 .with_context(|| format!("unknown extension palette '{}'", wanted.palette))?;
             let revision = client.get_lighting_state().await?.revision;
             client
@@ -551,6 +758,9 @@ async fn apply_snapshot(client: &Client, desired: &Snapshot, before: &Snapshot) 
                     },
                 })
                 .await?;
+        }
+        if let Some(effects) = wanted.effects.as_ref().filter(|it| !it.params.is_empty()) {
+            apply_params(client, &effects.params, present.params.as_deref()).await?;
         }
         if wanted.scene_policy != present.scene_policy {
             let status = client.get_lighting_scene_status().await?;
@@ -574,6 +784,85 @@ async fn apply_snapshot(client: &Client, desired: &Snapshot, before: &Snapshot) 
         }
     }
     Ok(())
+}
+
+/// Write the parameters a file lists, resolving names against what the
+/// keyboard advertises. Parameters that already hold the wanted value are left
+/// alone, and parameters the file does not mention are never touched.
+async fn apply_params(
+    client: &Client,
+    wanted: &BTreeMap<String, BTreeMap<String, u8>>,
+    advertised: Option<&[EffectParams]>,
+) -> Result<()> {
+    let advertised =
+        advertised.context("the keyboard does not expose per-effect extension parameters")?;
+    for (effect, table) in wanted {
+        let set = advertised
+            .iter()
+            .find(|set| set.effect == *effect)
+            .with_context(|| format!("effect '{effect}' advertises no parameters"))?;
+        for (name, value) in table {
+            let index = set
+                .params
+                .iter()
+                .position(|param| param.name == *name)
+                .with_context(|| format!("effect '{effect}' has no parameter '{name}'"))?;
+            let param = &set.params[index];
+            if *value < param.min || *value > param.max {
+                bail!(
+                    "parameter '{effect}.{name}' accepts {}..={}, file requests {value}",
+                    param.min,
+                    param.max
+                );
+            }
+            if *value == param.value {
+                continue;
+            }
+            let revision = client.get_lighting_state().await?.revision;
+            client
+                .set_lighting_extension_param(SetLightingExtensionParamRequest {
+                    expected_revision: revision,
+                    effect: set.index,
+                    index: u8::try_from(index).context("parameter index exceeds u8")?,
+                    value: *value,
+                })
+                .await
+                .with_context(|| format!("writing parameter '{effect}.{name}'"))?;
+        }
+    }
+    Ok(())
+}
+
+/// Report every parameter a file lists whose value the keyboard does not
+/// already hold. Parameters absent from the file are not compared: a file owns
+/// only what it names.
+fn param_differences(desired: &LightingSnapshot, live: &LightingSnapshot) -> Vec<String> {
+    let mut result = Vec::new();
+    let Some(wanted) = desired.effects.as_ref() else {
+        return result;
+    };
+    for (effect, table) in &wanted.params {
+        let set = live
+            .params
+            .as_deref()
+            .unwrap_or_default()
+            .iter()
+            .find(|set| set.effect == *effect);
+        for (name, value) in table {
+            let current = set.and_then(|set| set.params.iter().find(|param| param.name == *name));
+            match current {
+                Some(param) if param.value == *value => {}
+                Some(param) => result.push(format!(
+                    "lighting parameter {effect}.{name}: file {value} != keyboard {}",
+                    param.value
+                )),
+                None => result.push(format!(
+                    "lighting parameter {effect}.{name}: file {value} != keyboard (not advertised)"
+                )),
+            }
+        }
+    }
+    result
 }
 
 fn differences(desired: &Snapshot, live: &Snapshot) -> Vec<String> {
@@ -622,12 +911,14 @@ fn differences(desired: &Snapshot, live: &Snapshot) -> Vec<String> {
             if wanted.background != present.background {
                 result.push("lighting background differs".into());
             }
-            if wanted.effects != present.effects {
+            let wanted_selection = wanted.effects.as_ref().map(EffectsConfig::selection);
+            let present_selection = present.effects.as_ref().map(EffectsConfig::selection);
+            if wanted_selection != present_selection {
                 result.push(format!(
-                    "effects state: file {:?} != keyboard {:?}",
-                    wanted.effects, present.effects
+                    "effects state: file {wanted_selection:?} != keyboard {present_selection:?}"
                 ));
             }
+            result.extend(param_differences(wanted, present));
             let wanted_cells = wanted
                 .scenes
                 .iter()
@@ -934,5 +1225,217 @@ mod tests {
     #[test]
     fn scene_colors_are_canonicalized() {
         assert_eq!(normalize_color("C000C0").unwrap(), "#c000c0");
+    }
+
+    const LIGHTING_WITH_PARAMS: &str = r#"
+brightness = 100
+output_mode = "always-on"
+scene_policy = "effective-only"
+
+[background]
+enabled = false
+hue = 0
+saturation = 0
+value = 0
+speed = 0
+mode = "solid"
+
+[effects]
+effect = "Rain"
+palette = "Aurora"
+value = 200
+speed = 40
+
+[effects.params.Rain]
+Density = 6
+"Trail Length" = 128
+"#;
+
+    fn params_of(config: &LightingConfig, effect: &str, name: &str) -> Option<u8> {
+        config
+            .effects
+            .as_ref()?
+            .params
+            .get(effect)?
+            .get(name)
+            .copied()
+    }
+
+    fn param_set(effect: &str, params: &[(&str, u8, u8, u8, u8)]) -> EffectParams {
+        EffectParams {
+            index: 1,
+            effect: effect.to_owned(),
+            params: params
+                .iter()
+                .map(|(name, min, max, default, value)| ParamSpec {
+                    name: (*name).to_owned(),
+                    min: *min,
+                    max: *max,
+                    default: *default,
+                    value: *value,
+                })
+                .collect(),
+        }
+    }
+
+    fn lighting_snapshot(
+        effects: Option<EffectsConfig>,
+        params: Option<Vec<EffectParams>>,
+    ) -> LightingSnapshot {
+        LightingSnapshot {
+            brightness: 100,
+            output_mode: OutputModeConfig::AlwaysOn,
+            scene_policy: ScenePolicyConfig::EffectiveOnly,
+            background: BackgroundConfig {
+                enabled: false,
+                hue: 0,
+                saturation: 0,
+                value: 0,
+                speed: 0,
+                mode: BackgroundModeConfig::Solid,
+            },
+            effects,
+            params,
+            scenes: Vec::new(),
+        }
+    }
+
+    fn effects_with(params: &[(&str, u8)]) -> EffectsConfig {
+        EffectsConfig {
+            effect: "Rain".into(),
+            palette: "Aurora".into(),
+            value: 200,
+            speed: 40,
+            params: BTreeMap::from([(
+                "Rain".to_owned(),
+                params
+                    .iter()
+                    .map(|(name, value)| ((*name).to_owned(), *value))
+                    .collect(),
+            )]),
+        }
+    }
+
+    #[test]
+    fn effect_param_tables_round_trip() {
+        let config: LightingConfig = toml::from_str(LIGHTING_WITH_PARAMS).unwrap();
+        assert_eq!(params_of(&config, "Rain", "Density"), Some(6));
+        assert_eq!(params_of(&config, "Rain", "Trail Length"), Some(128));
+
+        let text = toml::to_string_pretty(&config).unwrap();
+        assert!(text.contains("[effects.params.Rain]"), "{text}");
+        let reparsed: LightingConfig = toml::from_str(&text).unwrap();
+        assert_eq!(reparsed.effects, config.effects);
+    }
+
+    #[test]
+    fn effect_params_are_optional_and_omitted_when_empty() {
+        let config: LightingConfig = toml::from_str(&LIGHTING_WITH_PARAMS.replace(
+            "[effects.params.Rain]\nDensity = 6\n\"Trail Length\" = 128\n",
+            "",
+        ))
+        .unwrap();
+        assert!(config.effects.as_ref().unwrap().params.is_empty());
+        assert!(!toml::to_string_pretty(&config).unwrap().contains("params"));
+    }
+
+    #[test]
+    fn effect_param_names_must_not_be_empty() {
+        let text = LIGHTING_WITH_PARAMS.replace("[effects.params.Rain]", "[effects.params.\"\"]");
+        let error = toml::from_str::<LightingConfig>(&text)
+            .unwrap()
+            .snapshot()
+            .unwrap_err();
+        assert!(error.to_string().contains("empty effect name"), "{error}");
+
+        let text = LIGHTING_WITH_PARAMS.replace("Density = 6", "\"\" = 6");
+        let error = toml::from_str::<LightingConfig>(&text)
+            .unwrap()
+            .snapshot()
+            .unwrap_err();
+        assert!(
+            error.to_string().contains("empty parameter name"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn effect_param_values_are_bytes() {
+        let text = LIGHTING_WITH_PARAMS.replace("Density = 6", "Density = 256");
+        assert!(toml::from_str::<LightingConfig>(&text).is_err());
+    }
+
+    #[test]
+    fn pull_records_only_parameters_that_differ_from_their_default() {
+        let snapshot = Snapshot {
+            default_layer: 0,
+            layers: vec![vec![0; LAYER_SIZE]],
+            lighting: Some(lighting_snapshot(
+                Some(effects_with(&[("Density", 6), ("Trail Length", 128)])),
+                Some(vec![param_set(
+                    "Rain",
+                    &[("Density", 0, 16, 4, 6), ("Trail Length", 0, 255, 128, 128)],
+                )]),
+            )),
+        };
+        let mut config = RuntimeConfig::from_snapshot(&snapshot, None);
+        config.retain_non_default_params(&snapshot);
+        let lighting = config.lighting.unwrap();
+        assert_eq!(params_of(&lighting, "Rain", "Density"), Some(6));
+        assert_eq!(params_of(&lighting, "Rain", "Trail Length"), None);
+    }
+
+    #[test]
+    fn pull_drops_parameters_when_the_keyboard_has_none() {
+        let snapshot = Snapshot {
+            default_layer: 0,
+            layers: vec![vec![0; LAYER_SIZE]],
+            lighting: Some(lighting_snapshot(
+                Some(effects_with(&[("Density", 6)])),
+                None,
+            )),
+        };
+        let mut config = RuntimeConfig::from_snapshot(&snapshot, None);
+        config.retain_non_default_params(&snapshot);
+        assert!(config.lighting.unwrap().effects.unwrap().params.is_empty());
+    }
+
+    #[test]
+    fn parameter_differences_only_cover_what_the_file_names() {
+        let desired = lighting_snapshot(Some(effects_with(&[("Density", 6)])), None);
+        let live = lighting_snapshot(
+            Some(effects_with(&[("Density", 4), ("Trail Length", 200)])),
+            Some(vec![param_set(
+                "Rain",
+                &[("Density", 0, 16, 4, 4), ("Trail Length", 0, 255, 128, 200)],
+            )]),
+        );
+        assert_eq!(
+            param_differences(&desired, &live),
+            vec!["lighting parameter Rain.Density: file 6 != keyboard 4"]
+        );
+
+        let matching = lighting_snapshot(Some(effects_with(&[("Density", 4)])), None);
+        assert!(param_differences(&matching, &live).is_empty());
+    }
+
+    #[test]
+    fn unadvertised_parameters_are_reported_as_differences() {
+        let desired = lighting_snapshot(Some(effects_with(&[("Sparkle", 3)])), None);
+        let live = lighting_snapshot(Some(effects_with(&[])), None);
+        assert_eq!(
+            param_differences(&desired, &live),
+            vec!["lighting parameter Rain.Sparkle: file 3 != keyboard (not advertised)"]
+        );
+    }
+
+    #[test]
+    fn parameter_tables_do_not_disturb_the_extension_selection_diff() {
+        let desired = lighting_snapshot(Some(effects_with(&[("Density", 6)])), None);
+        let live = lighting_snapshot(Some(effects_with(&[])), None);
+        assert_eq!(
+            desired.effects.as_ref().map(EffectsConfig::selection),
+            live.effects.as_ref().map(EffectsConfig::selection)
+        );
     }
 }

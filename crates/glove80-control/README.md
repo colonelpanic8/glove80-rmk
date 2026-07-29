@@ -16,7 +16,7 @@ The top-level commands are:
 - `config validate|diff|apply|pull|show`
 - `keymap read|set|default|monitor|find`
 - `lighting ping|caps|set|unset|clear|read|replace|brightness`
-- `lighting scene-read|scene-set|scene-unset|scene-policy`
+- `lighting scene-read|scene-set|scene-unset|scene-policy|params`
 - `version`
 - `bootloader [--peripheral] [--yes]`
 
@@ -54,4 +54,21 @@ state. `config diff FILE` compares the file with a live keyboard;
 `config apply FILE` writes only differences and verifies readback; `config
 pull FILE` writes the keyboard state to disk; and `config show` prints it.
 Lighting extensions remain generic: effect and palette names come from Rynk's
-extension descriptor, regardless of the firmware-side effect provider.
+extension descriptor, regardless of the firmware-side effect provider. Effects
+may also advertise tunable parameters, which the file addresses by name:
+
+```toml
+[lighting.effects.params.Rain]
+Density = 6
+"Trail Length" = 128
+```
+
+A file owns only the parameters it lists; the rest keep whatever value the
+keyboard holds. `config pull` records only parameters that differ from their
+firmware default. Firmware that predates the parameter commands simply
+advertises none, so reads degrade quietly and only a file that names a
+parameter fails.
+
+`lighting params` lists every effect that advertises parameters, `lighting
+params EFFECT` lists one effect's, and `lighting params EFFECT NAME VALUE`
+writes one.

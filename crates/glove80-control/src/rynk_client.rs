@@ -10,11 +10,12 @@ use rynk::rmk_types::action::KeyAction;
 use rynk::rmk_types::protocol::rynk::{
     AbortLightingOverlayReplaceRequest, BeginLightingOverlayReplaceRequest,
     ClearLightingOverlayRequest, CommitLightingOverlayReplaceRequest, LightingBackgroundMode,
-    LightingEffect, LightingEffectFlags, LightingFeatureFlags, LightingLayerPolicy, LightingLedId,
-    LightingMutableState, LightingOverlayCell, LightingRgb8, LightingSceneCell, LightingState,
-    PutLightingOverlayChunkRequest, RynkError, SetLightingLayerPolicyRequest,
-    SetLightingOverlayRequest, SetLightingSceneCellRequest, SetLightingStateRequest,
-    UnsetLightingOverlayRequest, UnsetLightingSceneCellRequest,
+    LightingEffect, LightingEffectFlags, LightingExtensionNameKind, LightingFeatureFlags,
+    LightingLayerPolicy, LightingLedId, LightingMutableState, LightingOverlayCell, LightingRgb8,
+    LightingSceneCell, LightingState, PutLightingOverlayChunkRequest, RynkError,
+    SetLightingExtensionParamRequest, SetLightingLayerPolicyRequest, SetLightingOverlayRequest,
+    SetLightingSceneCellRequest, SetLightingStateRequest, UnsetLightingOverlayRequest,
+    UnsetLightingSceneCellRequest,
 };
 use rynk::{Client, RynkDevice, RynkHostError};
 use rynk_ble::BleDevice;
@@ -582,6 +583,77 @@ async fn operate_lighting(client: &Client, command: &LightingCommand) -> Result<
                 ids.len(),
                 state.revision,
             );
+        }
+        LightingCommand::Params {
+            effect,
+            name,
+            value,
+        } => {
+            let effect_names =
+                crate::config::read_extension_names(client, LightingExtensionNameKind::Effects)
+                    .await?;
+            let sets = crate::config::read_extension_params(client, &effect_names)
+                .await?
+                .context("the keyboard does not expose per-effect extension parameters")?;
+            match (effect, name, value) {
+                (Some(effect), Some(name), Some(value)) => {
+                    let set = sets
+                        .iter()
+                        .find(|set| set.effect == *effect)
+                        .with_context(|| format!("effect '{effect}' advertises no parameters"))?;
+                    let index = set
+                        .params
+                        .iter()
+                        .position(|param| param.name == *name)
+                        .with_context(|| format!("effect '{effect}' has no parameter '{name}'"))?;
+                    let param = &set.params[index];
+                    if *value < param.min || *value > param.max {
+                        bail!(
+                            "parameter '{effect}.{name}' accepts {}..={}, got {value}",
+                            param.min,
+                            param.max
+                        );
+                    }
+                    let revision = client.get_lighting_state().await?.revision;
+                    let state = client
+                        .set_lighting_extension_param(SetLightingExtensionParamRequest {
+                            expected_revision: revision,
+                            effect: set.index,
+                            index: u8::try_from(index).context("parameter index exceeds u8")?,
+                            value: *value,
+                        })
+                        .await?;
+                    println!("{effect} {name} = {value}; revision: {}", state.revision);
+                }
+                (None, Some(_), Some(_)) => bail!("setting a parameter needs an effect name"),
+                (_, Some(_), None) | (_, None, Some(_)) => {
+                    bail!("setting a parameter needs both a name and a value")
+                }
+                (effect, None, None) => {
+                    let effect = effect.as_deref();
+                    let selected = sets
+                        .iter()
+                        .filter(|set| effect.is_none_or(|wanted| set.effect == wanted))
+                        .collect::<Vec<_>>();
+                    if let Some(effect) = effect {
+                        if selected.is_empty() {
+                            bail!("effect '{effect}' advertises no parameters");
+                        }
+                    }
+                    if selected.is_empty() {
+                        println!("no extension effect advertises parameters");
+                    }
+                    for set in selected {
+                        println!("{}:", set.effect);
+                        for param in &set.params {
+                            println!(
+                                "  {} = {} (range {}-{}, default {})",
+                                param.name, param.value, param.min, param.max, param.default,
+                            );
+                        }
+                    }
+                }
+            }
         }
         LightingCommand::ScenePolicy { policy } => {
             let status = client.get_lighting_scene_status().await?;

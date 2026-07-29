@@ -77,6 +77,18 @@ pub enum LightingCommand {
         #[arg(required = true)]
         keys: Vec<String>,
     },
+    /// List extension effect parameters, or set one of them.
+    ///
+    /// `params` lists every effect that advertises parameters, `params EFFECT`
+    /// lists one effect's, and `params EFFECT NAME VALUE` writes one.
+    Params {
+        /// Effect name as advertised by the extension descriptor.
+        effect: Option<String>,
+        /// Parameter name as advertised by the effect.
+        name: Option<String>,
+        /// New value, within the parameter's advertised range.
+        value: Option<u8>,
+    },
     /// Read or set how active layer scenes are composed.
     ScenePolicy {
         #[arg(value_enum)]
