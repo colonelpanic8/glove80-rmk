@@ -42,12 +42,22 @@ pub const LEDS_PER_HALF: usize = 40;
 pub const TOTAL_LEDS: usize = LEDS_PER_HALF * 2;
 pub const OVERLAY_CAPACITY: usize = 64;
 /// Bounds the runtime scene table and, separately, the runtime conditional
-/// table. Sized so a host can carry every lighting rule this board would
-/// otherwise compile in: eight layers of thumb-cluster and interior-column
-/// cells fill roughly 120 slots, and the status rules another 40. Each cell
-/// costs a handful of bytes in the engine, the replica snapshot, and the
-/// mailbox, which the nRF52840's 255 KB absorbs with room to spare.
-pub const SCENE_CAPACITY: usize = 160;
+/// table, so a host can carry every lighting rule this board would otherwise
+/// compile in and still have room to grow. The compiled config currently uses
+/// 104 scene cells across seven layers and 65 conditional rules.
+///
+/// This is a total across all layers, not a per-layer budget: a cell carries
+/// its own layer, and every layer shares the one table.
+///
+/// It is not a cheap constant. Measured on the central binary, each unit of
+/// capacity costs about 192 bytes of RAM -- far more than one cell -- because
+/// the same number sizes the live scene table, the live conditional table, the
+/// atomic-replace staging buffer, the replica snapshot in `REPLICA_SLOT`, and
+/// the `StandardCommand` payloads queued in a `COMMAND_CAPACITY`-deep mailbox.
+/// At this value static RAM is roughly 174 KB of the nRF52840's 256 KB. Raising
+/// it much further wants those copies reduced first, rather than paying the
+/// multiplier again.
+pub const SCENE_CAPACITY: usize = 320;
 pub const COMMAND_CAPACITY: usize = 4;
 
 /// Number of simultaneous key hits the Reactive effect remembers between
