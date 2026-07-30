@@ -41,7 +41,13 @@ bind_interrupts!(struct Irqs {
 pub const LEDS_PER_HALF: usize = 40;
 pub const TOTAL_LEDS: usize = LEDS_PER_HALF * 2;
 pub const OVERLAY_CAPACITY: usize = 64;
-pub const SCENE_CAPACITY: usize = 64;
+/// Bounds the runtime scene table and, separately, the runtime conditional
+/// table. Sized so a host can carry every lighting rule this board would
+/// otherwise compile in: eight layers of thumb-cluster and interior-column
+/// cells fill roughly 120 slots, and the status rules another 40. Each cell
+/// costs a handful of bytes in the engine, the replica snapshot, and the
+/// mailbox, which the nRF52840's 255 KB absorbs with room to spare.
+pub const SCENE_CAPACITY: usize = 160;
 pub const COMMAND_CAPACITY: usize = 4;
 
 /// Number of simultaneous key hits the Reactive effect remembers between
