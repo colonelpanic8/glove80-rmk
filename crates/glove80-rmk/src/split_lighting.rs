@@ -44,7 +44,7 @@ const EXTENSION_LEN: usize = 14 + EXTENSION_PARAM_CHUNK;
 const CELL_LEN: usize = 26;
 const SCENE_CELL_LEN: usize = 23;
 const CONDITIONAL_SCENE_BEGIN_LEN: usize = 8;
-const CONDITIONAL_SCENE_CELL_LEN: usize = 25;
+const CONDITIONAL_SCENE_CELL_LEN: usize = 26;
 const COMMIT_LEN: usize = 9;
 const ACK_LEN: usize = 7;
 const _: () = assert!(CELL_LEN <= SPLIT_APP_MSG_MAX);
@@ -333,6 +333,16 @@ impl Message {
                 put_u32(&mut out, 15, period_ms);
                 put_u32(&mut out, 19, phase_ms);
                 put_u16(&mut out, 23, auxiliary);
+                // A rule gated on the output mode has to carry that gate across
+                // the link. Without it the peripheral would see no condition,
+                // which reads as "always matches" -- so every mode's rule would
+                // fire at once and the last one written would win.
+                out[25] = match cell.conditions.output_mode {
+                    None => u8::MAX,
+                    Some(OutputMode::AlwaysOn) => 0,
+                    Some(OutputMode::AlwaysOff) => 1,
+                    Some(OutputMode::PoweredOnly) => 2,
+                };
                 CONDITIONAL_SCENE_CELL_LEN
             }
             Message::Commit {
@@ -577,7 +587,17 @@ impl Message {
                     generation: bytes[2],
                     revision: get_u32(bytes, 3),
                     cell: RuntimeConditionalSceneCell {
-                        conditions: ConditionSet { layer, battery },
+                        conditions: ConditionSet {
+                            layer,
+                            battery,
+                            output_mode: match bytes[25] {
+                                0 => Some(OutputMode::AlwaysOn),
+                                1 => Some(OutputMode::AlwaysOff),
+                                2 => Some(OutputMode::PoweredOnly),
+                                u8::MAX => None,
+                                _ => return Err(DecodeError::Value),
+                            },
+                        },
                         slot: LedSlot(slot as u16),
                         effect,
                     },
