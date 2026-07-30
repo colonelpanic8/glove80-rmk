@@ -18,3 +18,8 @@ rynk-serial = { path = "../../dependencies/rmk/rynk/rynk-serial" }
 rynk-ble = { path = "../../dependencies/rmk/rynk/rynk-ble" }
 embassy-futures = "0.1"
 tokio = { version = "1.47", features = ["net", "rt-multi-thread"] }
+
+[dev-dependencies]
+# Decodes `[layout]` through the same blob path the firmware serves over
+# GetLayout, so tests/board_geometry.rs checks the real derived key centres.
+rynk-kle = { path = "../../dependencies/rmk/rynk/rynk-kle" }
