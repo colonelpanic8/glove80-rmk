@@ -653,7 +653,6 @@ pub fn try_queue_snapshot(
     }
     let conditional_scene_count = snapshot
         .runtime_conditional_scenes
-        .as_slice()
         .iter()
         .filter(|cell| cell.slot.index() >= LEDS_PER_HALF)
         .count();
@@ -723,9 +722,8 @@ pub fn try_queue_snapshot(
     }) {
         return false;
     }
-    for &cell in snapshot
+    for cell in snapshot
         .runtime_conditional_scenes
-        .as_slice()
         .iter()
         .filter(|cell| cell.slot.index() >= LEDS_PER_HALF)
     {
@@ -910,7 +908,7 @@ impl SnapshotStage {
                     || stage
                         .expected_conditional_scene_cells
                         .is_none_or(|expected| {
-                            stage.snapshot.runtime_conditional_scenes.as_slice().len() >= expected
+                            stage.snapshot.runtime_conditional_scenes.len() >= expected
                         })
                     || stage
                         .snapshot
@@ -940,8 +938,7 @@ impl SnapshotStage {
                         && stage
                             .expected_conditional_scene_cells
                             .is_none_or(|expected| {
-                                stage.snapshot.runtime_conditional_scenes.as_slice().len()
-                                    == expected
+                                stage.snapshot.runtime_conditional_scenes.len() == expected
                             })
                 });
                 if valid {

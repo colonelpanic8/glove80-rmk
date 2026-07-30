@@ -110,7 +110,7 @@ keys = """
 User10 No No No No No No No No User11
 No No No No No No No No No No No No
 No No No No No No No No No No No No
-Bootloader User13 BacklightDown BacklightUp No No No No No No No User12
+Bootloader OutputModeCycle BacklightDown BacklightUp No No No No No No No User12
 Reboot No RgbTog RgbModeForward RgbHui No User2 User3 No No No No No No No No No Reboot
 No No No No No User0 User1 OutputUsb No No No No No No No TO(3)
 """
@@ -910,3 +910,26 @@ zones = [1]
 node = 1
 output = 0
 physical_index = 39
+
+# Magic+A reports the selected three-state lighting policy only while the Magic
+# layer is active. Persisted runtime rules may override these compiled defaults.
+[[lighting.conditional_scene]]
+layer = { layer = 2, active = true }
+output_mode = "always_on"
+[[lighting.conditional_scene.cell]]
+target = { led = 31 }
+effect = { kind = "solid", color = [0, 128, 0] }
+
+[[lighting.conditional_scene]]
+layer = { layer = 2, active = true }
+output_mode = "always_off"
+[[lighting.conditional_scene.cell]]
+target = { led = 31 }
+effect = { kind = "solid", color = [128, 0, 0] }
+
+[[lighting.conditional_scene]]
+layer = { layer = 2, active = true }
+output_mode = "powered_only"
+[[lighting.conditional_scene.cell]]
+target = { led = 31 }
+effect = { kind = "solid", color = [0, 64, 160] }

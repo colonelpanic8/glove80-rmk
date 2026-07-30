@@ -50,13 +50,11 @@ pub const OVERLAY_CAPACITY: usize = 64;
 /// its own layer, and every layer shares the one table.
 ///
 /// It is not a cheap constant. Measured on the central binary, each unit of
-/// capacity costs about 192 bytes of RAM -- far more than one cell -- because
-/// the same number sizes the live scene table, the live conditional table, the
-/// atomic-replace staging buffer, the replica snapshot in `REPLICA_SLOT`, and
-/// the `StandardCommand` payloads queued in a `COMMAND_CAPACITY`-deep mailbox.
-/// At this value static RAM is roughly 174 KB of the nRF52840's 256 KB. Raising
-/// it much further wants those copies reduced first, rather than paying the
-/// multiplier again.
+/// capacity is multiplied across the live tables, atomic-replace staging,
+/// replica snapshot in `REPLICA_SLOT`, and the `StandardCommand` payloads
+/// queued in a `COMMAND_CAPACITY`-deep mailbox. Both runtime tables intern
+/// effects so repeated styles do not pay that multiplier per cell. Raising
+/// this value still requires measuring the final central binary.
 pub const SCENE_CAPACITY: usize = 160;
 pub const COMMAND_CAPACITY: usize = 4;
 
