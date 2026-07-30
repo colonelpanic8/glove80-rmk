@@ -81,6 +81,7 @@ pub fn to_via_keycode(key_action: KeyAction) -> u16 {
                 LightAction::RgbModeGradient => 0x7832,
                 LightAction::RgbModeRgbtest => 0x7833,
                 LightAction::RgbModeTwinkle => 0x7834,
+                LightAction::OutputModeCycle => 0x7835,
                 _ => 0,
             },
             Action::Special(SpecialKey::GraveEscape) => 0x7c16,
@@ -191,6 +192,7 @@ pub fn from_via_keycode(code: u16) -> KeyAction {
         0x7832 => KeyAction::Single(Action::Light(LightAction::RgbModeGradient)),
         0x7833 => KeyAction::Single(Action::Light(LightAction::RgbModeRgbtest)),
         0x7834 => KeyAction::Single(Action::Light(LightAction::RgbModeTwinkle)),
+        0x7835 => KeyAction::Single(Action::Light(LightAction::OutputModeCycle)),
         0x7835..=0x783f => KeyAction::No,
         0x7780 => KeyAction::Single(Action::KeyboardControl(KeyboardAction::OutputAuto)),
         0x7784 => KeyAction::Single(Action::KeyboardControl(KeyboardAction::OutputUsb)),
@@ -240,7 +242,7 @@ mod tests {
         for code in [
             0x0000, 0x0001, 0x0004, 0x0104, 0x2104, 0x4304, 0x5223, 0x5264, 0x5283, 0x52a2, 0x52e3,
             0x5702, 0x700d, 0x7704, 0x7780, 0x7784, 0x7786, 0x7800, 0x7801, 0x7802, 0x7803, 0x7804,
-            0x7805, 0x7806, 0x7820, 0x7821, 0x7827, 0x7828, 0x7834, 0x7c00, 0x7c02, 0x7c18, 0x7c79,
+            0x7805, 0x7806, 0x7820, 0x7821, 0x7827, 0x7828, 0x7834, 0x7835, 0x7c00, 0x7c02, 0x7c18, 0x7c79,
             0x7e10,
         ] {
             assert_eq!(to_via_keycode(from_via_keycode(code)), code, "0x{code:04x}");

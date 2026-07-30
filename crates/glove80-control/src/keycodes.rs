@@ -21,7 +21,8 @@
 //!   `QK_OUTPUT_USB`, and `QK_OUTPUT_BLUETOOTH`
 //! - `0x7800..=0x7806` keyboard lighting — `BL_ON`, `BL_OFF`, `BL_TOGG`,
 //!   `BL_DOWN`, `BL_UP`, `BL_STEP`, `BL_BRTG`
-//! - `0x7820..=0x7834` RGB effects — `UG_TOGG`, `UG_NEXT`, `UG_PREV`,
+//! - `0x7820..=0x7835` RGB effects — `UG_TOGG`, `UG_NEXT`, `UG_PREV`,
+//!   `UG_OMODE` (cycle the standard-lighting output mode),
 //!   hue/saturation/value/speed controls, and fixed RGB modes
 //! - `0x7C00..` QMK magic keys the firmware supports (`QK_BOOT`, `CW_TOGG`,
 //!   space cadet, …)
@@ -265,6 +266,11 @@ const EXTRA: &[(u16, &str, &[&str])] = &[
     (0x7804, "BL_UP", &["QK_BACKLIGHT_UP"]),
     (0x7805, "BL_STEP", &["QK_BACKLIGHT_STEP"]),
     (0x7806, "BL_BRTG", &["QK_BACKLIGHT_TOGGLE_BREATHING"]),
+    (
+        0x7835,
+        "UG_OMODE",
+        &["QK_UNDERGLOW_OUTPUT_MODE_CYCLE", "RGB_OMODE"],
+    ),
     (0x7820, "UG_TOGG", &["QK_UNDERGLOW_TOGGLE", "RGB_TOG"]),
     (0x7821, "UG_NEXT", &["QK_UNDERGLOW_MODE_NEXT", "RGB_MOD"]),
     (
@@ -708,6 +714,7 @@ mod tests {
         assert_eq!(format_keycode(0x7C73), "CW_TOGG");
         assert_eq!(format_keycode(0x7803), "BL_DOWN");
         assert_eq!(format_keycode(0x7804), "BL_UP");
+        assert_eq!(format_keycode(0x7835), "UG_OMODE");
         assert_eq!(format_keycode(0x7820), "UG_TOGG");
         assert_eq!(format_keycode(0x7821), "UG_NEXT");
         assert_eq!(format_keycode(0x7827), "UG_VALU");
