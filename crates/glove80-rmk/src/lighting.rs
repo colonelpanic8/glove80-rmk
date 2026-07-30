@@ -57,7 +57,7 @@ pub const OVERLAY_CAPACITY: usize = 64;
 /// At this value static RAM is roughly 174 KB of the nRF52840's 256 KB. Raising
 /// it much further wants those copies reduced first, rather than paying the
 /// multiplier again.
-pub const SCENE_CAPACITY: usize = 320;
+pub const SCENE_CAPACITY: usize = 160;
 pub const COMMAND_CAPACITY: usize = 4;
 
 /// Number of simultaneous key hits the Reactive effect remembers between
