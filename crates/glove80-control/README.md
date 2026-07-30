@@ -72,3 +72,24 @@ parameter fails.
 `lighting params` lists every effect that advertises parameters, `lighting
 params EFFECT` lists one effect's, and `lighting params EFFECT NAME VALUE`
 writes one.
+
+Conditional lighting rules — the runtime counterpart of the ones a board
+compiles in — are managed the same way. A rule applies when every condition it
+names holds; naming none makes it unconditional:
+
+```toml
+[[lighting.conditional_scene]]
+led = 75
+color = "#0040a0"
+layer = { layer = 2, active = true }
+battery = { node = 1, min_level = 81, charge = "charging" }
+```
+
+Unlike `[[lighting.scene]]`, this table is ordered: matching rules compose in
+table order and later ones win the slots they share, so `config diff` reports
+by position and reordering two rules is a real difference. The table is written
+as one atomic replacement, and a runtime rule outranks a compiled one on the
+same LED, which is what lets a host replace a board's built-in status lighting
+rather than only add to it. Firmware without the runtime conditional commands
+reports no table at all, so a file that names no rules still applies cleanly
+and only one that names them fails.

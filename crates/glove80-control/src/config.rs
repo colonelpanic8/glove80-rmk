@@ -7,12 +7,14 @@ use anyhow::{bail, Context, Result};
 use clap::Subcommand;
 use rynk::rmk_types::action::KeyAction;
 use rynk::rmk_types::protocol::rynk::{
-    Cmd, LightingBackgroundMode, LightingBackgroundState, LightingEffect, LightingError,
-    LightingExtensionNameKind, LightingExtensionParamsRequest, LightingExtensionState,
-    LightingFeatureFlags, LightingLayerPolicy, LightingLedId, LightingMutableState,
-    LightingOutputMode, LightingRgb8, LightingSceneCell, RynkError,
-    SetLightingExtensionParamRequest, SetLightingExtensionStateRequest,
-    SetLightingLayerPolicyRequest, SetLightingOutputModeRequest, SetLightingStateRequest,
+    Cmd, LightingBackgroundMode, LightingBackgroundState, LightingBatteryCondition,
+    LightingChargeCondition, LightingConditionSet, LightingConditionalSceneCell, LightingEffect,
+    LightingError, LightingExtensionNameKind, LightingExtensionParamsRequest,
+    LightingExtensionState, LightingFeatureFlags, LightingLayerCondition, LightingLayerPolicy,
+    LightingLedId, LightingMutableState, LightingNodeId, LightingOutputMode, LightingRgb8,
+    LightingSceneCell, RynkError, SetLightingExtensionParamRequest,
+    SetLightingExtensionStateRequest, SetLightingLayerPolicyRequest, SetLightingOutputModeRequest,
+    SetLightingStateRequest,
 };
 use rynk::{Client, RynkHostError};
 use serde::{Deserialize, Serialize};
@@ -81,6 +83,8 @@ pub struct LightingConfig {
     pub effects: Option<EffectsConfig>,
     #[serde(default, rename = "scene")]
     pub scenes: Vec<SceneConfig>,
+    #[serde(default, rename = "conditional_scene")]
+    pub conditional_scenes: Vec<ConditionalSceneConfig>,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -202,6 +206,72 @@ pub struct SceneConfig {
     pub step_ms: Option<u16>,
 }
 
+/// One conditional lighting rule the host owns, as opposed to the ones a board
+/// compiles in. A cell applies when every condition it names is satisfied;
+/// naming none makes it unconditional.
+///
+/// Order is meaningful — matching rules compose in table order and later cells
+/// win the slots they share — so this list is never sorted, unlike
+/// [`SceneConfig`].
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct ConditionalSceneConfig {
+    pub led: u16,
+    pub color: String,
+    #[serde(default = "solid")]
+    pub effect: EffectKind,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub period_ms: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub phase_ms: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duty: Option<u8>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub step_ms: Option<u16>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub layer: Option<LayerConditionConfig>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub battery: Option<BatteryConditionConfig>,
+}
+
+/// Gate a rule on a layer being active, or deliberately inactive.
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct LayerConditionConfig {
+    pub layer: u8,
+    #[serde(default = "yes")]
+    pub active: bool,
+}
+
+/// Gate a rule on one half's battery. Levels are percentages; omitting a bound
+/// leaves that side open.
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct BatteryConditionConfig {
+    pub node: u8,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min_level: Option<u8>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_level: Option<u8>,
+    #[serde(default, skip_serializing_if = "is_any_charge")]
+    pub charge: ChargeConditionConfig,
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum ChargeConditionConfig {
+    #[default]
+    Any,
+    Charging,
+    Discharging,
+    Unknown,
+}
+
+const fn yes() -> bool {
+    true
+}
+
+fn is_any_charge(charge: &ChargeConditionConfig) -> bool {
+    matches!(charge, ChargeConditionConfig::Any)
+}
+
 const fn solid() -> EffectKind {
     EffectKind::Solid
 }
@@ -224,6 +294,10 @@ struct LightingSnapshot {
     /// on firmware that does not implement the parameter commands at all.
     params: Option<Vec<EffectParams>>,
     scenes: Vec<SceneConfig>,
+    /// Host-owned conditional rules. `None` on firmware that does not
+    /// implement the runtime conditional commands, which keeps "not supported"
+    /// distinct from "supported and empty".
+    conditional_scenes: Option<Vec<ConditionalSceneConfig>>,
 }
 
 impl RuntimeConfig {
@@ -308,6 +382,11 @@ impl RuntimeConfig {
 
 impl LightingConfig {
     fn snapshot(&self) -> Result<LightingSnapshot> {
+        let mut conditional_scenes = self.conditional_scenes.clone();
+        for (index, cell) in conditional_scenes.iter_mut().enumerate() {
+            cell.color = normalize_color(&cell.color)?;
+            validate_conditional_scene(index, cell)?;
+        }
         let mut scenes = self.scenes.clone();
         for cell in &mut scenes {
             cell.color = normalize_color(&cell.color)?;
@@ -342,6 +421,7 @@ impl LightingConfig {
             effects: self.effects.clone(),
             params: None,
             scenes,
+            conditional_scenes: Some(conditional_scenes),
         })
     }
 
@@ -353,6 +433,7 @@ impl LightingConfig {
             background: snapshot.background.clone(),
             effects: snapshot.effects.clone(),
             scenes: snapshot.scenes.clone(),
+            conditional_scenes: snapshot.conditional_scenes.clone().unwrap_or_default(),
         }
     }
 }
@@ -511,6 +592,25 @@ async fn read_snapshot(client: &Client) -> Result<Snapshot> {
     };
     let scene_status = client.get_lighting_scene_status().await?;
     let (_, scene_cells) = client.read_all_lighting_scenes().await?;
+    // Firmware that predates the runtime conditional table reports nothing
+    // rather than an empty table, so a file that names no rules does not read
+    // as "delete what the board has".
+    let conditional_scenes = if lighting_caps
+        .features
+        .contains(LightingFeatureFlags::RUNTIME_CONDITIONAL_SCENES)
+    {
+        let (_, cells) = client
+            .read_all_lighting_runtime_conditional_scenes()
+            .await?;
+        Some(
+            cells
+                .into_iter()
+                .map(conditional_scene_from_wire)
+                .collect::<Vec<_>>(),
+        )
+    } else {
+        None
+    };
     let mut scenes = scene_cells
         .into_iter()
         .map(scene_from_wire)
@@ -553,6 +653,7 @@ async fn read_snapshot(client: &Client) -> Result<Snapshot> {
             brightness: state.output_brightness,
             output_mode,
             scene_policy: scene_policy_from_wire(scene_status.policy),
+            conditional_scenes,
             background: background_from_wire(state.background),
             effects,
             params: extension_params,
@@ -771,6 +872,28 @@ async fn apply_snapshot(client: &Client, desired: &Snapshot, before: &Snapshot) 
                 })
                 .await?;
         }
+        // Order carries meaning here, so this compares and writes the table as
+        // a sequence rather than as a set of addressable cells.
+        if let Some(wanted_conditional) = wanted.conditional_scenes.as_ref() {
+            match present.conditional_scenes.as_ref() {
+                None if wanted_conditional.is_empty() => {}
+                None => bail!(
+                    "file configures {} conditional lighting rule(s) but the keyboard does not expose a runtime conditional table",
+                    wanted_conditional.len()
+                ),
+                Some(live) if live == wanted_conditional => {}
+                Some(_) => {
+                    let cells = wanted_conditional
+                        .iter()
+                        .map(conditional_scene_to_wire)
+                        .collect::<Result<Vec<_>>>()?;
+                    let status = client.get_lighting_runtime_conditional_scene_status().await?;
+                    client
+                        .replace_all_lighting_runtime_conditional_scenes(status.revision, &cells)
+                        .await?;
+                }
+            }
+        }
         if wanted.scenes != present.scenes {
             let state = client.get_lighting_state().await?;
             let cells = wanted
@@ -942,6 +1065,29 @@ fn differences(desired: &Snapshot, live: &Snapshot) -> Vec<String> {
             }
             result.sort();
             result.dedup();
+
+            // Reported by position, and appended after the sort, because the
+            // table's order is part of its meaning: two rules that swap places
+            // are a real difference even though the set is unchanged.
+            if let Some(wanted_conditional) = wanted.conditional_scenes.as_ref() {
+                match present.conditional_scenes.as_ref() {
+                    None if wanted_conditional.is_empty() => {}
+                    None => result.push(format!(
+                        "lighting conditional rules: file has {} but the keyboard exposes no runtime conditional table",
+                        wanted_conditional.len()
+                    )),
+                    Some(live) => {
+                        for index in 0..wanted_conditional.len().max(live.len()) {
+                            let (file, keyboard) = (wanted_conditional.get(index), live.get(index));
+                            if file != keyboard {
+                                result.push(format!(
+                                    "lighting conditional rule {index}: file {file:?} != keyboard {keyboard:?}"
+                                ));
+                            }
+                        }
+                    }
+                }
+            }
         }
         (Some(_), None) => result.push("file configures lighting but keyboard exposes none".into()),
         (None, _) => {}
@@ -1040,6 +1186,58 @@ fn normalize_color(text: &str) -> Result<String> {
     Ok(format!("#{r:02x}{g:02x}{b:02x}"))
 }
 
+/// Structural checks only, mirroring [`validate_scene`] and adding the battery
+/// bounds the firmware would otherwise reject on apply. Nothing here contacts
+/// the keyboard, so `config validate` stays usable offline.
+fn validate_conditional_scene(index: usize, cell: &ConditionalSceneConfig) -> Result<()> {
+    let timings_set = cell.period_ms.is_some()
+        || cell.phase_ms.is_some()
+        || cell.duty.is_some()
+        || cell.step_ms.is_some();
+    match cell.effect {
+        EffectKind::Solid if timings_set => {
+            bail!(
+                "solid conditional rule {index} (LED {}) has timing options",
+                cell.led
+            )
+        }
+        EffectKind::Solid => {}
+        EffectKind::Blink => {
+            if cell.period_ms.unwrap_or(0) == 0 || cell.duty.unwrap_or(101) > 100 {
+                bail!(
+                    "blink conditional rule {index} (LED {}) needs a non-zero period_ms and a duty of 0..=100",
+                    cell.led
+                );
+            }
+        }
+        EffectKind::Breathe => {
+            if cell.period_ms.unwrap_or(0) == 0 || cell.step_ms.unwrap_or(0) == 0 {
+                bail!(
+                    "breathe conditional rule {index} (LED {}) needs a non-zero period_ms and step_ms",
+                    cell.led
+                );
+            }
+        }
+    }
+    if let Some(battery) = cell.battery {
+        let over = |level: Option<u8>| level.is_some_and(|value| value > 100);
+        if over(battery.min_level) || over(battery.max_level) {
+            bail!(
+                "conditional rule {index} (LED {}) has a battery level above 100",
+                cell.led
+            );
+        }
+        if matches!((battery.min_level, battery.max_level), (Some(min), Some(max)) if min > max) {
+            let (min, max) = (battery.min_level.unwrap(), battery.max_level.unwrap());
+            bail!(
+                "conditional rule {index} (LED {}) has battery min_level {min} above max_level {max}",
+                cell.led
+            );
+        }
+    }
+    Ok(())
+}
+
 fn validate_scene(cell: &SceneConfig) -> Result<()> {
     match cell.effect {
         EffectKind::Solid => {
@@ -1083,8 +1281,18 @@ fn validate_scene(cell: &SceneConfig) -> Result<()> {
     Ok(())
 }
 
-fn scene_from_wire(cell: LightingSceneCell) -> SceneConfig {
-    let (color, effect, period_ms, phase_ms, duty, step_ms) = match cell.effect {
+/// Split a wire effect into the flat fields both scene tables use.
+fn effect_from_wire(
+    effect: LightingEffect,
+) -> (
+    LightingRgb8,
+    EffectKind,
+    Option<u32>,
+    Option<u32>,
+    Option<u8>,
+    Option<u16>,
+) {
+    match effect {
         LightingEffect::Solid { color } => (color, EffectKind::Solid, None, None, None, None),
         LightingEffect::Blink {
             color,
@@ -1112,7 +1320,11 @@ fn scene_from_wire(cell: LightingSceneCell) -> SceneConfig {
             None,
             Some(step_ms),
         ),
-    };
+    }
+}
+
+fn scene_from_wire(cell: LightingSceneCell) -> SceneConfig {
+    let (color, effect, period_ms, phase_ms, duty, step_ms) = effect_from_wire(cell.effect);
     SceneConfig {
         layer: cell.layer,
         led: cell.led_id.0,
@@ -1125,28 +1337,107 @@ fn scene_from_wire(cell: LightingSceneCell) -> SceneConfig {
     }
 }
 
-fn scene_to_wire(cell: &SceneConfig) -> Result<LightingSceneCell> {
-    let (r, g, b) = crate::lighting::parse_color(&cell.color)?;
+fn conditional_scene_from_wire(cell: LightingConditionalSceneCell) -> ConditionalSceneConfig {
+    let (color, effect, period_ms, phase_ms, duty, step_ms) = effect_from_wire(cell.effect);
+    ConditionalSceneConfig {
+        led: cell.led_id.0,
+        color: format!("#{:02x}{:02x}{:02x}", color.r, color.g, color.b),
+        effect,
+        period_ms,
+        phase_ms,
+        duty,
+        step_ms,
+        layer: cell.conditions.layer.map(|c| LayerConditionConfig {
+            layer: c.layer,
+            active: c.active,
+        }),
+        battery: cell.conditions.battery.map(|c| BatteryConditionConfig {
+            node: c.node.0,
+            min_level: c.min_level,
+            max_level: c.max_level,
+            charge: match c.charge {
+                LightingChargeCondition::Any => ChargeConditionConfig::Any,
+                LightingChargeCondition::Charging => ChargeConditionConfig::Charging,
+                LightingChargeCondition::Discharging => ChargeConditionConfig::Discharging,
+                LightingChargeCondition::Unknown => ChargeConditionConfig::Unknown,
+            },
+        }),
+    }
+}
+
+/// Build a wire effect from the flat fields both scene tables use.
+fn effect_to_wire(
+    color: &str,
+    kind: EffectKind,
+    period_ms: Option<u32>,
+    phase_ms: Option<u32>,
+    duty: Option<u8>,
+    step_ms: Option<u16>,
+) -> Result<LightingEffect> {
+    let (r, g, b) = crate::lighting::parse_color(color)?;
     let color = LightingRgb8 { r, g, b };
-    let effect = match cell.effect {
+    Ok(match kind {
         EffectKind::Solid => LightingEffect::Solid { color },
         EffectKind::Blink => LightingEffect::Blink {
             color,
-            period_ms: cell.period_ms.context("blink period_ms is required")?,
-            phase_ms: cell.phase_ms.unwrap_or(0),
-            duty: cell.duty.context("blink duty is required")?,
+            period_ms: period_ms.context("blink period_ms is required")?,
+            phase_ms: phase_ms.unwrap_or(0),
+            duty: duty.context("blink duty is required")?,
         },
         EffectKind::Breathe => LightingEffect::Breathe {
             color,
-            period_ms: cell.period_ms.context("breathe period_ms is required")?,
-            phase_ms: cell.phase_ms.unwrap_or(0),
-            step_ms: cell.step_ms.context("breathe step_ms is required")?,
+            period_ms: period_ms.context("breathe period_ms is required")?,
+            phase_ms: phase_ms.unwrap_or(0),
+            step_ms: step_ms.context("breathe step_ms is required")?,
         },
-    };
+    })
+}
+
+fn scene_to_wire(cell: &SceneConfig) -> Result<LightingSceneCell> {
     Ok(LightingSceneCell {
         layer: cell.layer,
         led_id: LightingLedId(cell.led),
-        effect,
+        effect: effect_to_wire(
+            &cell.color,
+            cell.effect,
+            cell.period_ms,
+            cell.phase_ms,
+            cell.duty,
+            cell.step_ms,
+        )?,
+    })
+}
+
+fn conditional_scene_to_wire(
+    cell: &ConditionalSceneConfig,
+) -> Result<LightingConditionalSceneCell> {
+    Ok(LightingConditionalSceneCell {
+        conditions: LightingConditionSet {
+            layer: cell.layer.map(|c| LightingLayerCondition {
+                layer: c.layer,
+                active: c.active,
+            }),
+            battery: cell.battery.map(|c| LightingBatteryCondition {
+                node: LightingNodeId(c.node),
+                min_level: c.min_level,
+                max_level: c.max_level,
+                charge: match c.charge {
+                    ChargeConditionConfig::Any => LightingChargeCondition::Any,
+                    ChargeConditionConfig::Charging => LightingChargeCondition::Charging,
+                    ChargeConditionConfig::Discharging => LightingChargeCondition::Discharging,
+                    ChargeConditionConfig::Unknown => LightingChargeCondition::Unknown,
+                },
+            }),
+        },
+        led_id: LightingLedId(cell.led),
+        effect: effect_to_wire(
+            &cell.color,
+            cell.effect,
+            cell.period_ms,
+            cell.phase_ms,
+            cell.duty,
+            cell.step_ms,
+        )?,
     })
 }
 
@@ -1278,6 +1569,141 @@ Density = 6
         }
     }
 
+    /// The table's order is part of its meaning, so a reordering has to read as
+    /// a difference even though the set of rules is identical.
+    #[test]
+    fn reordered_conditional_rules_are_a_difference() {
+        let rule = |led: u16| ConditionalSceneConfig {
+            led,
+            color: "#0040a0".into(),
+            effect: EffectKind::Solid,
+            period_ms: None,
+            phase_ms: None,
+            duty: None,
+            step_ms: None,
+            layer: Some(LayerConditionConfig {
+                layer: 2,
+                active: true,
+            }),
+            battery: None,
+        };
+        let snapshot = |cells: Vec<ConditionalSceneConfig>| {
+            let mut snap = lighting_snapshot(None, None);
+            snap.conditional_scenes = Some(cells);
+            Snapshot {
+                default_layer: 0,
+                layers: Vec::new(),
+                lighting: Some(snap),
+            }
+        };
+
+        let forward = snapshot(vec![rule(10), rule(20)]);
+        assert!(differences(&forward, &forward).is_empty());
+
+        let reversed = snapshot(vec![rule(20), rule(10)]);
+        let found = differences(&forward, &reversed);
+        assert_eq!(found.len(), 2, "both positions differ: {found:?}");
+        assert!(found.iter().all(|line| line.contains("conditional rule")));
+    }
+
+    /// Firmware without the runtime conditional commands reports `None`, which
+    /// must stay distinct from an empty table: a file naming no rules is
+    /// satisfied either way, but a file naming rules is not.
+    #[test]
+    fn unsupported_conditional_table_only_conflicts_when_rules_are_named() {
+        let unsupported = {
+            let mut snap = lighting_snapshot(None, None);
+            snap.conditional_scenes = None;
+            Snapshot {
+                default_layer: 0,
+                layers: Vec::new(),
+                lighting: Some(snap),
+            }
+        };
+        let empty_file = {
+            let mut snap = lighting_snapshot(None, None);
+            snap.conditional_scenes = Some(Vec::new());
+            Snapshot {
+                default_layer: 0,
+                layers: Vec::new(),
+                lighting: Some(snap),
+            }
+        };
+        assert!(differences(&empty_file, &unsupported).is_empty());
+
+        let with_rule = {
+            let mut snap = lighting_snapshot(None, None);
+            snap.conditional_scenes = Some(vec![ConditionalSceneConfig {
+                led: 75,
+                color: "#0040a0".into(),
+                effect: EffectKind::Solid,
+                period_ms: None,
+                phase_ms: None,
+                duty: None,
+                step_ms: None,
+                layer: None,
+                battery: Some(BatteryConditionConfig {
+                    node: 1,
+                    min_level: Some(81),
+                    max_level: None,
+                    charge: ChargeConditionConfig::Charging,
+                }),
+            }]);
+            Snapshot {
+                default_layer: 0,
+                layers: Vec::new(),
+                lighting: Some(snap),
+            }
+        };
+        let found = differences(&with_rule, &unsupported);
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert!(found[0].contains("no runtime conditional table"));
+    }
+
+    #[test]
+    fn conditional_rules_round_trip_through_the_wire_and_reject_bad_batteries() {
+        let mut cell = ConditionalSceneConfig {
+            led: 75,
+            color: "#0040a0".into(),
+            effect: EffectKind::Solid,
+            period_ms: None,
+            phase_ms: None,
+            duty: None,
+            step_ms: None,
+            layer: Some(LayerConditionConfig {
+                layer: 3,
+                active: false,
+            }),
+            battery: Some(BatteryConditionConfig {
+                node: 1,
+                min_level: Some(20),
+                max_level: Some(80),
+                charge: ChargeConditionConfig::Discharging,
+            }),
+        };
+        let wire = conditional_scene_to_wire(&cell).unwrap();
+        assert_eq!(conditional_scene_from_wire(wire), cell);
+        assert!(validate_conditional_scene(0, &cell).is_ok());
+
+        // The firmware would decline these on apply; catching them offline
+        // means `config validate` is enough to know a file is writable.
+        cell.battery = Some(BatteryConditionConfig {
+            node: 1,
+            min_level: Some(90),
+            max_level: Some(10),
+            charge: ChargeConditionConfig::Any,
+        });
+        assert!(validate_conditional_scene(0, &cell).is_err());
+
+        cell.battery = Some(BatteryConditionConfig {
+            node: 1,
+            min_level: Some(120),
+            max_level: None,
+            charge: ChargeConditionConfig::Any,
+        });
+        assert!(validate_conditional_scene(0, &cell).is_err());
+    }
+
     fn lighting_snapshot(
         effects: Option<EffectsConfig>,
         params: Option<Vec<EffectParams>>,
@@ -1297,6 +1723,7 @@ Density = 6
             effects,
             params,
             scenes: Vec::new(),
+            conditional_scenes: Some(Vec::new()),
         }
     }
 
