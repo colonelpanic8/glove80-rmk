@@ -625,7 +625,6 @@ pub fn try_queue_snapshot(
     }
     let scene_count = snapshot
         .scenes
-        .as_slice()
         .iter()
         .filter(|cell| cell.slot.index() >= LEDS_PER_HALF)
         .count();
@@ -682,9 +681,8 @@ pub fn try_queue_snapshot(
             return false;
         }
     }
-    for &cell in snapshot
+    for cell in snapshot
         .scenes
-        .as_slice()
         .iter()
         .filter(|cell| cell.slot.index() >= LEDS_PER_HALF)
     {
@@ -852,11 +850,10 @@ impl SnapshotStage {
                 let stage = self.stage.as_mut()?;
                 if stage.generation != generation
                     || stage.snapshot.revision != revision
-                    || stage.snapshot.scenes.as_slice().len() >= stage.expected_scene_cells
+                    || stage.snapshot.scenes.len() >= stage.expected_scene_cells
                     || stage
                         .snapshot
                         .scenes
-                        .as_slice()
                         .iter()
                         .any(|existing| existing.layer == cell.layer && existing.slot == cell.slot)
                     || stage.snapshot.scenes.set(cell).is_err()
@@ -919,7 +916,7 @@ impl SnapshotStage {
                         && stage.expected_overlay_cells == cell_count as usize
                         && stage.expected_scene_cells == scene_count as usize
                         && stage.snapshot.overlay.as_slice().len() == stage.expected_overlay_cells
-                        && stage.snapshot.scenes.as_slice().len() == stage.expected_scene_cells
+                        && stage.snapshot.scenes.len() == stage.expected_scene_cells
                         && stage
                             .expected_conditional_scene_cells
                             .is_none_or(|expected| {
