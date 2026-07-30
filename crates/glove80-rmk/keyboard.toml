@@ -1,11 +1,13 @@
 # MoErgo Glove80 — RMK spike configuration.
 #
 # Hardware facts are transcribed from the ZMK board definition in
-# the legacy glove80-config zmk/app/boards/arm/glove80/ files. The logical layout
+# the legacy glove80-config zmk/app/boards/arm/glove80/ files. The scan matrix
 # is the same 6x14 grid used by the ZMK matrix transform: columns 0-6 are the
 # left half (column 6 = left thumb cluster), columns 7-13 are the right half
 # (column 7 = right thumb cluster). Grid positions (0,5), (0,8), (5,5) and
-# (5,8) have no physical switch.
+# (5,8) have no physical switch. Those two thumb "columns" are physically fans
+# of six keys under the thumbs, so `[layout].map` below describes the real
+# arrangement rather than the matrix.
 
 [keyboard]
 name = "Glove80"
@@ -25,14 +27,46 @@ split_central_max_latency_battery = 1
 [layout]
 rows = 6
 cols = 14
+# The map is the board's *physical* arrangement, not its scan matrix: rows here
+# are the six visible rows, with each half's six thumb keys sitting in the
+# bottom two rows where the hand actually finds them. Key centres derived from
+# this walk are the only geometry the lighting engine has, so this arrangement
+# — not column adjacency in the matrix — is what "nearby" means to the spatial
+# effects (Reactive, Ripple, Rain, Vortex). Positions are transcribed in key
+# units from the MoErgo ZMK board definition, glove80-layouts.dtsi.
+#
+# Written in the same order as the ZMK matrix transform in glove80.dtsi, which
+# is also the order the `[[keymap.layer]]` key strings below are read in.
 map = """
-(0,0) (0,1) (0,2) (0,3) (0,4)       (0,6) (0,7)       (0,9) (0,10) (0,11) (0,12) (0,13)
-(1,0) (1,1) (1,2) (1,3) (1,4) (1,5) (1,6) (1,7) (1,8) (1,9) (1,10) (1,11) (1,12) (1,13)
-(2,0) (2,1) (2,2) (2,3) (2,4) (2,5) (2,6) (2,7) (2,8) (2,9) (2,10) (2,11) (2,12) (2,13)
-(3,0) (3,1) (3,2) (3,3) (3,4) (3,5) (3,6) (3,7) (3,8) (3,9) (3,10) (3,11) (3,12) (3,13)
-(4,0) (4,1) (4,2) (4,3) (4,4) (4,5) (4,6) (4,7) (4,8) (4,9) (4,10) (4,11) (4,12) (4,13)
-(5,0) (5,1) (5,2) (5,3) (5,4)       (5,6) (5,7)       (5,9) (5,10) (5,11) (5,12) (5,13)
+(0,0,@drop) (0,1,@drop) (0,2) (0,3) (0,4) [8] (0,9) (0,10) (0,11) (0,12,@drop) (0,13,@drop)
+(1,0,@drop) (1,1,@drop) (1,2) (1,3) (1,4) (1,5) [6] (1,8) (1,9) (1,10) (1,11) (1,12,@drop) (1,13,@drop)
+(2,0,@drop) (2,1,@drop) (2,2) (2,3) (2,4) (2,5) [6] (2,8) (2,9) (2,10) (2,11) (2,12,@drop) (2,13,@drop)
+(3,0,@drop) (3,1,@drop) (3,2) (3,3) (3,4) (3,5) [6] (3,8) (3,9) (3,10) (3,11) (3,12,@drop) (3,13,@drop)
+(4,0,@drop) (4,1,@drop) (4,2) (4,3) (4,4) (4,5) (0,6,@thumb_0_6) (1,6,@thumb_1_6) (2,6,@thumb_2_6) (2,7,@thumb_2_7) (1,7,@thumb_1_7) (0,7,@thumb_0_7) (4,8) (4,9) (4,10) (4,11) (4,12,@drop) (4,13,@drop)
+(5,0,@drop) (5,1,@drop) (5,2) (5,3) (5,4) (3,6,@thumb_3_6) (4,6,@thumb_4_6) (5,6,@thumb_5_6) [2] (5,7,@thumb_5_7) (4,7,@thumb_4_7) (3,7,@thumb_3_7) (5,9) (5,10) (5,11) (5,12,@drop) (5,13,@drop)
 """
+
+# The map walk is a left-to-right cursor, so anything off the uniform grid is
+# carried by a named shape. `@drop` lowers each half's outer two columns by the
+# board's half-unit stagger. Every thumb key gets its own shape because the
+# clusters are fans, not grids: ZMK sweeps each key about a pivot 4.75u below
+# the bottom row, which is equivalent to placing the cap at the swept centre
+# and rotating it in place. `x`/`y` nudge the key from its cursor slot onto
+# that centre and `r` is the cap angle; the two halves mirror about x = 9.
+[layout.shapes]
+drop = { y = 0.5 }
+thumb_0_6 = { x = 0.125, y = 1.0694, r = 30.0 }
+thumb_1_6 = { x = 0.0052, y = 1.7448, r = 45.0 }
+thumb_2_6 = { x = -0.3194, y = 2.625, r = 60.0 }
+thumb_3_6 = { x = 0.1116, y = 0.696, r = 20.0 }
+thumb_4_6 = { x = 0.0891, y = 1.2604, r = 40.0 }
+thumb_5_6 = { x = -0.1854, y = 2.125, r = 60.0 }
+thumb_0_7 = { x = -0.125, y = 1.0694, r = -30.0 }
+thumb_1_7 = { x = -0.0052, y = 1.7448, r = -45.0 }
+thumb_2_7 = { x = 0.3194, y = 2.625, r = -60.0 }
+thumb_3_7 = { x = -0.1116, y = 0.696, r = -20.0 }
+thumb_4_7 = { x = -0.0891, y = 1.2604, r = -40.0 }
+thumb_5_7 = { x = 0.1854, y = 2.125, r = -60.0 }
 
 [keymap]
 layers = 8
@@ -51,57 +85,57 @@ layers = 8
 [[keymap.layer]]
 name = "Base"
 keys = """
-F1 F2 F3 F4 F5 LT(1, Escape) Backspace F6 F7 F8 F9 F10
-Equal Kc1 Kc2 Kc3 Kc4 Kc5 Delete TG(4) Kc6 Kc7 Kc8 Kc9 Kc0 Minus
-Tab Q W E R T MO(2) LGui Y U I O P Backslash
-LCtrl A S D F G Backspace Space H J K L LT(1, Semicolon) Quote
-LShift Z X C V B LGui Enter N M Comma Dot Slash RShift
-Grave Home End Left Right LAlt RGui Up Down LeftBracket RightBracket TG(3)
+F1 F2 F3 F4 F5 F6 F7 F8 F9 F10
+Equal Kc1 Kc2 Kc3 Kc4 Kc5 Kc6 Kc7 Kc8 Kc9 Kc0 Minus
+Tab Q W E R T Y U I O P Backslash
+LCtrl A S D F G H J K L LT(1, Semicolon) Quote
+LShift Z X C V B LT(1, Escape) Delete MO(2) LGui TG(4) Backspace N M Comma Dot Slash RShift
+Grave Home End Left Right Backspace LGui LAlt RGui Enter Space Up Down LeftBracket RightBracket TG(3)
 """
 
 [[keymap.layer]]
 name = "Lower"
 keys = """
+_ _ _ _ _ _ _ _ _ _
 _ _ _ _ _ _ _ _ _ _ _ _
-_ _ _ _ _ _ _ _ _ _ _ _ _ _
-_ WM(Equal, LShift) WM(Minus, LShift) WM(Kc9, LShift) WM(Kc0, LShift) _ TO(0) _ _ _ _ _ _ _
-CapsLock WM(Kc1, LShift) WM(Kc2, LShift) WM(Kc3, LShift) WM(Kc4, LShift) WM(Kc5, LShift) _ MediaPlayPause WM(Kc6, LShift) WM(Kc7, LShift) WM(Kc8, LShift) WM(Kc9, LShift) WM(Kc0, LShift) _
-_ LeftBracket RightBracket WM(LeftBracket, LShift) WM(RightBracket, LShift) _ _ _ _ _ _ _ _ _
-_ _ _ MediaPrevTrack MediaNextTrack _ _ AudioVolUp AudioVolDown _ _ _
+_ WM(Equal, LShift) WM(Minus, LShift) WM(Kc9, LShift) WM(Kc0, LShift) _ _ _ _ _ _ _
+CapsLock WM(Kc1, LShift) WM(Kc2, LShift) WM(Kc3, LShift) WM(Kc4, LShift) WM(Kc5, LShift) WM(Kc6, LShift) WM(Kc7, LShift) WM(Kc8, LShift) WM(Kc9, LShift) WM(Kc0, LShift) _
+_ LeftBracket RightBracket WM(LeftBracket, LShift) WM(RightBracket, LShift) _ _ _ TO(0) _ _ _ _ _ _ _ _ _
+_ _ _ MediaPrevTrack MediaNextTrack _ _ _ _ _ MediaPlayPause AudioVolUp AudioVolDown _ _ _
 """
 
 [[keymap.layer]]
 name = "Magic"
 keys = """
-User10 No No No No User2 No No No No No User11
-No No No No No No User3 No No No No No No No
-No No No No No No No No No No No No No No
-Bootloader User13 BacklightDown BacklightUp No No User0 No No No No No No User12
-Reboot No RgbTog RgbModeForward RgbHui No User1 No No No No No No Reboot
-No No No No No OutputUsb No No No No No TO(3)
+User10 No No No No No No No No User11
+No No No No No No No No No No No No
+No No No No No No No No No No No No
+Bootloader User13 BacklightDown BacklightUp No No No No No No No User12
+Reboot No RgbTog RgbModeForward RgbHui No User2 User3 No No No No No No No No No Reboot
+No No No No No User0 User1 OutputUsb No No No No No No No TO(3)
 """
 
 [[keymap.layer]]
 name = "Games"
 keys = """
+_ _ _ _ _ _ _ _ _ _
 _ _ _ _ _ _ _ _ _ _ _ _
-_ _ _ _ _ _ _ _ _ _ _ _ _ _
-_ _ W _ _ _ _ _ _ _ _ _ _ _
-_ A S D _ _ Space _ _ _ _ _ _ _
-_ _ _ _ _ _ _ _ _ _ _ _ _ _
-_ _ _ _ _ _ _ _ _ _ _ _
+_ _ W _ _ _ _ _ _ _ _ _
+_ A S D _ _ _ _ _ _ _ _
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+_ _ _ _ _ Space _ _ _ _ _ _ _ _ _ _
 """
 
 [[keymap.layer]]
 name = "Mac Hyper"
 # MOD(...) directly holds the modifier combination until the key is released.
 keys = """
+_ _ _ _ _ _ _ _ _ _
 _ _ _ _ _ _ _ _ _ _ _ _
-_ _ _ _ _ _ _ TG(4) _ _ _ _ _ _
-_ _ _ _ _ _ _ _ _ _ _ _ _ _
-_ _ _ _ _ _ _ _ _ _ _ _ _ _
-_ _ _ _ _ _ _ _ _ _ _ _ _ _
-_ _ _ _ _ _ MOD(LCtrl | LAlt | LGui) _ _ _ _ _
+_ _ _ _ _ _ _ _ _ _ _ _
+_ _ _ _ _ _ _ _ _ _ _ _
+_ _ _ _ _ _ _ _ _ _ TG(4) _ _ _ _ _ _ _
+_ _ _ _ _ _ _ _ MOD(LCtrl | LAlt | LGui) _ _ _ _ _ _ _
 """
 
 # Each half's Reactive-lighting key-hit processor subscribes in addition to
