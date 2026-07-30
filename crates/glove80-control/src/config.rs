@@ -231,6 +231,10 @@ pub struct ConditionalSceneConfig {
     pub layer: Option<LayerConditionConfig>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub battery: Option<BatteryConditionConfig>,
+    /// Gate on the live output-mode policy, which is how the mode indicator is
+    /// expressed as an ordinary rule instead of something compiled in.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_mode: Option<OutputModeConfig>,
 }
 
 /// Gate a rule on a layer being active, or deliberately inactive.
@@ -1347,6 +1351,7 @@ fn conditional_scene_from_wire(cell: LightingConditionalSceneCell) -> Conditiona
         phase_ms,
         duty,
         step_ms,
+        output_mode: cell.conditions.output_mode.map(output_mode_from_wire),
         layer: cell.conditions.layer.map(|c| LayerConditionConfig {
             layer: c.layer,
             active: c.active,
@@ -1413,6 +1418,7 @@ fn conditional_scene_to_wire(
 ) -> Result<LightingConditionalSceneCell> {
     Ok(LightingConditionalSceneCell {
         conditions: LightingConditionSet {
+            output_mode: cell.output_mode.map(output_mode_to_wire),
             layer: cell.layer.map(|c| LightingLayerCondition {
                 layer: c.layer,
                 active: c.active,
@@ -1586,6 +1592,7 @@ Density = 6
                 active: true,
             }),
             battery: None,
+            output_mode: None,
         };
         let snapshot = |cells: Vec<ConditionalSceneConfig>| {
             let mut snap = lighting_snapshot(None, None);
@@ -1648,6 +1655,7 @@ Density = 6
                     max_level: None,
                     charge: ChargeConditionConfig::Charging,
                 }),
+                output_mode: None,
             }]);
             Snapshot {
                 default_layer: 0,
@@ -1680,6 +1688,7 @@ Density = 6
                 max_level: Some(80),
                 charge: ChargeConditionConfig::Discharging,
             }),
+            output_mode: None,
         };
         let wire = conditional_scene_to_wire(&cell).unwrap();
         assert_eq!(conditional_scene_from_wire(wire), cell);
