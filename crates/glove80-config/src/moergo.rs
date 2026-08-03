@@ -326,7 +326,7 @@ fn binding_to_via(
             if params.len() != 1 {
                 bail!("{} &kp expects one keycode parameter", here());
             }
-            zmk_keycode_to_via(string_param(param(0)?, &here())?)?
+            zmk_keycode_param_to_via(&params[0], &here())?
         }
         "&mt" => {
             if params.len() != 2 {
@@ -334,7 +334,7 @@ fn binding_to_via(
             }
             let modifier = zmk_modifier(string_param(param(0)?, &here())?)
                 .with_context(|| format!("{} &mt hold action", here()))?;
-            let tap = zmk_keycode_to_via(string_param(param(1)?, &here())?)?;
+            let tap = zmk_keycode_param_to_via(&params[1], &here())?;
             if tap > 0xff {
                 bail!("{} &mt tap action must be an unmodified HID key", here());
             }
@@ -348,7 +348,7 @@ fn binding_to_via(
                 bail!("{} &lt expects layer and tap keycode parameters", here());
             }
             let target = layer_param(param(0)?, &here())?;
-            let tap = zmk_keycode_to_via(string_param(param(1)?, &here())?)?;
+            let tap = zmk_keycode_param_to_via(&params[1], &here())?;
             if tap > 0xff {
                 bail!("{} &lt tap action must be an unmodified HID key", here());
             }
@@ -508,20 +508,58 @@ fn zmk_modifier(text: &str) -> Result<String> {
     Ok(modifier.into())
 }
 
+fn zmk_keycode_param_to_via(value: &Value, location: &str) -> Result<u16> {
+    if let Some(text) = value.as_str() {
+        return zmk_keycode_to_via(text);
+    }
+    let object = value
+        .as_object()
+        .with_context(|| format!("{location} keycode parameter must be a string or object"))?;
+    let name = object
+        .get("value")
+        .and_then(Value::as_str)
+        .with_context(|| format!("{location} keycode parameter has no string value"))?;
+    let params = object
+        .get("params")
+        .map(|value| {
+            value
+                .as_array()
+                .with_context(|| format!("{location} nested keycode params must be an array"))
+        })
+        .transpose()?
+        .map(Vec::as_slice)
+        .unwrap_or_default();
+    if params.is_empty() {
+        return zmk_keycode_to_via(name);
+    }
+    if params.len() != 1 {
+        bail!("{location} ZMK keycode function '{name}' expects one parameter");
+    }
+    let wrapper = zmk_modifier_wrapper(name)
+        .with_context(|| format!("{location} unsupported ZMK keycode function '{name}'"))?;
+    let inner = zmk_keycode_param_to_via(&params[0], location)?;
+    keycodes::parse_keycode(&format!("{wrapper}({})", keycodes::format_keycode(inner)))
+}
+
+fn zmk_modifier_wrapper(function: &str) -> Option<&'static str> {
+    match function.to_ascii_uppercase().as_str() {
+        "LC" => Some("LCTL"),
+        "LS" => Some("LSFT"),
+        "LA" => Some("LALT"),
+        "LG" => Some("LGUI"),
+        "RC" => Some("RCTL"),
+        "RS" => Some("RSFT"),
+        "RA" => Some("RALT"),
+        "RG" => Some("RGUI"),
+        _ => None,
+    }
+}
+
 fn zmk_keycode_to_via(text: &str) -> Result<u16> {
     let text = text.trim();
     if let Some((function, argument)) = split_call(text) {
-        let wrapper = match function.to_ascii_uppercase().as_str() {
-            "LC" => "LCTL",
-            "LS" => "LSFT",
-            "LA" => "LALT",
-            "LG" => "LGUI",
-            "RC" => "RCTL",
-            "RS" => "RSFT",
-            "RA" => "RALT",
-            "RG" => "RGUI",
-            _ => bail!("unsupported ZMK keycode function '{function}'"),
-        };
+        let wrapper = zmk_modifier_wrapper(function)
+            .with_context(|| format!("unsupported ZMK keycode function '{function}'"))?;
         let inner = zmk_keycode_to_via(argument)?;
         return keycodes::parse_keycode(&format!("{wrapper}({})", keycodes::format_keycode(inner)));
     }
@@ -949,6 +987,10 @@ mod tests {
     fn parses_editor_bindings_and_preserves_matrix_holes() {
         let mut keys = vec![json!({ "value": "&trans" }); 80];
         keys[0] = json!({ "value": "&kp", "params": [{ "value": "F1", "params": [] }] });
+        keys[1] = json!({
+            "value": "&kp",
+            "params": [{ "value": "LS", "params": [{ "value": "N9" }] }]
+        });
         keys[52] = json!({ "value": "&lt", "params": [{ "value": 1 }, { "value": "ESC" }] });
         keys[79] = json!({ "value": "&rgb_ug", "params": [{ "value": "RGB_TOG" }] });
         let text = json!({
@@ -964,6 +1006,10 @@ mod tests {
         assert_eq!(
             snapshot.layers[0][0],
             keycodes::parse_keycode("KC_F1").unwrap()
+        );
+        assert_eq!(
+            snapshot.layers[0][1],
+            keycodes::parse_keycode("LSFT(KC_9)").unwrap()
         );
         assert_eq!(
             snapshot.layers[0][6],
@@ -1031,6 +1077,13 @@ mod tests {
         for binding_value in [
             json!({ "value": "&kp", "params": [{ "value": "EXCL" }] }),
             json!({ "value": "&kp", "params": [{ "value": "LC(LS(A))" }] }),
+            json!({
+                "value": "&kp",
+                "params": [{
+                    "value": "LC",
+                    "params": [{ "value": "LS", "params": [{ "value": "A" }] }]
+                }]
+            }),
             json!({ "value": "&mt", "params": [{ "value": "LSHFT" }, { "value": "A" }] }),
         ] {
             let code = binding_to_via(&binding_value, &["Base".into()], 0, 0, 0).unwrap();
