@@ -21,8 +21,11 @@ use rmk::lighting::{
 };
 use rmk::storage::{LightingExtensionOverlayRecord, LightingExtensionRecord};
 use rmk::types::battery::BatteryStatus;
-use rmk_palettefx::effects::Effect;
-use rmk_palettefx::rmk_lighting::{HitQueue, PaletteFxConfig, PaletteFxSource, TopologyLayout};
+use rmk_palettefx::effects::{CrosshairParams, Effect};
+use rmk_palettefx::palette::id as palette_id;
+use rmk_palettefx::rmk_lighting::{
+    HitQueue, MAX_INITIAL_PARAMS, PaletteFxConfig, PaletteFxSource, TopologyLayout,
+};
 
 /// Board-wide lighting topology for both binaries. `#[rmk_central]` emits
 /// `crate::LIGHTING_TOPOLOGY` for the central, but the peripheral macro only
@@ -304,14 +307,17 @@ impl LightingOutput<LogicalFrame<Rgb8, TOTAL_LEDS>> for HalfOutput {
 }
 
 /// Compiled-in effect defaults, used on a board that has never persisted a
-/// selection: Rain with Reactive layered over it, lit, at half brightness.
-///
-/// Toggling PaletteFX on restores half brightness (0x80): the hardware output
-/// limit and per-key diffusors make full-scale effect output harsher than
-/// useful.
-const DEFAULT_EFFECT: u8 = Effect::<REACTIVE_HITS>::RAIN_INDEX;
-const DEFAULT_OVERLAY: u8 = 6;
-const DEFAULT_EFFECT_VAL: u8 = 0x80;
+/// selection. Keep these aligned with `config/glove80.toml` in the outer
+/// configuration repository so its release artifacts and runtime profile boot
+/// into the same tuned Crosshair/Amber setup.
+const DEFAULT_EFFECT: u8 = Effect::<REACTIVE_HITS>::CROSSHAIR_INDEX;
+const DEFAULT_EFFECT_VAL: u8 = 0xff;
+const DEFAULT_EFFECT_SPEED: u8 = 108;
+const DEFAULT_EFFECT_PARAMS: [u8; MAX_INITIAL_PARAMS] = [0, 90, 12, 170, 1, 172, 16, 0];
+
+/// Effect index used when migrating a persisted selection of the retired
+/// combined Storm effect into its Rain plus Reactive representation.
+const LEGACY_STORM_OVERLAY: u8 = 6;
 
 pub fn engine(
     persisted_extension: Option<LightingExtensionRecord>,
@@ -334,9 +340,12 @@ pub fn engine(
     let mut config = PaletteFxConfig {
         initial_enabled: true,
         initial_val: DEFAULT_EFFECT_VAL,
-        initial_palette: 0,
+        initial_speed: DEFAULT_EFFECT_SPEED,
+        initial_palette: palette_id::AMBER,
         initial_effect: DEFAULT_EFFECT,
-        initial_overlay: Some(DEFAULT_OVERLAY),
+        initial_overlay: None,
+        initial_params: DEFAULT_EFFECT_PARAMS,
+        initial_param_len: CrosshairParams::COUNT,
         ..PaletteFxConfig::default()
     };
     if let Some(record) = persisted_extension {
@@ -347,7 +356,7 @@ pub fn engine(
         };
         // Pre-layering records had no overlay key. Only the retired Storm
         // selection implies one; every other saved effect remains standalone.
-        config.initial_overlay = legacy_storm.then_some(DEFAULT_OVERLAY);
+        config.initial_overlay = legacy_storm.then_some(LEGACY_STORM_OVERLAY);
         config.initial_palette = record.palette as usize;
         config.initial_speed = record.speed;
         // A persisted zero means the user left the effects toggled off; keep
