@@ -444,6 +444,29 @@ fn binding_to_via(
             };
             keycodes::parse_keycode(via)?
         }
+        "&mkp" | "&mmv" | "&msc" => {
+            if params.len() != 1 {
+                bail!("{} {behavior} expects one mouse action parameter", here());
+            }
+            let action = string_param(param(0)?, &here())?;
+            let via = match (behavior, action) {
+                ("&mkp", "LCLK" | "MB1") => "KC_BTN1",
+                ("&mkp", "RCLK" | "MB2") => "KC_BTN2",
+                ("&mkp", "MCLK" | "MB3") => "KC_BTN3",
+                ("&mkp", "MB4") => "KC_BTN4",
+                ("&mkp", "MB5") => "KC_BTN5",
+                ("&mmv", "MOVE_UP") => "KC_MS_U",
+                ("&mmv", "MOVE_DOWN") => "KC_MS_D",
+                ("&mmv", "MOVE_LEFT") => "KC_MS_L",
+                ("&mmv", "MOVE_RIGHT") => "KC_MS_R",
+                ("&msc", "SCRL_UP") => "KC_WH_U",
+                ("&msc", "SCRL_DOWN") => "KC_WH_D",
+                ("&msc", "SCRL_LEFT") => "KC_WH_L",
+                ("&msc", "SCRL_RIGHT") => "KC_WH_R",
+                _ => bail!("{} unsupported {behavior} action '{action}'", here()),
+            };
+            keycodes::parse_keycode(via)?
+        }
         _ => bail!(
             "{} behavior '{behavior}' cannot be represented by the Rynk runtime keymap",
             here()
@@ -626,6 +649,19 @@ fn via_to_binding(code: u16, layer: usize, editor_index: usize, offset: usize) -
     match code {
         0 => return Ok(zero_binding("&none")),
         1 => return Ok(zero_binding("&trans")),
+        0xcd => return Ok(one_binding("&mmv", "MOVE_UP")),
+        0xce => return Ok(one_binding("&mmv", "MOVE_DOWN")),
+        0xcf => return Ok(one_binding("&mmv", "MOVE_LEFT")),
+        0xd0 => return Ok(one_binding("&mmv", "MOVE_RIGHT")),
+        0xd1 => return Ok(one_binding("&mkp", "LCLK")),
+        0xd2 => return Ok(one_binding("&mkp", "RCLK")),
+        0xd3 => return Ok(one_binding("&mkp", "MCLK")),
+        0xd4 => return Ok(one_binding("&mkp", "MB4")),
+        0xd5 => return Ok(one_binding("&mkp", "MB5")),
+        0xd9 => return Ok(one_binding("&msc", "SCRL_UP")),
+        0xda => return Ok(one_binding("&msc", "SCRL_DOWN")),
+        0xdb => return Ok(one_binding("&msc", "SCRL_LEFT")),
+        0xdc => return Ok(one_binding("&msc", "SCRL_RIGHT")),
         0x0002..=0x00ff => return Ok(one_binding("&kp", via_basic_to_zmk(code)?)),
         0x0100..=0x1fff => return Ok(one_binding("&kp", modified_to_zmk(code)?)),
         0x2000..=0x3fff => {
@@ -1007,6 +1043,20 @@ mod tests {
                 binding(binding_value),
                 binding(rendered)
             );
+        }
+    }
+
+    #[test]
+    fn mouse_bindings_round_trip() {
+        for binding_value in [
+            json!({ "value": "&mkp", "params": [{ "value": "LCLK" }] }),
+            json!({ "value": "&mmv", "params": [{ "value": "MOVE_LEFT" }] }),
+            json!({ "value": "&msc", "params": [{ "value": "SCRL_DOWN" }] }),
+        ] {
+            let code = binding_to_via(&binding_value, &["Base".into()], 0, 0, 0).unwrap();
+            let rendered = via_to_binding(code, 0, 0, 0).unwrap();
+            let reparsed = binding_to_via(&rendered, &["Base".into()], 0, 0, 0).unwrap();
+            assert_eq!(reparsed, code);
         }
     }
 }
