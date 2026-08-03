@@ -1,0 +1,15 @@
+[package]
+name = "glove80-config"
+version = "0.1.0"
+edition = "2021"
+description = "Pure host-side model of managed Rynk runtime state, shared by the CLI and the browser configurator"
+license = "MIT"
+
+[dependencies]
+anyhow = "1.0"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.9"
+# Protocol wire types and `rmk_types` only; no transport, so this crate stays
+# buildable for wasm32-unknown-unknown the way rynk-wasm builds `rynk`.
+rynk = { path = "../../dependencies/rmk/rynk" }

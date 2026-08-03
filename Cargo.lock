@@ -781,12 +781,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "glove80-config"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "rynk",
+ "serde",
+ "serde_json",
+ "toml 0.9.12+spec-1.1.0",
+]
+
+[[package]]
 name = "glove80-control"
 version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
  "embassy-futures",
+ "glove80-config",
  "libc",
  "rynk",
  "rynk-ble",

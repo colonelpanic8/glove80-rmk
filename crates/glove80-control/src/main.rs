@@ -3,13 +3,15 @@ use std::path::PathBuf;
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 
+// The keycode tables and the VIA/`KeyAction` bridge are part of the pure
+// configuration model, so the CLI reaches them through their old module paths.
+use glove80_config::{keycodes, rynk_keycode};
+
 mod config;
-mod keycodes;
 mod keymap;
 mod lighting;
 mod rynk_client;
 mod rynk_hid;
-mod rynk_keycode;
 mod transport;
 mod version;
 
