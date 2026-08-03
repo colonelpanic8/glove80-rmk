@@ -61,8 +61,8 @@ pub const OVERLAY_CAPACITY: usize = 64;
 pub const SCENE_CAPACITY: usize = 160;
 pub const COMMAND_CAPACITY: usize = 4;
 
-/// Number of simultaneous key hits the Reactive and Crosshair effects can
-/// remember. Sixteen covers sustained fast typing on one half.
+/// Number of simultaneous key hits each typing-reactive effect can remember.
+/// Sixteen covers sustained fast typing on one half.
 pub const REACTIVE_HITS: usize = 16;
 
 pub type Engine = StandardLightingEngine<
@@ -392,7 +392,7 @@ pub fn engine(
     .with_battery_status_provider(&GLOVE_BATTERIES)
 }
 
-/// Feed pressed keys to the Reactive and Crosshair PaletteFx effects. Key
+/// Feed pressed keys to the typing-reactive PaletteFx effects. Key
 /// positions arrive in the local event bus's coordinates:
 /// board-wide on the central (the split driver re-publishes peripheral keys
 /// with their `[[split.peripheral]]` offsets applied), half-local on the
