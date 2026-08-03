@@ -13,6 +13,30 @@ use rynk::rmk_types::protocol::rynk::{
 use serde::{Deserialize, Serialize};
 use tsify::Tsify;
 
+/// Which source format a document is written in.
+///
+/// The CLI infers this from a path's extension. A browser has no path — a file
+/// arrives as text from a picker or a drop — so the format is recognized from
+/// the document itself and handed back to the caller, which is what lets an
+/// export write the same kind of file the user imported.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi)]
+#[serde(rename_all = "kebab-case")]
+pub enum ConfigFormat {
+    #[default]
+    Toml,
+    /// The experimental JSON backup format from the MoErgo Layout Editor.
+    MoergoJson,
+}
+
+/// A parsed document together with the format it turned out to be.
+#[derive(Clone, Debug, Deserialize, Serialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi)]
+pub struct ParsedConfig {
+    pub format: ConfigFormat,
+    pub snapshot: RuntimeSnapshot,
+}
+
 /// The managed runtime state as a browser holds it: the same protocol types the
 /// device reports, rather than the TOML file's names and colour strings.
 #[derive(Clone, Debug, Deserialize, Serialize, Tsify)]
