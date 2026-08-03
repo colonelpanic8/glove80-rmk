@@ -193,7 +193,7 @@ pub fn from_via_keycode(code: u16) -> KeyAction {
         0x7833 => KeyAction::Single(Action::Light(LightAction::RgbModeRgbtest)),
         0x7834 => KeyAction::Single(Action::Light(LightAction::RgbModeTwinkle)),
         0x7835 => KeyAction::Single(Action::Light(LightAction::OutputModeCycle)),
-        0x7835..=0x783f => KeyAction::No,
+        0x7836..=0x783f => KeyAction::No,
         0x7780 => KeyAction::Single(Action::KeyboardControl(KeyboardAction::OutputAuto)),
         0x7784 => KeyAction::Single(Action::KeyboardControl(KeyboardAction::OutputUsb)),
         0x7786 => KeyAction::Single(Action::KeyboardControl(KeyboardAction::OutputBluetooth)),
