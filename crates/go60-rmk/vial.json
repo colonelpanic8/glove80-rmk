@@ -1,0 +1,8 @@
+{
+  "name": "Go60",
+  "vendorId": "0x16C0",
+  "productId": "0x27DB",
+  "lighting": "none",
+  "matrix": { "rows": 5, "cols": 14 },
+  "layouts": { "keymap": [] }
+}

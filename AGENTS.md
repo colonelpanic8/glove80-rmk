@@ -1,5 +1,19 @@
 # Glove80 RMK development notes
 
+## Experimental Go60 sibling
+
+`crates/go60-rmk` is a sibling embedded workspace that reuses the Glove80
+lighting/replication modules with board constants for 30 LEDs per half and a
+40% hardware-output ceiling. Its hardware configuration is transcribed from
+MoErgo's official `moergo-sc/zmk` Go60 board definitions.
+
+The current port deliberately supports BLE split only. Do not claim feature
+parity or release it as a ZMK replacement until RMK has a Cirque Pinnacle
+driver, peripheral pointing forwarding is qualified, and the Go60's automatic
+BLE/TRRS half-duplex split switching is implemented. Build and validate its
+independent UF2 bundle with `just go60-firmware`; the official family IDs are
+`0x9809B007` (left) and `0x980AB007` (right).
+
 ## Nested RMK repository
 
 `dependencies/rmk` is an independent Git repository, not ordinary vendored
