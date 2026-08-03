@@ -5,4 +5,4 @@
 # files (such as the firmware's) still take precedence when entered directly.
 channel = "1.97.0"
 components = ["clippy", "rust-src", "rustfmt"]
-targets = ["thumbv7em-none-eabihf"]
+targets = ["thumbv7em-none-eabihf", "wasm32-unknown-unknown"]
