@@ -1,0 +1,24 @@
+[package]
+name = "glove80-config-wasm"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "The glove80.toml round-trip compiled to a wasm package, in the same protocol types a browser host already holds"
+license = "MIT"
+
+# Built by `wasm-pack build --target web`. Native checks compile an empty crate
+# because `src/lib.rs` is wasm32-gated, the way rynk-wasm is.
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+anyhow = "1.0"
+glove80-config = { path = "../glove80-config" }
+# `wasm` turns on the tsify derives that give the protocol types their own
+# names in the generated `.d.ts`, so this package's snapshot type is the same
+# shape a rynk-wasm consumer already holds.
+rynk = { path = "../../dependencies/rmk/rynk", features = ["wasm"] }
+console_error_panic_hook = "0.1"
+serde = { version = "1", features = ["derive"] }
+tsify = { version = "0.5", default-features = false, features = ["js"] }
+wasm-bindgen = "0.2"

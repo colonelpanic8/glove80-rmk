@@ -1,5 +1,12 @@
 [workspace]
-members = ["crates/glove80-config", "crates/glove80-control", "crates/xtask"]
+members = [
+  "crates/glove80-config",
+  # Not a default member: it only compiles to anything on wasm32, and building
+  # it turns on `rynk/wasm` for everyone sharing the build's feature unification.
+  "crates/glove80-config-wasm",
+  "crates/glove80-control",
+  "crates/xtask",
+]
 default-members = ["crates/glove80-control"]
 # The embedded firmware is a standalone workspace because it cross-compiles.
 exclude = [

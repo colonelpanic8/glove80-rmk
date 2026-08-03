@@ -1,0 +1,84 @@
+//! The values crossing the wasm ABI.
+//!
+//! Every field is either a `rynk` protocol type or a plain scalar, so a host
+//! that already holds device state can pass it straight in without first
+//! rewriting it into the file format's names and colour strings. tsify gives
+//! each of these a named TypeScript declaration.
+
+use rynk::rmk_types::action::KeyAction;
+use rynk::rmk_types::protocol::rynk::{
+    LightingBackgroundState, LightingConditionalSceneCell, LightingExtensionParam,
+    LightingExtensionState, LightingLayerPolicy, LightingOutputMode, LightingSceneCell,
+};
+use serde::{Deserialize, Serialize};
+use tsify::Tsify;
+
+/// The managed runtime state as a browser holds it: the same protocol types the
+/// device reports, rather than the TOML file's names and colour strings.
+#[derive(Clone, Debug, Deserialize, Serialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi)]
+pub struct RuntimeSnapshot {
+    pub default_layer: u8,
+    /// One entry per layer, each row-major over the 6x14 grid.
+    pub layers: Vec<Vec<KeyAction>>,
+    pub lighting: Option<LightingSnapshot>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi)]
+pub struct LightingSnapshot {
+    pub brightness: u8,
+    pub output_mode: LightingOutputMode,
+    pub scene_policy: LightingLayerPolicy,
+    pub background: LightingBackgroundState,
+    /// None when the file names no extension effect, or the device exposes none.
+    pub effects: Option<LightingExtensionState>,
+    /// The optional second effect layered over `effects`, indexing the same
+    /// advertised effect list. It travels separately on the wire
+    /// (`LightingExtensionLayers`), so it does so here too.
+    pub overlay: Option<u8>,
+    /// Parameter values this snapshot asserts, already resolved to the ordinals
+    /// the protocol addresses.
+    pub effect_params: Vec<EffectParamWrite>,
+    pub scenes: Vec<LightingSceneCell>,
+    /// The mutable, ordered conditional table. `undefined` means the firmware
+    /// has no such table at all, which stays distinct from a supported-but-empty
+    /// one: a file naming rules conflicts with the former and not the latter.
+    pub conditional_scenes: Option<Vec<LightingConditionalSceneCell>>,
+}
+
+/// One parameter value addressed the way `SetLightingExtensionParam` addresses
+/// it: by the effect's index in the advertised effect list, and the parameter's
+/// ordinal within that effect's own list.
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi)]
+pub struct EffectParamWrite {
+    pub effect: u8,
+    pub index: u8,
+    pub value: u8,
+}
+
+/// What the connected keyboard advertises. The file speaks in effect, palette
+/// and parameter *names*; the protocol speaks in indices and ordinals, so a
+/// round-trip needs the device's own lists to translate between them.
+#[derive(Clone, Debug, Deserialize, Serialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi)]
+pub struct ExtensionCatalog {
+    pub effects: Vec<String>,
+    pub palettes: Vec<String>,
+    /// Advertised parameters per effect, in firmware order. Effects with no
+    /// parameters are simply absent, matching how the CLI reads them.
+    pub params: Vec<EffectParamSet>,
+}
+
+/// One effect's advertised parameters. `LightingExtensionParam` carries each
+/// parameter's bounds, its firmware default, and its live value in one row, so
+/// this is enough to validate a file and to prune defaults out of a pulled one.
+#[derive(Clone, Debug, Deserialize, Serialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi)]
+pub struct EffectParamSet {
+    /// Index of the effect within `ExtensionCatalog::effects`.
+    pub effect: u8,
+    pub name: String,
+    pub params: Vec<LightingExtensionParam>,
+}
