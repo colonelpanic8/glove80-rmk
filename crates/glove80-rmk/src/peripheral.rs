@@ -29,9 +29,9 @@ mod keyboard_peripheral {
         crate::lighting::peripheral_power_monitor()
     }
 
-    /// Feed this half's own key presses to its local Reactive PaletteFx
-    /// effect. The central's presses are not mirrored over the split link,
-    /// so cross-half Reactive spill stops at the seam.
+    /// Feed right-half presses directly to PaletteFx. Left-half presses arrive
+    /// through the lighting replication task so spatial effects span both
+    /// halves without double-counting local hits.
     #[register_processor(event)]
     fn reactive_key_hits() {
         crate::lighting::ReactiveKeyHits::peripheral()

@@ -82,7 +82,8 @@ pub static REPLICA_SLOT: StandardReplicaSlot<OVERLAY_CAPACITY, SCENE_CAPACITY> =
     StandardReplicaSlot::new();
 
 /// Pending key-reactive effect hits for this half's own engine instance. Each
-/// binary drains its local queue on its next rendered frame.
+/// binary drains its local queue on its next rendered frame. Central-half hits
+/// are also mirrored to the peripheral so spatial effects span the seam.
 static HIT_QUEUE: HitQueue<REACTIVE_HITS> = HitQueue::new();
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -382,32 +383,40 @@ pub fn engine(
     .with_battery_status_provider(&GLOVE_BATTERIES)
 }
 
-/// Feed pressed keys to the Reactive PaletteFx effect on this half's own
-/// engine. Key positions arrive in the local event bus's coordinates:
+/// Feed pressed keys to the Reactive and Crosshair PaletteFx effects. Key
+/// positions arrive in the local event bus's coordinates:
 /// board-wide on the central (the split driver re-publishes peripheral keys
 /// with their `[[split.peripheral]]` offsets applied), half-local on the
 /// peripheral (its matrix scanner publishes unshifted scan positions).
-/// Offsets shift them into the board-wide lighting matrix and the column
-/// bounds keep each engine's hits on its physical half. Recording is
-/// render-neutral unless Reactive is active; the source drains the queue
-/// either way and timestamps hits in the engine animation-clock domain.
+/// Offsets shift them into the board-wide lighting matrix. The central records
+/// both halves locally, while its own left-half hits are mirrored over the
+/// split application channel. The peripheral records right-half scans locally
+/// and mirrored left-half slots remotely, giving both engines the same spatial
+/// hit while avoiding a duplicate for right-half keys.
+///
+/// Recording is render-neutral unless a key-reactive effect is active; the
+/// source drains the queue either way and timestamps hits in the engine
+/// animation-clock domain.
 #[rmk::macros::processor(subscribe = [KeyboardEvent])]
 pub struct ReactiveKeyHits {
     row_offset: u8,
     col_offset: u8,
     first_col: u8,
     last_col: u8,
+    mirror_left_hits: bool,
 }
 
 impl ReactiveKeyHits {
     /// Central event bus: positions are already board-wide, including
-    /// re-published peripheral events. Keep only this engine's left half.
+    /// re-published peripheral events. Render every hit locally and mirror
+    /// left-half hits to the peripheral.
     pub const fn central() -> Self {
         Self {
             row_offset: 0,
             col_offset: 0,
             first_col: 0,
-            last_col: 7,
+            last_col: 14,
+            mirror_left_hits: true,
         }
     }
 
@@ -419,6 +428,7 @@ impl ReactiveKeyHits {
             col_offset: 7,
             first_col: 7,
             last_col: 14,
+            mirror_left_hits: false,
         }
     }
 
@@ -442,6 +452,9 @@ impl ReactiveKeyHits {
         let mut queued = false;
         for (slot, _) in topology_config::LIGHTING_TOPOLOGY.leds_for_key(key) {
             queued |= HIT_QUEUE.record(slot.0 as u8);
+            if self.mirror_left_hits {
+                crate::split_lighting::try_queue_effect_hit(slot);
+            }
         }
         if queued {
             CORE_MAILBOX.snapshot_changed();
@@ -562,6 +575,12 @@ impl PeripheralReplication {
         let Ok(message) = crate::split_lighting::Message::decode(data) else {
             return;
         };
+        if let crate::split_lighting::Message::EffectHit { slot } = message {
+            if slot.index() < LEDS_PER_HALF && HIT_QUEUE.record(slot.0 as u8) {
+                CORE_MAILBOX.snapshot_changed();
+            }
+            return;
+        }
         let Some((generation, snapshot, batteries)) = self.stage.apply(message) else {
             return;
         };

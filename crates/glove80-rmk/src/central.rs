@@ -122,9 +122,8 @@ mod keyboard_central {
         crate::central_lighting::BatteryLightingState
     }
 
-    /// Feed left-half key presses to the local engine's Reactive PaletteFx
-    /// effect. Right-half events are re-published on this bus but filtered
-    /// so Reactive behavior stays symmetric and isolated at the seam.
+    /// Feed every key press to the local PaletteFx engine and mirror left-half
+    /// hits to the peripheral, allowing spatial key effects to span the seam.
     #[register_processor(event)]
     fn reactive_key_hits() {
         crate::lighting::ReactiveKeyHits::central()

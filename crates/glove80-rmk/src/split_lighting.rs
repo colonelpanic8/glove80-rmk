@@ -36,6 +36,10 @@ const TAG_EXTENSION: u8 = 7;
 const TAG_CONDITIONAL_SCENE_BEGIN: u8 = 8;
 const TAG_CONDITIONAL_SCENE_CELL: u8 = 9;
 const TAG_EXTENSION_OVERLAY: u8 = 10;
+/// Optional transient traffic outside the atomic snapshot transaction. This
+/// tag is additive, so it does not require changing the snapshot wire version:
+/// an older peripheral simply ignores the unknown message.
+const TAG_EFFECT_HIT: u8 = 11;
 
 const BEGIN_LEN: usize = 26;
 const CONTEXT_LEN: usize = 23;
@@ -49,6 +53,7 @@ const CONDITIONAL_SCENE_BEGIN_LEN: usize = 8;
 const CONDITIONAL_SCENE_CELL_LEN: usize = 26;
 const COMMIT_LEN: usize = 9;
 const ACK_LEN: usize = 7;
+const EFFECT_HIT_LEN: usize = 3;
 const _: () = assert!(CELL_LEN <= SPLIT_APP_MSG_MAX);
 const _: () = assert!(EXTENSION_LEN <= SPLIT_APP_MSG_MAX);
 const _: () = assert!(EXTENSION_OVERLAY_LEN <= SPLIT_APP_MSG_MAX);
@@ -120,6 +125,11 @@ pub enum Message {
     Ack {
         generation: u8,
         revision: u32,
+    },
+    /// A central-half key hit mirrored to the peripheral effect engine. The
+    /// slot remains board-wide so both engines sample the same geometry.
+    EffectHit {
+        slot: LedSlot,
     },
 }
 
@@ -397,6 +407,11 @@ impl Message {
                 put_u32(&mut out, 3, revision);
                 ACK_LEN
             }
+            Message::EffectHit { slot } => {
+                out[1] = TAG_EFFECT_HIT;
+                out[2] = slot.0 as u8;
+                EFFECT_HIT_LEN
+            }
         };
         SplitAppData::new(&out[..len]).expect("semantic lighting packet is bounded")
     }
@@ -661,6 +676,11 @@ impl Message {
                 generation: bytes[2],
                 revision: get_u32(bytes, 3),
             }),
+            TAG_EFFECT_HIT if bytes.len() == EFFECT_HIT_LEN && bytes[2] < TOTAL_LEDS as u8 => {
+                Ok(Message::EffectHit {
+                    slot: LedSlot(bytes[2] as u16),
+                })
+            }
             TAG_BEGIN
             | TAG_CONTEXT
             | TAG_CELL
@@ -668,11 +688,23 @@ impl Message {
             | TAG_ACK
             | TAG_SCENE_CELL
             | TAG_EXTENSION
+            | TAG_EXTENSION_OVERLAY
             | TAG_CONDITIONAL_SCENE_BEGIN
-            | TAG_CONDITIONAL_SCENE_CELL => Err(DecodeError::Length),
+            | TAG_CONDITIONAL_SCENE_CELL
+            | TAG_EFFECT_HIT => Err(DecodeError::Length),
             _ => Err(DecodeError::Tag),
         }
     }
+}
+
+/// Best-effort delivery for a central-half key hit. Effect hits are ephemeral:
+/// dropping one while the split queue is saturated is preferable to delaying
+/// matrix-event processing or an atomic lighting snapshot.
+pub fn try_queue_effect_hit(slot: LedSlot) -> bool {
+    slot.index() < LEDS_PER_HALF
+        && rmk::split_app::SPLIT_APP_TX
+            .try_send(Message::EffectHit { slot }.encode())
+            .is_ok()
 }
 
 /// Queue one complete snapshot. The staged peripheral state remains invisible
@@ -1024,7 +1056,7 @@ impl SnapshotStage {
                     None
                 }
             }
-            Message::Ack { .. } | Message::Begin { .. } => None,
+            Message::Ack { .. } | Message::EffectHit { .. } | Message::Begin { .. } => None,
         }
     }
 
