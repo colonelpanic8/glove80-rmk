@@ -313,7 +313,7 @@ impl LightingOutput<LogicalFrame<Rgb8, TOTAL_LEDS>> for HalfOutput {
 const DEFAULT_EFFECT: u8 = Effect::<REACTIVE_HITS>::CROSSHAIR_INDEX;
 const DEFAULT_EFFECT_VAL: u8 = 0xff;
 const DEFAULT_EFFECT_SPEED: u8 = 108;
-const DEFAULT_EFFECT_PARAMS: [u8; MAX_INITIAL_PARAMS] = [0, 90, 12, 170, 1, 172, 16, 0];
+const DEFAULT_EFFECT_PARAMS: [u8; MAX_INITIAL_PARAMS] = [0, 90, 11, 170, 1, 0, 173, 0];
 
 /// Effect index used when migrating a persisted selection of the retired
 /// combined Storm effect into its Rain plus Reactive representation.
