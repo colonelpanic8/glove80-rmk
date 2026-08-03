@@ -22,3 +22,10 @@ jobs:
         with:
           name: glove80-rmk
           path: dist/
+      - name: Build and validate experimental Go60 firmware
+        run: nix develop --command just go60-firmware
+      - name: Upload Go60 bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: go60-rmk
+          path: dist/go60/

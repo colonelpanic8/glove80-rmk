@@ -1,4 +1,4 @@
-//! Glove80 semantic lighting replication over RMK's bounded split channel.
+//! MoErgo semantic lighting replication over RMK's bounded split channel.
 //!
 //! The central remains the Rynk/Vial authority. It transfers declarative
 //! standard-engine snapshots only when state changes or the link reconnects;

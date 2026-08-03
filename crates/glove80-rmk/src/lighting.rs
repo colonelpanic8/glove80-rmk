@@ -1,4 +1,4 @@
-//! Shared Glove80 LED hardware and half-local standard lighting processors.
+//! Shared MoErgo LED hardware and half-local standard lighting processors.
 
 use core::cell::Cell;
 use core::num::NonZeroU32;
@@ -41,7 +41,7 @@ bind_interrupts!(struct Irqs {
     SPIM3 => spim::InterruptHandler<peripherals::SPI3>;
 });
 
-pub const LEDS_PER_HALF: usize = 40;
+pub const LEDS_PER_HALF: usize = crate::BOARD_LEDS_PER_HALF;
 pub const TOTAL_LEDS: usize = LEDS_PER_HALF * 2;
 pub const OVERLAY_CAPACITY: usize = 64;
 /// Bounds the runtime scene table and, separately, the runtime conditional
@@ -68,7 +68,7 @@ pub const REACTIVE_HITS: usize = 16;
 pub type Engine = StandardLightingEngine<
     'static,
     PaletteFxSource<TopologyLayout<TOTAL_LEDS>, TOTAL_LEDS, REACTIVE_HITS>,
-    ConditionalScenes<'static, BuiltinEffect, GloveBatteryProvider>,
+    ConditionalScenes<'static, BuiltinEffect, BoardBatteryProvider>,
     TOTAL_LEDS,
     OVERLAY_CAPACITY,
     SCENE_CAPACITY,
@@ -129,11 +129,11 @@ pub fn set_right_battery(status: BatteryStatus) {
     });
 }
 
-pub struct GloveBatteryProvider;
+pub struct BoardBatteryProvider;
 
-pub static GLOVE_BATTERIES: GloveBatteryProvider = GloveBatteryProvider;
+pub static BOARD_BATTERIES: BoardBatteryProvider = BoardBatteryProvider;
 
-impl BatteryStatusProvider for GloveBatteryProvider {
+impl BatteryStatusProvider for BoardBatteryProvider {
     fn battery_status(&self, node: u8) -> BatteryStatus {
         let batteries = battery_statuses();
         match node {
@@ -144,11 +144,10 @@ impl BatteryStatusProvider for GloveBatteryProvider {
     }
 }
 
-/// Ivan's 90% hardware-output limit. This remains in the hardware driver below
-/// every user-controlled transform and protocol path while retaining some
-/// headroom. Scale rather than clamp so RMK's global brightness has no dead
-/// zone at the top of its range and RGB ratios remain intact.
-const CHANNEL_CEILING: u8 = 230;
+/// The board-specific hardware-output limit. This remains below every
+/// user-controlled transform and protocol path. Scale rather than clamp so
+/// RMK's global brightness has no dead zone and RGB ratios remain intact.
+const CHANNEL_CEILING: u8 = crate::BOARD_CHANNEL_CEILING;
 
 const fn limit_channel(channel: u8) -> u8 {
     ((channel as u16 * CHANNEL_CEILING as u16 + u8::MAX as u16 / 2) / u8::MAX as u16) as u8
@@ -242,8 +241,8 @@ pub enum OutputError {
 }
 
 /// One physical half's sink for an otherwise board-wide logical frame.
-/// Keeping the same 80 stable slots in both engines avoids a second topology
-/// or layer-scene mapping while all animation sampling remains local.
+/// Keeping the same board-wide stable slots in both engines avoids a second
+/// topology or layer-scene mapping while all animation sampling remains local.
 pub struct HalfOutput {
     hardware: LightingHardware,
     first_slot: usize,
@@ -386,10 +385,10 @@ pub fn engine(
         crate::LIGHTING_BACKGROUND,
         crate::LIGHTING_LAYER_SCENES,
         palettefx,
-        ConditionalScenes::new(&crate::LIGHTING_CONDITIONAL_SCENE_CELLS, &GLOVE_BATTERIES),
+        ConditionalScenes::new(&crate::LIGHTING_CONDITIONAL_SCENE_CELLS, &BOARD_BATTERIES),
     )
     .with_controls(crate::LIGHTING_CONTROLS)
-    .with_battery_status_provider(&GLOVE_BATTERIES)
+    .with_battery_status_provider(&BOARD_BATTERIES)
 }
 
 /// Feed pressed keys to the typing-reactive PaletteFx effects. Key

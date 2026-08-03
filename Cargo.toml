@@ -6,6 +6,7 @@ exclude = [
   # Agent/task worktrees checked out under the repo root stay separate roots.
   ".worktrees",
   "crates/glove80-rmk",
+  "crates/go60-rmk",
   "dependencies/rmk/rmk",
   "dependencies/rmk/rmk-config",
   "dependencies/rmk/rmk-macro",

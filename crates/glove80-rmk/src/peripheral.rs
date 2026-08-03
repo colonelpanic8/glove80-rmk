@@ -1,6 +1,9 @@
 #![no_main]
 #![no_std]
 
+pub const BOARD_LEDS_PER_HALF: usize = 40;
+pub const BOARD_CHANNEL_CEILING: u8 = 230;
+
 #[allow(dead_code)] // Shared with the central binary's half-specific constructors.
 mod lighting;
 #[allow(dead_code)] // Shared codec also contains the central snapshot sender.

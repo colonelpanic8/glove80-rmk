@@ -8,6 +8,7 @@ Glove80 firmware and native control tooling built on
 ```text
 crates/
 ├── glove80-rmk/      # embedded firmware for both keyboard halves
+├── go60-rmk/         # experimental Go60 firmware for both halves
 ├── glove80-control/  # native Rynk CLI
 └── xtask/            # repository checks and release packaging
 dependencies/
@@ -38,6 +39,7 @@ just check     # validate repository paths and run native checks/tests
 just host-test # test the CLI and repository task runner
 just firmware  # build and package both keyboard halves
 just dist      # alias of firmware
+just go60-firmware # build and package the experimental Go60 images
 ```
 
 Run the CLI directly with `cargo run -p glove80-control -- --help`. See
@@ -51,6 +53,10 @@ firmware details.
 revision. It writes both ELF and UF2 images, `SHA256SUMS`, and a provenance
 manifest under `dist/`. Packaging validates each half's UF2 family ID and the
 application flash range `0x00026000..0x000dc000`.
+
+`just go60-firmware` applies the same validation to the Go60 build and writes
+its independent bundle under `dist/go60/`. Go60 downstream configurations may
+set `GO60_CONFIG_GIT_COMMIT` and `GO60_CONFIG_GIT_DIRTY` for provenance.
 
 Downstream configuration repositories may set `GLOVE80_CONFIG_GIT_COMMIT` and
 `GLOVE80_CONFIG_GIT_DIRTY` to include their source identity in firmware build
