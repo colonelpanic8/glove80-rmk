@@ -12,14 +12,19 @@ use embassy_sync::blocking_mutex::Mutex as BlockingMutex;
 use embassy_time::{Duration, Timer};
 use rmk::core_traits::Runnable;
 use rmk::event::{KeyboardEvent, KeyboardEventPos};
+use rmk::lighting::compositor::{
+    Contribution, ExtensionDescriptor, ExtensionLayerState, ExtensionState, LightingSource,
+    RenderInput,
+};
 use rmk::lighting::topology::MatrixPosition;
 use rmk::lighting::{
-    BatteryStatusProvider, BuiltinEffect, ConditionalScenes, IndicatorState, LayerState,
-    LightingContext, LightingMailbox, LightingOutput, LightingProcessor, LightingService,
-    LogicalFrame, Rgb8, SnapshotProvider, StandardCommand, StandardError, StandardLightingEngine,
-    StandardReplicaSlot, StandardReply,
+    BatteryStatusProvider, BuiltinEffect, ConditionalScenes, EffectSample, IndicatorState,
+    LayerState, LightingContext, LightingContextProvider, LightingMailbox, LightingOutput,
+    LightingProcessor, LightingService, LogicalFrame, Rgb8, SnapshotProvider, StandardCommand,
+    StandardError, StandardLightingEngine, StandardReplicaSlot, StandardReply,
 };
 use rmk::storage::{LightingExtensionOverlayRecord, LightingExtensionRecord};
+use rmk::types::action::LightAction;
 use rmk::types::battery::BatteryStatus;
 use rmk_palettefx::effects::{CrosshairParams, Effect};
 use rmk_palettefx::palette::id as palette_id;
@@ -65,9 +70,98 @@ pub const COMMAND_CAPACITY: usize = 4;
 /// Sixteen covers sustained fast typing on one half.
 pub const REACTIVE_HITS: usize = 16;
 
+const MAGIC_LAYER: u8 = 2;
+
+type PaletteFx = PaletteFxSource<TopologyLayout<TOTAL_LEDS>, TOTAL_LEDS, REACTIVE_HITS>;
+
+/// Hides PaletteFX behind an opaque black frame while Magic is active.
+///
+/// This belongs at the dense extension source rather than in an 80-cell layer
+/// scene. The sparse scene table resolves each indexed cell by scanning its
+/// entries, so using it as a full-frame mask makes layer transitions
+/// needlessly expensive. Magic's ordinary layer and status sources still
+/// compose above this black frame.
+pub struct MagicGatedPaletteFx {
+    inner: PaletteFx,
+}
+
+impl<Context> LightingSource<Rgb8, Context> for MagicGatedPaletteFx
+where
+    Context: LightingContextProvider,
+{
+    fn len(&self, input: &RenderInput<'_, Context>) -> usize {
+        self.inner.len(input)
+    }
+
+    fn slot(&self, index: usize, input: &RenderInput<'_, Context>) -> rmk::lighting::LedSlot {
+        self.inner.slot(index, input)
+    }
+
+    fn contribution(
+        &mut self,
+        index: usize,
+        input: &RenderInput<'_, Context>,
+    ) -> Contribution<Rgb8> {
+        let contribution = self.inner.contribution(index, input);
+        if input
+            .context
+            .lighting_context()
+            .layers
+            .is_active(MAGIC_LAYER)
+        {
+            Contribution::Opaque(EffectSample {
+                color: Rgb8::BLACK,
+                next_change_ms: None,
+            })
+        } else {
+            contribution
+        }
+    }
+
+    fn handle_light_action(&mut self, action: LightAction) -> bool {
+        <PaletteFx as LightingSource<Rgb8, Context>>::handle_light_action(&mut self.inner, action)
+    }
+
+    fn extension_descriptor(&self) -> Option<ExtensionDescriptor> {
+        <PaletteFx as LightingSource<Rgb8, Context>>::extension_descriptor(&self.inner)
+    }
+
+    fn extension_state(&self) -> Option<ExtensionState> {
+        <PaletteFx as LightingSource<Rgb8, Context>>::extension_state(&self.inner)
+    }
+
+    fn apply_extension_state(&mut self, state: ExtensionState) -> bool {
+        <PaletteFx as LightingSource<Rgb8, Context>>::apply_extension_state(&mut self.inner, state)
+    }
+
+    fn extension_layer_state(&self) -> Option<ExtensionLayerState> {
+        <PaletteFx as LightingSource<Rgb8, Context>>::extension_layer_state(&self.inner)
+    }
+
+    fn apply_extension_layer_state(&mut self, state: ExtensionLayerState) -> bool {
+        <PaletteFx as LightingSource<Rgb8, Context>>::apply_extension_layer_state(
+            &mut self.inner,
+            state,
+        )
+    }
+
+    fn extension_param(&self, effect: u8, index: u8) -> Option<u8> {
+        <PaletteFx as LightingSource<Rgb8, Context>>::extension_param(&self.inner, effect, index)
+    }
+
+    fn apply_extension_param(&mut self, effect: u8, index: u8, value: u8) -> bool {
+        <PaletteFx as LightingSource<Rgb8, Context>>::apply_extension_param(
+            &mut self.inner,
+            effect,
+            index,
+            value,
+        )
+    }
+}
+
 pub type Engine = StandardLightingEngine<
     'static,
-    PaletteFxSource<TopologyLayout<TOTAL_LEDS>, TOTAL_LEDS, REACTIVE_HITS>,
+    MagicGatedPaletteFx,
     ConditionalScenes<'static, BuiltinEffect, GloveBatteryProvider>,
     TOTAL_LEDS,
     OVERLAY_CAPACITY,
@@ -377,11 +471,13 @@ pub fn engine(
         config.initial_overlay_param_len = restored.len() as u8;
         config.initial_overlay_params[..restored.len()].copy_from_slice(restored);
     }
-    let palettefx = PaletteFxSource::new(
-        TopologyLayout::new(&topology_config::LIGHTING_TOPOLOGY),
-        &HIT_QUEUE,
-        config,
-    );
+    let palettefx = MagicGatedPaletteFx {
+        inner: PaletteFxSource::new(
+            TopologyLayout::new(&topology_config::LIGHTING_TOPOLOGY),
+            &HIT_QUEUE,
+            config,
+        ),
+    };
     Engine::new(
         crate::LIGHTING_BACKGROUND,
         crate::LIGHTING_LAYER_SCENES,
