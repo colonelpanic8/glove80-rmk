@@ -19,7 +19,7 @@ use rmk::lighting::{
     LogicalFrame, Rgb8, SnapshotProvider, StandardCommand, StandardError, StandardLightingEngine,
     StandardReplicaSlot, StandardReply,
 };
-use rmk::storage::LightingExtensionRecord;
+use rmk::storage::{LightingExtensionOverlayRecord, LightingExtensionRecord};
 use rmk::types::battery::BatteryStatus;
 use rmk_palettefx::effects::Effect;
 use rmk_palettefx::rmk_lighting::{HitQueue, PaletteFxConfig, PaletteFxSource, TopologyLayout};
@@ -58,9 +58,8 @@ pub const OVERLAY_CAPACITY: usize = 64;
 pub const SCENE_CAPACITY: usize = 160;
 pub const COMMAND_CAPACITY: usize = 4;
 
-/// Number of simultaneous key hits the Reactive effect remembers between
-/// frames. Each hit fades over ~1.3 s at the default speed, so 16 covers
-/// sustained fast typing on one half.
+/// Number of simultaneous key hits the Reactive and Crosshair effects can
+/// remember. Sixteen covers sustained fast typing on one half.
 pub const REACTIVE_HITS: usize = 16;
 
 pub type Engine = StandardLightingEngine<
@@ -82,7 +81,7 @@ pub static CORE_MAILBOX: CoreMailbox = LightingMailbox::new();
 pub static REPLICA_SLOT: StandardReplicaSlot<OVERLAY_CAPACITY, SCENE_CAPACITY> =
     StandardReplicaSlot::new();
 
-/// Pending Reactive key hits for this half's own engine instance. Each
+/// Pending key-reactive effect hits for this half's own engine instance. Each
 /// binary drains its local queue on its next rendered frame.
 static HIT_QUEUE: HitQueue<REACTIVE_HITS> = HitQueue::new();
 
@@ -304,15 +303,28 @@ impl LightingOutput<LogicalFrame<Rgb8, TOTAL_LEDS>> for HalfOutput {
 }
 
 /// Compiled-in effect defaults, used on a board that has never persisted a
-/// selection: Storm (rain plus reactive key hits), lit, at half brightness.
+/// selection: Rain with Reactive layered over it, lit, at half brightness.
 ///
 /// Toggling PaletteFX on restores half brightness (0x80): the hardware output
 /// limit and per-key diffusors make full-scale effect output harsher than
 /// useful.
-const DEFAULT_EFFECT: u8 = Effect::<REACTIVE_HITS>::STORM_INDEX;
+const DEFAULT_EFFECT: u8 = Effect::<REACTIVE_HITS>::RAIN_INDEX;
+const DEFAULT_OVERLAY: u8 = 6;
 const DEFAULT_EFFECT_VAL: u8 = 0x80;
 
-pub fn engine(persisted_extension: Option<LightingExtensionRecord>) -> Engine {
+pub fn engine(
+    persisted_extension: Option<LightingExtensionRecord>,
+    persisted_overlay: Option<LightingExtensionOverlayRecord>,
+) -> Engine {
+    // Effect index 7 used to mean the combined Storm effect and now means
+    // Crosshair. Old Storm advertised at most six parameters, while every
+    // Crosshair record stores its seven-parameter row. Together with the
+    // absence of a separately persisted overlay record, that distinguishes
+    // old selections without sacrificing Crosshair's stable index.
+    let legacy_storm = persisted_overlay.is_none()
+        && persisted_extension.as_ref().is_some_and(|record| {
+            record.effect == Effect::<REACTIVE_HITS>::LEGACY_STORM_INDEX && record.param_len <= 6
+        });
     // A persisted selection wins over the compiled defaults, so changing what
     // the board boots into never means rebuilding firmware. Every index is
     // re-validated downstream against the live effect/palette/parameter lists,
@@ -323,10 +335,18 @@ pub fn engine(persisted_extension: Option<LightingExtensionRecord>) -> Engine {
         initial_val: DEFAULT_EFFECT_VAL,
         initial_palette: 0,
         initial_effect: DEFAULT_EFFECT,
+        initial_overlay: Some(DEFAULT_OVERLAY),
         ..PaletteFxConfig::default()
     };
     if let Some(record) = persisted_extension {
-        config.initial_effect = record.effect;
+        config.initial_effect = if legacy_storm {
+            Effect::<REACTIVE_HITS>::RAIN_INDEX
+        } else {
+            record.effect
+        };
+        // Pre-layering records had no overlay key. Only the retired Storm
+        // selection implies one; every other saved effect remains standalone.
+        config.initial_overlay = legacy_storm.then_some(DEFAULT_OVERLAY);
         config.initial_palette = record.palette as usize;
         config.initial_speed = record.speed;
         // A persisted zero means the user left the effects toggled off; keep
@@ -340,6 +360,12 @@ pub fn engine(persisted_extension: Option<LightingExtensionRecord>) -> Engine {
         let restored = record.params();
         config.initial_param_len = restored.len() as u8;
         config.initial_params[..restored.len()].copy_from_slice(restored);
+    }
+    if let Some(record) = persisted_overlay {
+        config.initial_overlay = record.effect;
+        let restored = record.params();
+        config.initial_overlay_param_len = restored.len() as u8;
+        config.initial_overlay_params[..restored.len()].copy_from_slice(restored);
     }
     let palettefx = PaletteFxSource::new(
         TopologyLayout::new(&topology_config::LIGHTING_TOPOLOGY),
@@ -504,7 +530,7 @@ pub fn init_peripheral(
     // central replicates to it, so it boots on the compiled defaults.
     let service = LightingService::new(
         PeripheralState,
-        engine(None),
+        engine(None, None),
         LogicalFrame::new(Rgb8::BLACK),
     );
     let output = HalfOutput::right(LightingHardware::new(

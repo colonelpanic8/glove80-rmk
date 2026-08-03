@@ -45,6 +45,7 @@ pub fn init<'keymap, 'data>(
     persisted_policy: Option<LightingLayerPolicy>,
     persisted_runtime_conditional_scenes: &[LightingConditionalSceneCell],
     persisted_extension: Option<::rmk::storage::LightingExtensionRecord>,
+    persisted_overlay: Option<::rmk::storage::LightingExtensionOverlayRecord>,
     spi: Peri<'static, SPI3>,
     data_pin: Peri<'static, impl Pin>,
     chain_power_pin: Peri<'static, impl Pin>,
@@ -59,7 +60,7 @@ pub fn init<'keymap, 'data>(
 > {
     let provider =
         KeymapLightingState::new(keymap).expect("Glove80 layer count fits lighting state");
-    let mut engine = crate::lighting::engine(persisted_extension);
+    let mut engine = crate::lighting::engine(persisted_extension, persisted_overlay);
     install_lighting_scenes(
         &mut engine,
         &crate::LIGHTING_TOPOLOGY,
@@ -102,6 +103,7 @@ pub const fn rynk_controller() -> RynkLightingController<'static> {
     .with_conditional_scenes(&crate::LIGHTING_CONDITIONAL_SCENE_CELLS)
     .with_controls(crate::LIGHTING_CONTROLS)
     .with_extension_effects()
+    .with_extension_layering()
 }
 
 /// Latch live battery state for the status source and request a fresh render.

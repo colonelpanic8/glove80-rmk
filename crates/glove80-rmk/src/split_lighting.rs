@@ -7,7 +7,7 @@
 
 use core::num::NonZeroU32;
 
-use rmk::lighting::compositor::ExtensionState;
+use rmk::lighting::compositor::{ExtensionLayerState, ExtensionState};
 use rmk::lighting::standard::{EXTENSION_PARAM_CHUNK, ExtensionReplicaParams};
 use rmk::lighting::{
     BackgroundMode, BackgroundState, BatteryCondition, BuiltinEffect, ChargeCondition,
@@ -21,11 +21,11 @@ use rmk::types::battery::{BatteryStatus, ChargeState};
 
 use crate::lighting::{BatteryPair, LEDS_PER_HALF, OVERLAY_CAPACITY, SCENE_CAPACITY, TOTAL_LEDS};
 
-// Version 7 widens the staged Extension packet with the active effect's
+// Version 8 adds the optional second extension-effect packet. Version 7 widens the staged Extension packet with the active effect's
 // tuning parameters; version 6 added that packet and the runtime
 // conditional-scene packets. A stale half rejects the mismatched version and
 // simply keeps its previous state until both halves are reflashed together.
-const VERSION: u8 = 7;
+const VERSION: u8 = 8;
 const TAG_BEGIN: u8 = 1;
 const TAG_CONTEXT: u8 = 2;
 const TAG_CELL: u8 = 3;
@@ -35,12 +35,14 @@ const TAG_SCENE_CELL: u8 = 6;
 const TAG_EXTENSION: u8 = 7;
 const TAG_CONDITIONAL_SCENE_BEGIN: u8 = 8;
 const TAG_CONDITIONAL_SCENE_CELL: u8 = 9;
+const TAG_EXTENSION_OVERLAY: u8 = 10;
 
 const BEGIN_LEN: usize = 26;
 const CONTEXT_LEN: usize = 23;
 /// Selection (5 bytes after the header) plus the parameter block: one
 /// length byte, the effect the values belong to, and the values themselves.
 const EXTENSION_LEN: usize = 14 + EXTENSION_PARAM_CHUNK;
+const EXTENSION_OVERLAY_LEN: usize = 11 + EXTENSION_PARAM_CHUNK;
 const CELL_LEN: usize = 26;
 const SCENE_CELL_LEN: usize = 23;
 const CONDITIONAL_SCENE_BEGIN_LEN: usize = 8;
@@ -49,6 +51,7 @@ const COMMIT_LEN: usize = 9;
 const ACK_LEN: usize = 7;
 const _: () = assert!(CELL_LEN <= SPLIT_APP_MSG_MAX);
 const _: () = assert!(EXTENSION_LEN <= SPLIT_APP_MSG_MAX);
+const _: () = assert!(EXTENSION_OVERLAY_LEN <= SPLIT_APP_MSG_MAX);
 const _: () = assert!(CONDITIONAL_SCENE_CELL_LEN <= SPLIT_APP_MSG_MAX);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -80,6 +83,12 @@ pub enum Message {
         generation: u8,
         revision: u32,
         extension: Option<ExtensionState>,
+        params: Option<ExtensionReplicaParams>,
+    },
+    ExtensionOverlay {
+        generation: u8,
+        revision: u32,
+        overlay: Option<u8>,
         params: Option<ExtensionReplicaParams>,
     },
     Cell {
@@ -210,6 +219,27 @@ impl Message {
                     out[14..14 + values.len()].copy_from_slice(values);
                 }
                 EXTENSION_LEN
+            }
+            Message::ExtensionOverlay {
+                generation,
+                revision,
+                overlay,
+                params,
+            } => {
+                out[1] = TAG_EXTENSION_OVERLAY;
+                out[2] = generation;
+                put_u32(&mut out, 3, revision);
+                if let Some(effect) = overlay {
+                    out[7] = 1;
+                    out[8] = effect;
+                }
+                if let Some(params) = params {
+                    let values = params.values();
+                    out[9] = values.len() as u8;
+                    out[10] = params.effect;
+                    out[11..11 + values.len()].copy_from_slice(values);
+                }
+                EXTENSION_OVERLAY_LEN
             }
             Message::Cell {
                 generation,
@@ -455,6 +485,24 @@ impl Message {
                     }),
                 })
             }
+            TAG_EXTENSION_OVERLAY if bytes.len() == EXTENSION_OVERLAY_LEN => {
+                let param_len = bytes[9] as usize;
+                if param_len > EXTENSION_PARAM_CHUNK {
+                    return Err(DecodeError::Value);
+                }
+                let mut values = [0u8; EXTENSION_PARAM_CHUNK];
+                values[..param_len].copy_from_slice(&bytes[11..11 + param_len]);
+                Ok(Message::ExtensionOverlay {
+                    generation: bytes[2],
+                    revision: get_u32(bytes, 3),
+                    overlay: flag(bytes[7])?.then_some(bytes[8]),
+                    params: (param_len != 0).then_some(ExtensionReplicaParams {
+                        effect: bytes[10],
+                        len: param_len as u8,
+                        values,
+                    }),
+                })
+            }
             TAG_CELL if bytes.len() == CELL_LEN => {
                 let slot = bytes[7] as usize;
                 if !(LEDS_PER_HALF..TOTAL_LEDS).contains(&slot) {
@@ -683,6 +731,11 @@ pub fn try_queue_snapshot(
         revision: snapshot.revision,
         extension: snapshot.extension,
         params: snapshot.extension_params,
+    }) || !queue(Message::ExtensionOverlay {
+        generation,
+        revision: snapshot.revision,
+        overlay: snapshot.extension_layers.and_then(|state| state.overlay),
+        params: snapshot.extension_overlay_params,
     }) {
         return false;
     }
@@ -751,6 +804,7 @@ struct Stage {
     expected_conditional_scene_cells: Option<usize>,
     context_received: bool,
     extension_received: bool,
+    extension_overlay_received: bool,
     batteries: BatteryPair,
 }
 
@@ -796,13 +850,16 @@ impl SnapshotStage {
                         context: LightingContext::default(),
                         sample_time_ms,
                         extension: None,
+                        extension_layers: None,
                         extension_params: None,
+                        extension_overlay_params: None,
                     },
                     expected_overlay_cells: cell_count as usize,
                     expected_scene_cells: scene_count as usize,
                     expected_conditional_scene_cells: None,
                     context_received: false,
                     extension_received: false,
+                    extension_overlay_received: false,
                     batteries: BatteryPair::UNAVAILABLE,
                 });
                 None
@@ -837,6 +894,22 @@ impl SnapshotStage {
                 stage.snapshot.extension = extension;
                 stage.snapshot.extension_params = params;
                 stage.extension_received = true;
+                None
+            }
+            Message::ExtensionOverlay {
+                generation,
+                revision,
+                overlay,
+                params,
+            } => {
+                let stage = self.stage.as_mut()?;
+                if stage.generation != generation || stage.snapshot.revision != revision {
+                    self.stage = None;
+                    return None;
+                }
+                stage.snapshot.extension_layers = Some(ExtensionLayerState { overlay });
+                stage.snapshot.extension_overlay_params = params;
+                stage.extension_overlay_received = true;
                 None
             }
             Message::Cell {
@@ -931,6 +1004,7 @@ impl SnapshotStage {
                         && stage.snapshot.revision == revision
                         && stage.context_received
                         && stage.extension_received
+                        && stage.extension_overlay_received
                         && stage.expected_overlay_cells == cell_count as usize
                         && stage.expected_scene_cells == scene_count as usize
                         && stage.snapshot.overlay.as_slice().len() == stage.expected_overlay_cells

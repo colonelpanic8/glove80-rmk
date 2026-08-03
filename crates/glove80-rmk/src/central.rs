@@ -73,12 +73,14 @@ mod keyboard_central {
             .read_lighting_runtime_conditional_scenes(&mut persisted_runtime_conditional_scenes)
             .await;
         let persisted_extension = storage.read_lighting_extension_state().await;
+        let persisted_overlay = storage.read_lighting_extension_overlay().await;
         crate::central_lighting::init(
             keymap_ref,
             persisted_scenes.as_slice(),
             persisted_policy,
             persisted_runtime_conditional_scenes.as_slice(),
             persisted_extension,
+            persisted_overlay,
             p.SPI3,
             p.P0_27,
             p.P0_31,

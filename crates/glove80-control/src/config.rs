@@ -12,9 +12,9 @@ use rynk::rmk_types::protocol::rynk::{
     LightingError, LightingExtensionNameKind, LightingExtensionParamsRequest,
     LightingExtensionState, LightingFeatureFlags, LightingLayerCondition, LightingLayerPolicy,
     LightingLedId, LightingMutableState, LightingNodeId, LightingOutputMode, LightingRgb8,
-    LightingSceneCell, RynkError, SetLightingExtensionParamRequest,
-    SetLightingExtensionStateRequest, SetLightingLayerPolicyRequest, SetLightingOutputModeRequest,
-    SetLightingStateRequest,
+    LightingSceneCell, RynkError, SetLightingExtensionLayersRequest,
+    SetLightingExtensionParamRequest, SetLightingExtensionStateRequest,
+    SetLightingLayerPolicyRequest, SetLightingOutputModeRequest, SetLightingStateRequest,
 };
 use rynk::{Client, RynkHostError};
 use serde::{Deserialize, Serialize};
@@ -122,6 +122,9 @@ pub struct BackgroundConfig {
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub struct EffectsConfig {
     pub effect: String,
+    /// Optional second effect from the same advertised list.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub overlay: Option<String>,
     pub palette: String,
     pub value: u8,
     pub speed: u8,
@@ -147,6 +150,7 @@ impl EffectsConfig {
     fn selection(&self) -> EffectSelection<'_> {
         EffectSelection {
             effect: &self.effect,
+            overlay: self.overlay.as_deref(),
             palette: &self.palette,
             value: self.value,
             speed: self.speed,
@@ -157,6 +161,7 @@ impl EffectsConfig {
 #[derive(Debug, PartialEq, Eq)]
 struct EffectSelection<'a> {
     effect: &'a str,
+    overlay: Option<&'a str>,
     palette: &'a str,
     value: u8,
     speed: u8,
@@ -636,10 +641,29 @@ async fn read_snapshot(client: &Client) -> Result<Snapshot> {
             .get(usize::from(extension.state.palette))
             .context("extension palette index is outside its advertised name list")?
             .clone();
+        let overlay = if lighting_caps
+            .features
+            .contains(LightingFeatureFlags::EXTENSION_LAYERING)
+        {
+            client
+                .get_lighting_extension_layers()
+                .await?
+                .overlay
+                .map(|index| {
+                    effect_names
+                        .get(usize::from(index))
+                        .cloned()
+                        .context("extension overlay index is outside its advertised name list")
+                })
+                .transpose()?
+        } else {
+            None
+        };
         let extension_params = read_extension_params(client, &effect_names).await?;
         (
             Some(EffectsConfig {
                 effect,
+                overlay,
                 palette,
                 value: extension.state.value,
                 speed: extension.state.speed,
@@ -863,6 +887,33 @@ async fn apply_snapshot(client: &Client, desired: &Snapshot, before: &Snapshot) 
                     },
                 })
                 .await?;
+            if wanted.overlay.is_some()
+                || present
+                    .effects
+                    .as_ref()
+                    .and_then(|effects| effects.overlay.as_ref())
+                    .is_some()
+            {
+                let overlay = wanted
+                    .overlay
+                    .as_ref()
+                    .map(|wanted| {
+                        effect_names
+                            .iter()
+                            .position(|name| name == wanted)
+                            .with_context(|| format!("unknown extension overlay effect '{wanted}'"))
+                    })
+                    .transpose()?
+                    .map(|index| u8::try_from(index).context("overlay effect index exceeds u8"))
+                    .transpose()?;
+                let revision = client.get_lighting_state().await?.revision;
+                client
+                    .set_lighting_extension_layers(SetLightingExtensionLayersRequest {
+                        expected_revision: revision,
+                        overlay,
+                    })
+                    .await?;
+            }
         }
         if let Some(effects) = wanted.effects.as_ref().filter(|it| !it.params.is_empty()) {
             apply_params(client, &effects.params, present.params.as_deref()).await?;
@@ -1539,6 +1590,7 @@ mode = "solid"
 
 [effects]
 effect = "Rain"
+overlay = "Reactive"
 palette = "Aurora"
 value = 200
 speed = 40
@@ -1739,6 +1791,7 @@ Density = 6
     fn effects_with(params: &[(&str, u8)]) -> EffectsConfig {
         EffectsConfig {
             effect: "Rain".into(),
+            overlay: None,
             palette: "Aurora".into(),
             value: 200,
             speed: 40,
@@ -1757,6 +1810,13 @@ Density = 6
         let config: LightingConfig = toml::from_str(LIGHTING_WITH_PARAMS).unwrap();
         assert_eq!(params_of(&config, "Rain", "Density"), Some(6));
         assert_eq!(params_of(&config, "Rain", "Trail Length"), Some(128));
+        assert_eq!(
+            config
+                .effects
+                .as_ref()
+                .and_then(|effects| effects.overlay.as_deref()),
+            Some("Reactive")
+        );
 
         let text = toml::to_string_pretty(&config).unwrap();
         assert!(text.contains("[effects.params.Rain]"), "{text}");
