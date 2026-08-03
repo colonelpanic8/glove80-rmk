@@ -22,3 +22,43 @@ jobs:
         with:
           name: glove80-rmk
           path: dist/
+
+  release-master:
+    name: Publish master firmware
+    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+    needs: product-stack
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download release bundle
+        uses: actions/download-artifact@v4
+        with:
+          name: glove80-rmk
+          path: dist
+      - name: Create or update commit prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          short_sha="${GITHUB_SHA::12}"
+          tag="master-${short_sha}"
+          title="Master build ${short_sha}"
+          notes="Automated, unqualified firmware build from master at ${GITHUB_SHA}. Flash the -rh.uf2 image on the right half first, then the -lh.uf2 image on the left half."
+
+          if gh release view "${tag}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+            gh release upload "${tag}" dist/* \
+              --clobber \
+              --repo "${GITHUB_REPOSITORY}"
+            gh release edit "${tag}" \
+              --prerelease \
+              --title "${title}" \
+              --notes "${notes}" \
+              --repo "${GITHUB_REPOSITORY}"
+          else
+            gh release create "${tag}" dist/* \
+              --prerelease \
+              --target "${GITHUB_SHA}" \
+              --title "${title}" \
+              --notes "${notes}" \
+              --repo "${GITHUB_REPOSITORY}"
+          fi
