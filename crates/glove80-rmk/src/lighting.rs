@@ -663,11 +663,13 @@ pub fn init_peripheral(
 
 pub struct PeripheralReplication {
     stage: crate::split_lighting::SnapshotStage,
+    last_applied_revision: Option<u32>,
 }
 
 pub const fn peripheral_replication() -> PeripheralReplication {
     PeripheralReplication {
         stage: crate::split_lighting::SnapshotStage::new(),
+        last_applied_revision: None,
     }
 }
 
@@ -686,6 +688,28 @@ impl PeripheralReplication {
             }
             return;
         }
+        if let crate::split_lighting::Message::ContextUpdate {
+            generation,
+            revision,
+            context,
+            batteries,
+        } = message
+        {
+            if self.last_applied_revision == Some(revision) {
+                set_battery_statuses(batteries);
+                PeripheralState::set(context);
+                CORE_MAILBOX.snapshot_changed();
+                let ack = crate::split_lighting::Message::Ack {
+                    generation,
+                    revision,
+                }
+                .encode();
+                if rmk::split_app::SPLIT_APP_PERIPH_TX.try_send(ack).is_err() {
+                    defmt::warn!("lighting: peripheral context ack queue full");
+                }
+            }
+            return;
+        }
         let Some((generation, snapshot, batteries)) = self.stage.apply(message) else {
             return;
         };
@@ -701,6 +725,7 @@ impl PeripheralReplication {
             .await
         {
             Ok(_) => {
+                self.last_applied_revision = Some(revision);
                 let ack = crate::split_lighting::Message::Ack {
                     generation,
                     revision,
@@ -729,6 +754,7 @@ impl Runnable for PeripheralReplication {
             {
                 embassy_futures::select::Either::First(_) => {
                     self.stage.reset();
+                    self.last_applied_revision = None;
                     while rmk::split_app::SPLIT_APP_RX.try_receive().is_ok() {}
                 }
                 embassy_futures::select::Either::Second(message) => self.process(message).await,

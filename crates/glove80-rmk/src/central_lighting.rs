@@ -21,6 +21,7 @@ use rmk::host::{
 use rmk::keymap::KeyMap;
 use rmk::lighting::{
     KeymapLightingState, LightingProcessor, LightingService, LogicalFrame, Rgb8, StandardCommand,
+    StandardReplicaState,
 };
 use rmk::split_app::SplitAppData;
 use rmk::types::protocol::rynk::{
@@ -124,12 +125,24 @@ impl BatteryLightingState {
     }
 }
 
-/// Mirrors authoritative declarative state to the peripheral. Unit events
-/// are only invalidations: every transfer exports a fresh atomic snapshot,
-/// and an acknowledgement or timeout makes reconnect/loss convergence
-/// explicit.
+/// Mirrors authoritative declarative state to the peripheral. Engine changes
+/// transfer an atomic snapshot, while context-only changes use a guarded delta.
+/// An acknowledgement or timeout makes reconnect/loss convergence explicit.
 pub struct CentralReplication {
     generation: u8,
+}
+
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum TransferKind {
+    FullSnapshot,
+    ContextUpdate,
+}
+
+#[derive(Clone, Copy)]
+struct PendingAck {
+    generation: u8,
+    revision: u32,
+    kind: TransferKind,
 }
 
 pub const fn replication() -> CentralReplication {
@@ -137,7 +150,7 @@ pub const fn replication() -> CentralReplication {
 }
 
 impl CentralReplication {
-    async fn try_send_snapshot(&mut self) -> Option<(u8, u32)> {
+    async fn export_replica() -> Option<StandardReplicaState<OVERLAY_CAPACITY, SCENE_CAPACITY>> {
         if CORE_MAILBOX
             .request(StandardCommand::ExportReplica(&REPLICA_SLOT))
             .await
@@ -145,17 +158,60 @@ impl CentralReplication {
         {
             return None;
         }
-        let snapshot = REPLICA_SLOT.take().ok()?;
+        REPLICA_SLOT.take().ok()
+    }
+
+    async fn try_send_snapshot(&mut self) -> Option<PendingAck> {
+        let snapshot = Self::export_replica().await?;
         self.generation = self.generation.wrapping_add(1);
         if crate::split_lighting::try_queue_snapshot(
             self.generation,
             &snapshot,
             crate::lighting::battery_statuses(),
         ) {
-            Some((self.generation, snapshot.revision))
+            Some(PendingAck {
+                generation: self.generation,
+                revision: snapshot.revision,
+                kind: TransferKind::FullSnapshot,
+            })
         } else {
             None
         }
+    }
+
+    async fn try_send_context_update(
+        &mut self,
+        last_acked_revision: Option<u32>,
+    ) -> Option<PendingAck> {
+        let snapshot = Self::export_replica().await?;
+        self.generation = self.generation.wrapping_add(1);
+        let kind = if Some(snapshot.revision) == last_acked_revision {
+            let message = crate::split_lighting::Message::ContextUpdate {
+                generation: self.generation,
+                revision: snapshot.revision,
+                context: snapshot.context,
+                batteries: crate::lighting::battery_statuses(),
+            }
+            .encode();
+            if rmk::split_app::SPLIT_APP_TX.try_send(message).is_err() {
+                return None;
+            }
+            TransferKind::ContextUpdate
+        } else {
+            if !crate::split_lighting::try_queue_snapshot(
+                self.generation,
+                &snapshot,
+                crate::lighting::battery_statuses(),
+            ) {
+                return None;
+            }
+            TransferKind::FullSnapshot
+        };
+        Some(PendingAck {
+            generation: self.generation,
+            revision: snapshot.revision,
+            kind,
+        })
     }
 }
 
@@ -167,16 +223,26 @@ impl Runnable for CentralReplication {
         let mut lighting = LightingChangedEvent::subscriber();
         let mut layers = LayerChangeEvent::subscriber();
         let mut indicators = LedIndicatorEvent::subscriber();
+        let mut battery = BatteryStatusEvent::subscriber();
+        let mut peripheral_battery = PeripheralBatteryEvent::subscriber();
         let mut link_up = false;
-        let mut dirty = true;
-        let mut awaiting_ack = None;
+        let mut full_dirty = true;
+        let mut context_dirty = false;
+        let mut awaiting_ack: Option<PendingAck> = None;
+        let mut last_acked_revision = None;
 
         loop {
-            if link_up && dirty && awaiting_ack.is_none() {
-                match self.try_send_snapshot().await {
-                    Some(generation_and_revision) => {
-                        awaiting_ack = Some(generation_and_revision);
-                        dirty = false;
+            if link_up && awaiting_ack.is_none() && (full_dirty || context_dirty) {
+                let pending = if full_dirty {
+                    self.try_send_snapshot().await
+                } else {
+                    self.try_send_context_update(last_acked_revision).await
+                };
+                match pending {
+                    Some(pending) => {
+                        awaiting_ack = Some(pending);
+                        full_dirty = false;
+                        context_dirty = false;
                     }
                     None => {
                         embassy_time::Timer::after_millis(50).await;
@@ -195,7 +261,10 @@ impl Runnable for CentralReplication {
             match select4(
                 link.changed(),
                 lighting.next_event(),
-                select(layers.next_event(), indicators.next_event()),
+                select(
+                    select(layers.next_event(), indicators.next_event()),
+                    select(battery.next_event(), peripheral_battery.next_event()),
+                ),
                 select(rmk::split_app::SPLIT_APP_RX.receive(), timeout),
             )
             .await
@@ -203,22 +272,40 @@ impl Runnable for CentralReplication {
                 Either4::First(up) => {
                     link_up = up;
                     awaiting_ack = None;
-                    dirty = up;
+                    last_acked_revision = None;
+                    full_dirty = up;
+                    context_dirty = false;
                 }
-                Either4::Second(_) | Either4::Third(_) => dirty = true,
+                Either4::Second(_) => full_dirty = true,
+                Either4::Third(Either::First(_)) => context_dirty = true,
+                Either4::Third(Either::Second(Either::First(event))) => {
+                    crate::lighting::set_left_battery(event.0);
+                    context_dirty = true;
+                }
+                Either4::Third(Either::Second(Either::Second(event))) => {
+                    if event.id == 0 {
+                        crate::lighting::set_right_battery(event.state.0);
+                    }
+                    context_dirty = true;
+                }
                 Either4::Fourth(Either::First(data)) => {
                     if let Ok(crate::split_lighting::Message::Ack {
                         generation,
                         revision,
                     }) = crate::split_lighting::Message::decode(data)
-                        && awaiting_ack == Some((generation, revision))
+                        && let Some(pending) = awaiting_ack
+                        && pending.generation == generation
+                        && pending.revision == revision
                     {
                         awaiting_ack = None;
+                        if pending.kind == TransferKind::FullSnapshot {
+                            last_acked_revision = Some(revision);
+                        }
                     }
                 }
                 Either4::Fourth(Either::Second(())) => {
                     awaiting_ack = None;
-                    dirty = link_up;
+                    full_dirty = link_up;
                 }
             }
         }

@@ -1,9 +1,10 @@
 //! Glove80 semantic lighting replication over RMK's bounded split channel.
 //!
 //! The central remains the Rynk/Vial authority. It transfers declarative
-//! standard-engine snapshots only when state changes or the link reconnects;
-//! the peripheral applies a complete staged snapshot atomically and renders
-//! every animation frame from its own clock and compositor.
+//! standard-engine snapshots when engine state changes or the link reconnects,
+//! and guarded context deltas otherwise. The peripheral applies a complete
+//! staged snapshot atomically and renders every animation frame from its own
+//! clock and compositor.
 
 use core::num::NonZeroU32;
 
@@ -40,6 +41,9 @@ const TAG_EXTENSION_OVERLAY: u8 = 10;
 /// tag is additive, so it does not require changing the snapshot wire version:
 /// an older peripheral simply ignores the unknown message.
 const TAG_EFFECT_HIT: u8 = 11;
+/// Standalone context traffic outside the atomic snapshot transaction. Like
+/// effect hits, this is additive and does not change the snapshot wire version.
+const TAG_CONTEXT_UPDATE: u8 = 12;
 
 const BEGIN_LEN: usize = 26;
 const CONTEXT_LEN: usize = 23;
@@ -54,6 +58,7 @@ const CONDITIONAL_SCENE_CELL_LEN: usize = 26;
 const COMMIT_LEN: usize = 9;
 const ACK_LEN: usize = 7;
 const EFFECT_HIT_LEN: usize = 3;
+const CONTEXT_UPDATE_LEN: usize = 23;
 const _: () = assert!(CELL_LEN <= SPLIT_APP_MSG_MAX);
 const _: () = assert!(EXTENSION_LEN <= SPLIT_APP_MSG_MAX);
 const _: () = assert!(EXTENSION_OVERLAY_LEN <= SPLIT_APP_MSG_MAX);
@@ -72,6 +77,12 @@ pub enum Message {
         output_mode: OutputMode,
     },
     Context {
+        generation: u8,
+        revision: u32,
+        context: LightingContext,
+        batteries: BatteryPair,
+    },
+    ContextUpdate {
         generation: u8,
         revision: u32,
         context: LightingContext,
@@ -203,6 +214,24 @@ impl Message {
                 put_battery(&mut out, 20, batteries.right);
                 out[22] = context.powered as u8;
                 CONTEXT_LEN
+            }
+            Message::ContextUpdate {
+                generation,
+                revision,
+                context,
+                batteries,
+            } => {
+                out[1] = TAG_CONTEXT_UPDATE;
+                out[2] = generation;
+                put_u32(&mut out, 3, revision);
+                out[7] = context.layers.effective;
+                out[8] = context.layers.default;
+                put_u64(&mut out, 9, context.layers.active_bits());
+                out[17] = indicators(context.indicators);
+                put_battery(&mut out, 18, batteries.left);
+                put_battery(&mut out, 20, batteries.right);
+                out[22] = context.powered as u8;
+                CONTEXT_UPDATE_LEN
             }
             Message::Extension {
                 generation,
@@ -473,6 +502,19 @@ impl Message {
                     right: get_battery(bytes, 20)?,
                 },
             }),
+            TAG_CONTEXT_UPDATE if bytes.len() == CONTEXT_UPDATE_LEN => Ok(Message::ContextUpdate {
+                generation: bytes[2],
+                revision: get_u32(bytes, 3),
+                context: LightingContext {
+                    layers: LayerState::new(bytes[7], bytes[8], get_u64(bytes, 9)),
+                    indicators: get_indicators(bytes[17]),
+                    powered: flag(bytes[22])?,
+                },
+                batteries: BatteryPair {
+                    left: get_battery(bytes, 18)?,
+                    right: get_battery(bytes, 20)?,
+                },
+            }),
             TAG_EXTENSION if bytes.len() == EXTENSION_LEN => {
                 let param_len = bytes[12] as usize;
                 if param_len > EXTENSION_PARAM_CHUNK {
@@ -691,7 +733,8 @@ impl Message {
             | TAG_EXTENSION_OVERLAY
             | TAG_CONDITIONAL_SCENE_BEGIN
             | TAG_CONDITIONAL_SCENE_CELL
-            | TAG_EFFECT_HIT => Err(DecodeError::Length),
+            | TAG_EFFECT_HIT
+            | TAG_CONTEXT_UPDATE => Err(DecodeError::Length),
             _ => Err(DecodeError::Tag),
         }
     }
@@ -1056,7 +1099,10 @@ impl SnapshotStage {
                     None
                 }
             }
-            Message::Ack { .. } | Message::EffectHit { .. } | Message::Begin { .. } => None,
+            Message::Ack { .. }
+            | Message::EffectHit { .. }
+            | Message::ContextUpdate { .. }
+            | Message::Begin { .. } => None,
         }
     }
 
