@@ -174,16 +174,18 @@ channel_size = 16
 pubs = 1
 subs = 1
 
-# The information-lighting state tracks both halves' live battery reports.
+# Board subscribers: the information-lighting state and the split lighting
+# replication task each track both halves' live battery reports. RMK adds
+# its own internal subscribers on top of these counts.
 [event.battery_status]
 channel_size = 2
 pubs = 1
-subs = 1
+subs = 2
 
 [event.peripheral_battery]
 channel_size = 3
 pubs = 1
-subs = 3
+subs = 4
 
 [storage]
 enabled = true
