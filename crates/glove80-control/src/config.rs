@@ -15,10 +15,11 @@ use glove80_config::{
     LightingSnapshot, OutputModeConfig, ParamSpec, RuntimeConfig, Snapshot, COLS, LAYER_SIZE, ROWS,
 };
 use rynk::rmk_types::protocol::rynk::{
-    Cmd, LightingError, LightingExtensionNameKind, LightingExtensionParamsRequest,
-    LightingFeatureFlags, LightingMutableState, RynkError, SetLightingExtensionLayersRequest,
-    SetLightingExtensionParamRequest, SetLightingExtensionStateRequest,
-    SetLightingLayerPolicyRequest, SetLightingOutputModeRequest, SetLightingStateRequest,
+    Cmd, LightingError, LightingExtendedConditionalSceneCell, LightingExtensionNameKind,
+    LightingExtensionParamsRequest, LightingFeatureFlags, LightingMutableState, RynkError,
+    SetLightingExtensionLayersRequest, SetLightingExtensionParamRequest,
+    SetLightingExtensionStateRequest, SetLightingLayerPolicyRequest, SetLightingOutputModeRequest,
+    SetLightingStateRequest,
 };
 use rynk::{Client, RynkHostError};
 
@@ -222,6 +223,19 @@ async fn read_snapshot(client: &Client) -> Result<Snapshot> {
     // as "delete what the board has".
     let conditional_scenes = if lighting_caps
         .features
+        .contains(LightingFeatureFlags::RUNTIME_CONNECTION_CONDITIONS)
+    {
+        let (_, cells) = client
+            .read_all_lighting_extended_runtime_conditional_scenes()
+            .await?;
+        Some(
+            cells
+                .into_iter()
+                .map(conditional_scene_from_wire)
+                .collect::<Vec<_>>(),
+        )
+    } else if lighting_caps
+        .features
         .contains(LightingFeatureFlags::RUNTIME_CONDITIONAL_SCENES)
     {
         let (_, cells) = client
@@ -230,7 +244,12 @@ async fn read_snapshot(client: &Client) -> Result<Snapshot> {
         Some(
             cells
                 .into_iter()
-                .map(conditional_scene_from_wire)
+                .map(|cell| {
+                    conditional_scene_from_wire(LightingExtendedConditionalSceneCell {
+                        cell,
+                        connection: None,
+                    })
+                })
                 .collect::<Vec<_>>(),
         )
     } else {
@@ -500,9 +519,29 @@ async fn apply_snapshot(client: &Client, desired: &Snapshot, before: &Snapshot) 
                         .map(conditional_scene_to_wire)
                         .collect::<Result<Vec<_>>>()?;
                     let status = client.get_lighting_runtime_conditional_scene_status().await?;
-                    client
-                        .replace_all_lighting_runtime_conditional_scenes(status.revision, &cells)
-                        .await?;
+                    let extended_conditionals = client
+                        .get_lighting_capabilities()
+                        .await?
+                        .features
+                        .contains(LightingFeatureFlags::RUNTIME_CONNECTION_CONDITIONS);
+                    if extended_conditionals {
+                        client
+                            .replace_all_lighting_extended_runtime_conditional_scenes(
+                                status.revision,
+                                &cells,
+                            )
+                            .await?;
+                    } else {
+                        if let Some(gated) = wanted_conditional.iter().position(|c| c.connection.is_some()) {
+                            bail!(
+                                "conditional rule {gated} names a connection condition but the keyboard's firmware predates connection-aware rules"
+                            );
+                        }
+                        let legacy = cells.into_iter().map(|c| c.cell).collect::<Vec<_>>();
+                        client
+                            .replace_all_lighting_runtime_conditional_scenes(status.revision, &legacy)
+                            .await?;
+                    }
                 }
             }
         }

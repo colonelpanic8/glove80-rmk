@@ -4,11 +4,14 @@ use std::collections::BTreeMap;
 
 use anyhow::{bail, Context, Result};
 use rynk::rmk_types::action::KeyAction;
+use rynk::rmk_types::ble::BleState as WireBleState;
 use rynk::rmk_types::protocol::rynk::{
-    LightingBackgroundMode, LightingBackgroundState, LightingBatteryCondition,
-    LightingChargeCondition, LightingConditionSet, LightingConditionalSceneCell, LightingEffect,
-    LightingExtensionState, LightingLayerCondition, LightingLayerPolicy, LightingLedId,
-    LightingNodeId, LightingOutputMode, LightingRgb8, LightingSceneCell,
+    LightingActiveTransport, LightingBackgroundMode, LightingBackgroundState,
+    LightingBatteryCondition, LightingChargeCondition, LightingConditionSet,
+    LightingConditionalSceneCell, LightingConnectionCondition, LightingEffect,
+    LightingExtendedConditionalSceneCell, LightingExtensionState, LightingLayerCondition,
+    LightingLayerPolicy, LightingLedId, LightingNodeId, LightingOutputMode, LightingRgb8,
+    LightingSceneCell,
 };
 use serde::{Deserialize, Serialize};
 
@@ -212,6 +215,42 @@ pub struct ConditionalSceneConfig {
     /// expressed as an ordinary rule instead of something compiled in.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub output_mode: Option<OutputModeConfig>,
+    /// Gate on the live connection: the transport carrying output, the
+    /// selected BLE profile, and that profile's state. This is how the
+    /// connection-slot indicator is expressed as ordinary rules.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub connection: Option<ConnectionConditionConfig>,
+}
+
+/// Gate a rule on the keyboard's live connection state. Every named field
+/// must hold; `profile` and `ble_state` describe the selected BLE slot
+/// whether or not BLE is the active transport.
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct ConnectionConditionConfig {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub transport: Option<TransportConfig>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile: Option<u8>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ble_state: Option<BleStateConfig>,
+}
+
+/// The transport actually carrying HID output; `none` matches a keyboard
+/// that is neither USB-ready nor BLE-connected.
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum TransportConfig {
+    Usb,
+    Ble,
+    None,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum BleStateConfig {
+    Advertising,
+    Connected,
+    Inactive,
 }
 
 /// Gate a rule on a layer being active, or deliberately inactive.
@@ -741,6 +780,23 @@ pub fn validate_conditional_scene(index: usize, cell: &ConditionalSceneConfig) -
             );
         }
     }
+    if let Some(connection) = cell.connection {
+        if connection.transport.is_none()
+            && connection.profile.is_none()
+            && connection.ble_state.is_none()
+        {
+            bail!(
+                "conditional rule {index} (LED {}) has a connection condition that names no gate",
+                cell.led
+            );
+        }
+        if connection.profile.is_some_and(|profile| profile > 3) {
+            bail!(
+                "conditional rule {index} (LED {}) names a BLE profile past the board's four slots (0-3)",
+                cell.led
+            );
+        }
+    }
     Ok(())
 }
 
@@ -843,9 +899,26 @@ pub fn scene_from_wire(cell: LightingSceneCell) -> SceneConfig {
     }
 }
 
-pub fn conditional_scene_from_wire(cell: LightingConditionalSceneCell) -> ConditionalSceneConfig {
+pub fn conditional_scene_from_wire(
+    extended: LightingExtendedConditionalSceneCell,
+) -> ConditionalSceneConfig {
+    let connection = extended.connection.map(|c| ConnectionConditionConfig {
+        transport: c.transport.map(|transport| match transport {
+            LightingActiveTransport::Usb => TransportConfig::Usb,
+            LightingActiveTransport::Ble => TransportConfig::Ble,
+            LightingActiveTransport::NoneActive => TransportConfig::None,
+        }),
+        profile: c.profile,
+        ble_state: c.ble_state.map(|state| match state {
+            WireBleState::Advertising => BleStateConfig::Advertising,
+            WireBleState::Connected => BleStateConfig::Connected,
+            WireBleState::Inactive => BleStateConfig::Inactive,
+        }),
+    });
+    let cell = extended.cell;
     let (color, effect, period_ms, phase_ms, duty, step_ms) = effect_from_wire(cell.effect);
     ConditionalSceneConfig {
+        connection,
         led: cell.led_id.0,
         color: format!("#{:02x}{:02x}{:02x}", color.r, color.g, color.b),
         effect,
@@ -917,8 +990,21 @@ pub fn scene_to_wire(cell: &SceneConfig) -> Result<LightingSceneCell> {
 
 pub fn conditional_scene_to_wire(
     cell: &ConditionalSceneConfig,
-) -> Result<LightingConditionalSceneCell> {
-    Ok(LightingConditionalSceneCell {
+) -> Result<LightingExtendedConditionalSceneCell> {
+    let connection = cell.connection.map(|c| LightingConnectionCondition {
+        transport: c.transport.map(|transport| match transport {
+            TransportConfig::Usb => LightingActiveTransport::Usb,
+            TransportConfig::Ble => LightingActiveTransport::Ble,
+            TransportConfig::None => LightingActiveTransport::NoneActive,
+        }),
+        profile: c.profile,
+        ble_state: c.ble_state.map(|state| match state {
+            BleStateConfig::Advertising => WireBleState::Advertising,
+            BleStateConfig::Connected => WireBleState::Connected,
+            BleStateConfig::Inactive => WireBleState::Inactive,
+        }),
+    });
+    let base = LightingConditionalSceneCell {
         conditions: LightingConditionSet {
             output_mode: cell.output_mode.map(output_mode_to_wire),
             layer: cell.layer.map(|c| LightingLayerCondition {
@@ -946,6 +1032,10 @@ pub fn conditional_scene_to_wire(
             cell.duty,
             cell.step_ms,
         )?,
+    };
+    Ok(LightingExtendedConditionalSceneCell {
+        cell: base,
+        connection,
     })
 }
 
@@ -1239,6 +1329,7 @@ Density = 6
     #[test]
     fn reordered_conditional_rules_are_a_difference() {
         let rule = |led: u16| ConditionalSceneConfig {
+            connection: None,
             led,
             color: "#0040a0".into(),
             effect: EffectKind::Solid,
@@ -1300,6 +1391,7 @@ Density = 6
         let with_rule = {
             let mut snap = lighting_snapshot(None, None);
             snap.conditional_scenes = Some(vec![ConditionalSceneConfig {
+                connection: None,
                 led: 75,
                 color: "#0040a0".into(),
                 effect: EffectKind::Solid,
@@ -1330,6 +1422,7 @@ Density = 6
     #[test]
     fn conditional_rules_round_trip_through_the_wire_and_reject_bad_batteries() {
         let mut cell = ConditionalSceneConfig {
+            connection: None,
             led: 75,
             color: "#0040a0".into(),
             effect: EffectKind::Solid,
@@ -1352,6 +1445,30 @@ Density = 6
         let wire = conditional_scene_to_wire(&cell).unwrap();
         assert_eq!(conditional_scene_from_wire(wire), cell);
         assert!(validate_conditional_scene(0, &cell).is_ok());
+
+        cell.connection = Some(ConnectionConditionConfig {
+            transport: Some(TransportConfig::Ble),
+            profile: Some(2),
+            ble_state: Some(BleStateConfig::Connected),
+        });
+        let wire = conditional_scene_to_wire(&cell).unwrap();
+        assert_eq!(conditional_scene_from_wire(wire), cell);
+        assert!(validate_conditional_scene(0, &cell).is_ok());
+
+        cell.connection = Some(ConnectionConditionConfig {
+            transport: None,
+            profile: Some(4),
+            ble_state: None,
+        });
+        assert!(validate_conditional_scene(0, &cell).is_err());
+
+        cell.connection = Some(ConnectionConditionConfig {
+            transport: None,
+            profile: None,
+            ble_state: None,
+        });
+        assert!(validate_conditional_scene(0, &cell).is_err());
+        cell.connection = None;
 
         // The firmware would decline these on apply; catching them offline
         // means `config validate` is enough to know a file is writable.

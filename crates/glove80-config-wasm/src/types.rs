@@ -7,7 +7,7 @@
 
 use rynk::rmk_types::action::KeyAction;
 use rynk::rmk_types::protocol::rynk::{
-    LightingBackgroundState, LightingConditionalSceneCell, LightingExtensionParam,
+    LightingBackgroundState, LightingExtendedConditionalSceneCell, LightingExtensionParam,
     LightingExtensionState, LightingLayerPolicy, LightingOutputMode, LightingSceneCell,
 };
 use serde::{Deserialize, Serialize};
@@ -68,7 +68,9 @@ pub struct LightingSnapshot {
     /// The mutable, ordered conditional table. `undefined` means the firmware
     /// has no such table at all, which stays distinct from a supported-but-empty
     /// one: a file naming rules conflicts with the former and not the latter.
-    pub conditional_scenes: Option<Vec<LightingConditionalSceneCell>>,
+    /// Cells are the extended form; hosts talking to older firmware pass
+    /// `connection: undefined` on every cell.
+    pub conditional_scenes: Option<Vec<LightingExtendedConditionalSceneCell>>,
 }
 
 /// One parameter value addressed the way `SetLightingExtensionParam` addresses
