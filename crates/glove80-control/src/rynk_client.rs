@@ -136,7 +136,16 @@ async fn operate_connection(client: &Client, command: &ConnectionCommand) -> Res
             print!("{}", crate::connection::render(&status));
         }
         ConnectionCommand::Clear { slot } => {
-            client.clear_ble_profile(*slot).await?;
+            // Forgetting a bond is destructive, so the firmware gates it behind
+            // physical presence exactly like a bootloader jump.
+            match client.clear_ble_profile(*slot).await {
+                Ok(()) => {}
+                Err(RynkHostError::Rejected(RynkError::Locked)) => {
+                    unlock_session(client).await?;
+                    client.clear_ble_profile(*slot).await?;
+                }
+                Err(error) => return Err(error.into()),
+            }
             println!("cleared the bond in slot {slot}");
         }
     }
