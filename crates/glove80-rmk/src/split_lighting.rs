@@ -11,11 +11,11 @@ use core::num::NonZeroU32;
 use rmk::lighting::compositor::{ExtensionLayerState, ExtensionState};
 use rmk::lighting::standard::{EXTENSION_PARAM_CHUNK, ExtensionReplicaParams};
 use rmk::lighting::{
-    ActiveTransport, BackgroundMode, BackgroundState, BatteryCondition, BuiltinEffect,
-    ChargeCondition, ConditionSet, ConnectionCondition, EffectsCondition, IndicatorState,
-    LayerCondition, LayerPolicy, LayerState, LedSlot, LightingContext, OutputMode, OverlayBatch,
-    OverlayCell, Rgb8, RuntimeConditionalSceneCell, RuntimeConditionalSceneTable, SceneTable,
-    SceneTableCell, StandardMutableState, StandardReplicaState,
+    ActiveTransport, BackgroundMode, BackgroundState, BatteryCondition, BondedSlotCondition,
+    BuiltinEffect, ChargeCondition, ConditionSet, ConnectionCondition, EffectsCondition,
+    IndicatorState, LayerCondition, LayerPolicy, LayerState, LedSlot, LightingContext, OutputMode,
+    OverlayBatch, OverlayCell, Rgb8, RuntimeConditionalSceneCell, RuntimeConditionalSceneTable,
+    SceneTable, SceneTableCell, StandardMutableState, StandardReplicaState,
 };
 use rmk::split_app::{SPLIT_APP_MSG_MAX, SplitAppData};
 use rmk::types::battery::{BatteryStatus, ChargeState};
@@ -24,14 +24,19 @@ use rmk::types::connection::ConnectionStatus;
 
 use crate::lighting::{BatteryPair, LEDS_PER_HALF, OVERLAY_CAPACITY, SCENE_CAPACITY, TOTAL_LEDS};
 
-// Version 9 adds the conditional-scene connection extension packet (the cell
-// packet itself is byte-for-byte full). Version 8 adds the optional second
+// Version 10 widens the conditional-scene extension packet with the effects,
+// bonded-slot, and usb-connected predicates, and adds the bonded-slot bitmap
+// to the context. A stale half would read those gates as absent, and an absent
+// gate means "always matches" -- so both polarities of an indicator would light
+// at once rather than the packet being rejected. Version 9 adds the
+// conditional-scene connection extension packet (the cell packet itself is
+// byte-for-byte full). Version 8 adds the optional second
 // extension-effect packet. Version 7 widens the staged Extension packet with
 // the active effect's tuning parameters; version 6 added that packet and the
 // runtime conditional-scene packets. A stale half rejects the mismatched
 // version and simply keeps its previous state until both halves are reflashed
 // together.
-const VERSION: u8 = 9;
+const VERSION: u8 = 10;
 const TAG_BEGIN: u8 = 1;
 const TAG_CONTEXT: u8 = 2;
 const TAG_CELL: u8 = 3;
@@ -55,7 +60,7 @@ const TAG_CONTEXT_UPDATE: u8 = 12;
 const TAG_CONDITIONAL_SCENE_EXT: u8 = 13;
 
 const BEGIN_LEN: usize = 26;
-const CONTEXT_LEN: usize = 23;
+const CONTEXT_LEN: usize = 24;
 /// Selection (5 bytes after the header) plus the parameter block: one
 /// length byte, the effect the values belong to, and the values themselves.
 const EXTENSION_LEN: usize = 14 + EXTENSION_PARAM_CHUNK;
@@ -64,11 +69,11 @@ const CELL_LEN: usize = 26;
 const SCENE_CELL_LEN: usize = 23;
 const CONDITIONAL_SCENE_BEGIN_LEN: usize = 8;
 const CONDITIONAL_SCENE_CELL_LEN: usize = 26;
-const CONDITIONAL_SCENE_EXT_LEN: usize = 9;
+const CONDITIONAL_SCENE_EXT_LEN: usize = 11;
 const COMMIT_LEN: usize = 9;
 const ACK_LEN: usize = 7;
 const EFFECT_HIT_LEN: usize = 3;
-const CONTEXT_UPDATE_LEN: usize = 23;
+const CONTEXT_UPDATE_LEN: usize = 24;
 const _: () = assert!(CELL_LEN <= SPLIT_APP_MSG_MAX);
 const _: () = assert!(EXTENSION_LEN <= SPLIT_APP_MSG_MAX);
 const _: () = assert!(EXTENSION_OVERLAY_LEN <= SPLIT_APP_MSG_MAX);
@@ -232,6 +237,7 @@ impl Message {
                 put_battery(&mut out, 18, batteries.left);
                 put_battery(&mut out, 20, batteries.right);
                 out[22] = context.powered as u8;
+                out[23] = context.bonded_slots;
                 CONTEXT_LEN
             }
             Message::ContextUpdate {
@@ -250,6 +256,7 @@ impl Message {
                 put_battery(&mut out, 18, batteries.left);
                 put_battery(&mut out, 20, batteries.right);
                 out[22] = context.powered as u8;
+                out[23] = context.bonded_slots;
                 CONTEXT_UPDATE_LEN
             }
             Message::Extension {
@@ -472,6 +479,14 @@ impl Message {
                     .profile
                     .map(|profile| 0x80 | (profile & 0x7f))
                     .unwrap_or(0);
+                out[9] = connection
+                    .bonded
+                    .map(|bonded| 0x80 | (bonded.bonded as u8) << 6 | (bonded.slot & 0x3f))
+                    .unwrap_or(0);
+                out[10] = match connection.usb_connected {
+                    None => u8::MAX,
+                    Some(connected) => connected as u8,
+                };
                 CONDITIONAL_SCENE_EXT_LEN
             }
             Message::Commit {
@@ -556,6 +571,9 @@ impl Message {
                     layers: LayerState::new(bytes[7], bytes[8], get_u64(bytes, 9)),
                     indicators: get_indicators(bytes[17]),
                     powered: flag(bytes[22])?,
+                    // Only the central holds bonds, so unlike `connection`
+                    // the peripheral cannot read this from its own state.
+                    bonded_slots: bytes[23],
                     // Not carried on the wire: each half reads its own copy of
                     // the rmk-synced connection status at snapshot time.
                     connection: ConnectionStatus::new(),
@@ -572,6 +590,9 @@ impl Message {
                     layers: LayerState::new(bytes[7], bytes[8], get_u64(bytes, 9)),
                     indicators: get_indicators(bytes[17]),
                     powered: flag(bytes[22])?,
+                    // Only the central holds bonds, so unlike `connection`
+                    // the peripheral cannot read this from its own state.
+                    bonded_slots: bytes[23],
                     // Not carried on the wire: each half reads its own copy of
                     // the rmk-synced connection status at snapshot time.
                     connection: ConnectionStatus::new(),
@@ -805,12 +826,28 @@ impl Message {
                 } else {
                     None
                 };
-                let connection = (transport.is_some() || profile.is_some() || ble_state.is_some())
-                    .then_some(ConnectionCondition {
-                        transport,
-                        profile,
-                        ble_state,
-                    });
+                let bonded = (bytes[9] & 0x80 != 0).then(|| BondedSlotCondition {
+                    slot: bytes[9] & 0x3f,
+                    bonded: bytes[9] & 0x40 != 0,
+                });
+                let usb_connected = match bytes[10] {
+                    0 => Some(false),
+                    1 => Some(true),
+                    u8::MAX => None,
+                    _ => return Err(DecodeError::Value),
+                };
+                let connection = (transport.is_some()
+                    || profile.is_some()
+                    || ble_state.is_some()
+                    || bonded.is_some()
+                    || usb_connected.is_some())
+                .then_some(ConnectionCondition {
+                    transport,
+                    profile,
+                    ble_state,
+                    bonded,
+                    usb_connected,
+                });
                 Ok(Message::ConditionalSceneExt {
                     generation: bytes[2],
                     revision: get_u32(bytes, 3),

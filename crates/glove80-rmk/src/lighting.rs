@@ -489,6 +489,9 @@ static PERIPHERAL_CONTEXT: BlockingMutex<rmk::RawMutex, Cell<LightingContext>> =
             kana: false,
         },
         powered: false,
+        // Replaced by the central's bitmap on the first replicated context;
+        // until then the peripheral knows of no bonds.
+        bonded_slots: 0,
         connection: rmk::types::connection::ConnectionStatus::new(),
     }));
 

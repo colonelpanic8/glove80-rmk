@@ -7,11 +7,11 @@ use rynk::rmk_types::action::KeyAction;
 use rynk::rmk_types::ble::BleState as WireBleState;
 use rynk::rmk_types::protocol::rynk::{
     LightingActiveTransport, LightingBackgroundMode, LightingBackgroundState,
-    LightingBatteryCondition, LightingChargeCondition, LightingConditionSet,
-    LightingConditionalSceneCell, LightingConnectionCondition, LightingEffect,
-    LightingEffectsCondition, LightingExtendedConditionalSceneCell, LightingExtensionState,
-    LightingLayerCondition, LightingLayerPolicy, LightingLedId, LightingNodeId, LightingOutputMode,
-    LightingRgb8, LightingSceneCell,
+    LightingBatteryCondition, LightingBondedSlotCondition, LightingChargeCondition,
+    LightingConditionSet, LightingConditionalSceneCell, LightingConnectionCondition,
+    LightingEffect, LightingEffectsCondition, LightingExtendedConditionalSceneCell,
+    LightingExtensionState, LightingLayerCondition, LightingLayerPolicy, LightingLedId,
+    LightingNodeId, LightingOutputMode, LightingRgb8, LightingSceneCell,
 };
 use serde::{Deserialize, Serialize};
 
@@ -244,6 +244,29 @@ pub struct ConnectionConditionConfig {
     pub profile: Option<u8>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ble_state: Option<BleStateConfig>,
+    /// Gate on one slot holding a stored bond, whichever profile is active.
+    /// `profile` can only ever describe the selected slot, so this is what
+    /// lets one rule per slot key say "paired" or "empty" for all of them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bonded: Option<BondedSlotConditionConfig>,
+    /// Gate on USB being plugged and routable, whether or not it is the
+    /// transport actually carrying output. `transport = "usb"` is the
+    /// narrower "USB is carrying typing right now"; this is the difference
+    /// between a USB key shown ready and one shown active.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub usb_connected: Option<bool>,
+}
+
+/// Highest addressable BLE profile slot. The board compiles in its profile
+/// count, so this is the host-side mirror of that bound and has to move with
+/// `ble_profiles_num`.
+const MAX_BLE_SLOT: u8 = 3;
+
+/// Gate a rule on one BLE slot's stored bond.
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct BondedSlotConditionConfig {
+    pub slot: u8,
+    pub bonded: bool,
 }
 
 /// The transport actually carrying HID output; `none` matches a keyboard
@@ -795,15 +818,31 @@ pub fn validate_conditional_scene(index: usize, cell: &ConditionalSceneConfig) -
         if connection.transport.is_none()
             && connection.profile.is_none()
             && connection.ble_state.is_none()
+            && connection.bonded.is_none()
+            && connection.usb_connected.is_none()
         {
             bail!(
                 "conditional rule {index} (LED {}) has a connection condition that names no gate",
                 cell.led
             );
         }
-        if connection.profile.is_some_and(|profile| profile > 3) {
+        // Both bounds describe the same slot space, so they move together when
+        // the board's profile count changes.
+        if connection
+            .profile
+            .is_some_and(|profile| profile > MAX_BLE_SLOT)
+        {
             bail!(
-                "conditional rule {index} (LED {}) names a BLE profile past the board's four slots (0-3)",
+                "conditional rule {index} (LED {}) names a BLE profile past the board's slots (0-{MAX_BLE_SLOT})",
+                cell.led
+            );
+        }
+        if connection
+            .bonded
+            .is_some_and(|bonded| bonded.slot > MAX_BLE_SLOT)
+        {
+            bail!(
+                "conditional rule {index} (LED {}) names a bonded slot past the board's slots (0-{MAX_BLE_SLOT})",
                 cell.led
             );
         }
@@ -925,6 +964,11 @@ pub fn conditional_scene_from_wire(
             WireBleState::Connected => BleStateConfig::Connected,
             WireBleState::Inactive => BleStateConfig::Inactive,
         }),
+        bonded: c.bonded.map(|bonded| BondedSlotConditionConfig {
+            slot: bonded.slot,
+            bonded: bonded.bonded,
+        }),
+        usb_connected: c.usb_connected,
     });
     let effects = extended
         .effects
@@ -1018,6 +1062,11 @@ pub fn conditional_scene_to_wire(
             BleStateConfig::Connected => WireBleState::Connected,
             BleStateConfig::Inactive => WireBleState::Inactive,
         }),
+        bonded: c.bonded.map(|bonded| LightingBondedSlotCondition {
+            slot: bonded.slot,
+            bonded: bonded.bonded,
+        }),
+        usb_connected: c.usb_connected,
     });
     let base = LightingConditionalSceneCell {
         conditions: LightingConditionSet {
@@ -1471,6 +1520,8 @@ Density = 6
             transport: Some(TransportConfig::Ble),
             profile: Some(2),
             ble_state: Some(BleStateConfig::Connected),
+            bonded: None,
+            usb_connected: None,
         });
         let wire = conditional_scene_to_wire(&cell).unwrap();
         assert_eq!(conditional_scene_from_wire(wire), cell);
@@ -1480,6 +1531,8 @@ Density = 6
             transport: None,
             profile: Some(4),
             ble_state: None,
+            bonded: None,
+            usb_connected: None,
         });
         assert!(validate_conditional_scene(0, &cell).is_err());
 
@@ -1487,6 +1540,8 @@ Density = 6
             transport: None,
             profile: None,
             ble_state: None,
+            bonded: None,
+            usb_connected: None,
         });
         assert!(validate_conditional_scene(0, &cell).is_err());
         cell.connection = None;
