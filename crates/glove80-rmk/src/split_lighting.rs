@@ -12,10 +12,10 @@ use rmk::lighting::compositor::{ExtensionLayerState, ExtensionState};
 use rmk::lighting::standard::{EXTENSION_PARAM_CHUNK, ExtensionReplicaParams};
 use rmk::lighting::{
     ActiveTransport, BackgroundMode, BackgroundState, BatteryCondition, BuiltinEffect,
-    ChargeCondition, ConditionSet, ConnectionCondition, IndicatorState, LayerCondition,
-    LayerPolicy, LayerState, LedSlot, LightingContext, OutputMode, OverlayBatch, OverlayCell, Rgb8,
-    RuntimeConditionalSceneCell, RuntimeConditionalSceneTable, SceneTable, SceneTableCell,
-    StandardMutableState, StandardReplicaState,
+    ChargeCondition, ConditionSet, ConnectionCondition, EffectsCondition, IndicatorState,
+    LayerCondition, LayerPolicy, LayerState, LedSlot, LightingContext, OutputMode, OverlayBatch,
+    OverlayCell, Rgb8, RuntimeConditionalSceneCell, RuntimeConditionalSceneTable, SceneTable,
+    SceneTableCell, StandardMutableState, StandardReplicaState,
 };
 use rmk::split_app::{SPLIT_APP_MSG_MAX, SplitAppData};
 use rmk::types::battery::{BatteryStatus, ChargeState};
@@ -143,7 +143,8 @@ pub enum Message {
     ConditionalSceneExt {
         generation: u8,
         revision: u32,
-        connection: ConnectionCondition,
+        connection: Option<ConnectionCondition>,
+        effects: Option<EffectsCondition>,
     },
     Commit {
         generation: u8,
@@ -436,11 +437,13 @@ impl Message {
                 generation,
                 revision,
                 connection,
+                effects,
             } => {
                 out[1] = TAG_CONDITIONAL_SCENE_EXT;
                 out[2] = generation;
                 put_u32(&mut out, 3, revision);
                 let mut gates = 0u8;
+                let connection = connection.unwrap_or_default();
                 if let Some(transport) = connection.transport {
                     gates |= 0x80
                         | match transport {
@@ -456,6 +459,13 @@ impl Message {
                             BleState::Connected => 1,
                             BleState::Inactive => 2,
                         } << 2);
+                }
+                // The two bits this byte had left over. An effects gate that
+                // did not cross the link would reach the peripheral as no
+                // condition at all, which reads as "always matches" -- both
+                // polarities of an effects indicator would light at once.
+                if let Some(effects) = effects {
+                    gates |= 0x20 | (effects.enabled as u8) << 4;
                 }
                 out[7] = gates;
                 out[8] = connection
@@ -758,9 +768,10 @@ impl Message {
                                 u8::MAX => None,
                                 _ => return Err(DecodeError::Value),
                             },
-                            // Arrives separately in a trailing
-                            // ConditionalSceneExt packet when present.
+                            // Both arrive in the trailing ConditionalSceneExt
+                            // packet, which is sent when either is present.
                             connection: None,
+                            effects: None,
                         },
                         slot: LedSlot(slot as u16),
                         effect,
@@ -794,14 +805,19 @@ impl Message {
                 } else {
                     None
                 };
-                Ok(Message::ConditionalSceneExt {
-                    generation: bytes[2],
-                    revision: get_u32(bytes, 3),
-                    connection: ConnectionCondition {
+                let connection = (transport.is_some() || profile.is_some() || ble_state.is_some())
+                    .then_some(ConnectionCondition {
                         transport,
                         profile,
                         ble_state,
-                    },
+                    });
+                Ok(Message::ConditionalSceneExt {
+                    generation: bytes[2],
+                    revision: get_u32(bytes, 3),
+                    connection,
+                    effects: (gates & 0x20 != 0).then_some(EffectsCondition {
+                        enabled: gates & 0x10 != 0,
+                    }),
                 })
             }
             TAG_COMMIT if bytes.len() == COMMIT_LEN => Ok(Message::Commit {
@@ -959,11 +975,13 @@ pub fn try_queue_snapshot(
         }) {
             return false;
         }
-        if let Some(connection) = cell.conditions.connection
+        let conditions = cell.conditions;
+        if (conditions.connection.is_some() || conditions.effects.is_some())
             && !queue(Message::ConditionalSceneExt {
                 generation,
                 revision: snapshot.revision,
-                connection,
+                connection: conditions.connection,
+                effects: conditions.effects,
             })
         {
             return false;
@@ -1178,6 +1196,7 @@ impl SnapshotStage {
                 generation,
                 revision,
                 connection,
+                effects,
             } => {
                 let stage = self.stage.as_mut()?;
                 let amended = stage.generation == generation
@@ -1186,7 +1205,10 @@ impl SnapshotStage {
                         .snapshot
                         .runtime_conditional_scenes
                         .last_conditions_mut()
-                        .map(|conditions| conditions.connection = Some(connection))
+                        .map(|conditions| {
+                            conditions.connection = connection;
+                            conditions.effects = effects;
+                        })
                         .is_some();
                 if !amended {
                     self.stage = None;

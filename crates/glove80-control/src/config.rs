@@ -223,7 +223,7 @@ async fn read_snapshot(client: &Client) -> Result<Snapshot> {
     // as "delete what the board has".
     let conditional_scenes = if lighting_caps
         .features
-        .contains(LightingFeatureFlags::RUNTIME_CONNECTION_CONDITIONS)
+        .contains(LightingFeatureFlags::RUNTIME_EFFECTS_CONDITIONS)
     {
         let (_, cells) = client
             .read_all_lighting_extended_runtime_conditional_scenes()
@@ -248,6 +248,7 @@ async fn read_snapshot(client: &Client) -> Result<Snapshot> {
                     conditional_scene_from_wire(LightingExtendedConditionalSceneCell {
                         cell,
                         connection: None,
+                        effects: None,
                     })
                 })
                 .collect::<Vec<_>>(),
@@ -523,7 +524,7 @@ async fn apply_snapshot(client: &Client, desired: &Snapshot, before: &Snapshot) 
                         .get_lighting_capabilities()
                         .await?
                         .features
-                        .contains(LightingFeatureFlags::RUNTIME_CONNECTION_CONDITIONS);
+                        .contains(LightingFeatureFlags::RUNTIME_EFFECTS_CONDITIONS);
                     if extended_conditionals {
                         client
                             .replace_all_lighting_extended_runtime_conditional_scenes(
@@ -532,9 +533,12 @@ async fn apply_snapshot(client: &Client, desired: &Snapshot, before: &Snapshot) 
                             )
                             .await?;
                     } else {
-                        if let Some(gated) = wanted_conditional.iter().position(|c| c.connection.is_some()) {
+                        if let Some(gated) = wanted_conditional
+                            .iter()
+                            .position(|c| c.connection.is_some() || c.effects.is_some())
+                        {
                             bail!(
-                                "conditional rule {gated} names a connection condition but the keyboard's firmware predates connection-aware rules"
+                                "conditional rule {gated} names a connection or effects condition but the keyboard's firmware predates the extended conditional cell"
                             );
                         }
                         let legacy = cells.into_iter().map(|c| c.cell).collect::<Vec<_>>();

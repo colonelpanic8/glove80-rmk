@@ -9,9 +9,9 @@ use rynk::rmk_types::protocol::rynk::{
     LightingActiveTransport, LightingBackgroundMode, LightingBackgroundState,
     LightingBatteryCondition, LightingChargeCondition, LightingConditionSet,
     LightingConditionalSceneCell, LightingConnectionCondition, LightingEffect,
-    LightingExtendedConditionalSceneCell, LightingExtensionState, LightingLayerCondition,
-    LightingLayerPolicy, LightingLedId, LightingNodeId, LightingOutputMode, LightingRgb8,
-    LightingSceneCell,
+    LightingEffectsCondition, LightingExtendedConditionalSceneCell, LightingExtensionState,
+    LightingLayerCondition, LightingLayerPolicy, LightingLedId, LightingNodeId, LightingOutputMode,
+    LightingRgb8, LightingSceneCell,
 };
 use serde::{Deserialize, Serialize};
 
@@ -220,6 +220,17 @@ pub struct ConditionalSceneConfig {
     /// connection-slot indicator is expressed as ordinary rules.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub connection: Option<ConnectionConditionConfig>,
+    /// Gate on whether the animated extension band is rendering, which is
+    /// what `RGB_TOG` flips. This is how a key bound to that toggle can show
+    /// its own state.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effects: Option<EffectsConditionConfig>,
+}
+
+/// Gate a rule on the extension band being on or off.
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct EffectsConditionConfig {
+    pub enabled: bool,
 }
 
 /// Gate a rule on the keyboard's live connection state. Every named field
@@ -915,10 +926,14 @@ pub fn conditional_scene_from_wire(
             WireBleState::Inactive => BleStateConfig::Inactive,
         }),
     });
+    let effects = extended
+        .effects
+        .map(|c| EffectsConditionConfig { enabled: c.enabled });
     let cell = extended.cell;
     let (color, effect, period_ms, phase_ms, duty, step_ms) = effect_from_wire(cell.effect);
     ConditionalSceneConfig {
         connection,
+        effects,
         led: cell.led_id.0,
         color: format!("#{:02x}{:02x}{:02x}", color.r, color.g, color.b),
         effect,
@@ -1036,6 +1051,9 @@ pub fn conditional_scene_to_wire(
     Ok(LightingExtendedConditionalSceneCell {
         cell: base,
         connection,
+        effects: cell
+            .effects
+            .map(|c| LightingEffectsCondition { enabled: c.enabled }),
     })
 }
 
@@ -1343,6 +1361,7 @@ Density = 6
             }),
             battery: None,
             output_mode: None,
+            effects: None,
         };
         let snapshot = |cells: Vec<ConditionalSceneConfig>| {
             let mut snap = lighting_snapshot(None, None);
@@ -1407,6 +1426,7 @@ Density = 6
                     charge: ChargeConditionConfig::Charging,
                 }),
                 output_mode: None,
+                effects: None,
             }]);
             Snapshot {
                 default_layer: 0,
@@ -1441,6 +1461,7 @@ Density = 6
                 charge: ChargeConditionConfig::Discharging,
             }),
             output_mode: None,
+            effects: None,
         };
         let wire = conditional_scene_to_wire(&cell).unwrap();
         assert_eq!(conditional_scene_from_wire(wire), cell);
