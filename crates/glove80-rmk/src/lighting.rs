@@ -62,10 +62,12 @@ pub const OVERLAY_CAPACITY: usize = 64;
 /// Widening a cell costs the same as raising the capacity. Adding the
 /// connection and effects predicates to `ConditionSet` grew every conditional
 /// cell, and at 160 the central ran out of stack: opening a conditional
-/// replace transaction faulted and reset the board. 112 restores the RAM
-/// budget the board shipped with before those predicates, and still covers
-/// the 95 scene cells and 45 conditional rules `config/glove80.toml` carries.
-pub const SCENE_CAPACITY: usize = 112;
+/// replace transaction faulted and reset the board. 112 restored the RAM
+/// budget the board shipped with before those predicates; the bonded-slot
+/// and usb-connected predicates widened the cell again, so 100 gives back
+/// that growth with margin. `config/glove80.toml` currently carries 95
+/// scene cells and 47 conditional rules.
+pub const SCENE_CAPACITY: usize = 100;
 pub const COMMAND_CAPACITY: usize = 4;
 
 /// Number of simultaneous key hits each typing-reactive effect can remember.

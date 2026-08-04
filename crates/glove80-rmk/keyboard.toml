@@ -80,10 +80,12 @@ layers = 8
 # 3 Games, 4 Mac Hyper. Layers 5-7 are unassigned editable capacity.
 # Substitutions from the ZMK keymap:
 #   - &magic hold-tap        -> MO(2) plus board-local lighting wake/status
-#   - &bt_0..&bt_3           -> User0..User3 (select the profile AND prefer
-#     BLE output, so a slot key both picks and routes to that connection)
-#   - &bt BT_CLR             -> User6 (clear the active profile's bond)
-#   - &out OUT_USB           -> OutputUsb (prefer USB output)
+#   - lower left thumb arc   -> User0..User2 (select the slot AND prefer
+#     BLE output, so a slot key both picks and routes to that connection;
+#     slot 3 exists but is only reachable via `glove80-control connection`)
+#   - upper thumb (Esc pos)  -> OutputUsb (prefer USB output)
+#   - no clearing action is bound to a key; bond management goes through
+#     `glove80-control connection clear <slot>`
 #   - left &bootloader       -> Bootloader
 #   - right &bootloader      -> User12 (forwarded to the peripheral)
 #   - &sys_reset             -> Reboot
@@ -113,12 +115,12 @@ _ _ _ MediaPrevTrack MediaNextTrack _ _ _ _ _ MediaPlayPause AudioVolUp AudioVol
 [[keymap.layer]]
 name = "Magic"
 keys = """
-User6 No No No No No No No No No
+No No No No No No No No No No
 No No No No No No No No No No No No
 No No No No No No No No No No No No
 Bootloader OutputModeCycle BacklightDown BacklightUp No No No No No No No User12
-Reboot No RgbTog RgbModeForward RgbHui No User0 User1 No No No No No No No No No Reboot
-No No No No No User2 User3 OutputUsb No No No No No No No TO(3)
+Reboot No RgbTog RgbModeForward RgbHui No OutputUsb No No No No No No No No No No Reboot
+No No No No No User0 User1 User2 No No No No No No No TO(3)
 """
 
 [[keymap.layer]]
