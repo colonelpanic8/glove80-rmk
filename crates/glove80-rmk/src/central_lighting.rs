@@ -25,7 +25,7 @@ use rmk::lighting::{
 };
 use rmk::split_app::SplitAppData;
 use rmk::types::protocol::rynk::{
-    LightingConditionalSceneCell, LightingLayerPolicy, LightingSceneCell,
+    LightingExtendedConditionalSceneCell, LightingLayerPolicy, LightingSceneCell,
 };
 
 use crate::lighting::{
@@ -44,7 +44,7 @@ pub fn init<'keymap, 'data>(
     keymap: &'keymap KeyMap<'data>,
     persisted_scenes: &[LightingSceneCell],
     persisted_policy: Option<LightingLayerPolicy>,
-    persisted_runtime_conditional_scenes: &[LightingConditionalSceneCell],
+    persisted_runtime_conditional_scenes: &[LightingExtendedConditionalSceneCell],
     persisted_extension: Option<::rmk::storage::LightingExtensionRecord>,
     persisted_overlay: Option<::rmk::storage::LightingExtensionOverlayRecord>,
     spi: Peri<'static, SPI3>,

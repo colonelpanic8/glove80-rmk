@@ -11,22 +11,27 @@ use core::num::NonZeroU32;
 use rmk::lighting::compositor::{ExtensionLayerState, ExtensionState};
 use rmk::lighting::standard::{EXTENSION_PARAM_CHUNK, ExtensionReplicaParams};
 use rmk::lighting::{
-    BackgroundMode, BackgroundState, BatteryCondition, BuiltinEffect, ChargeCondition,
-    ConditionSet, IndicatorState, LayerCondition, LayerPolicy, LayerState, LedSlot,
-    LightingContext, OutputMode, OverlayBatch, OverlayCell, Rgb8, RuntimeConditionalSceneCell,
-    RuntimeConditionalSceneTable, SceneTable, SceneTableCell, StandardMutableState,
-    StandardReplicaState,
+    ActiveTransport, BackgroundMode, BackgroundState, BatteryCondition, BuiltinEffect,
+    ChargeCondition, ConditionSet, ConnectionCondition, IndicatorState, LayerCondition,
+    LayerPolicy, LayerState, LedSlot, LightingContext, OutputMode, OverlayBatch, OverlayCell, Rgb8,
+    RuntimeConditionalSceneCell, RuntimeConditionalSceneTable, SceneTable, SceneTableCell,
+    StandardMutableState, StandardReplicaState,
 };
 use rmk::split_app::{SPLIT_APP_MSG_MAX, SplitAppData};
 use rmk::types::battery::{BatteryStatus, ChargeState};
+use rmk::types::ble::BleState;
+use rmk::types::connection::ConnectionStatus;
 
 use crate::lighting::{BatteryPair, LEDS_PER_HALF, OVERLAY_CAPACITY, SCENE_CAPACITY, TOTAL_LEDS};
 
-// Version 8 adds the optional second extension-effect packet. Version 7 widens the staged Extension packet with the active effect's
-// tuning parameters; version 6 added that packet and the runtime
-// conditional-scene packets. A stale half rejects the mismatched version and
-// simply keeps its previous state until both halves are reflashed together.
-const VERSION: u8 = 8;
+// Version 9 adds the conditional-scene connection extension packet (the cell
+// packet itself is byte-for-byte full). Version 8 adds the optional second
+// extension-effect packet. Version 7 widens the staged Extension packet with
+// the active effect's tuning parameters; version 6 added that packet and the
+// runtime conditional-scene packets. A stale half rejects the mismatched
+// version and simply keeps its previous state until both halves are reflashed
+// together.
+const VERSION: u8 = 9;
 const TAG_BEGIN: u8 = 1;
 const TAG_CONTEXT: u8 = 2;
 const TAG_CELL: u8 = 3;
@@ -44,6 +49,10 @@ const TAG_EFFECT_HIT: u8 = 11;
 /// Standalone context traffic outside the atomic snapshot transaction. Like
 /// effect hits, this is additive and does not change the snapshot wire version.
 const TAG_CONTEXT_UPDATE: u8 = 12;
+/// Connection condition for the immediately preceding conditional-scene cell,
+/// sent only when that cell carries one. The cell packet is full, so the
+/// condition rides in its own packet inside the same staged transaction.
+const TAG_CONDITIONAL_SCENE_EXT: u8 = 13;
 
 const BEGIN_LEN: usize = 26;
 const CONTEXT_LEN: usize = 23;
@@ -55,6 +64,7 @@ const CELL_LEN: usize = 26;
 const SCENE_CELL_LEN: usize = 23;
 const CONDITIONAL_SCENE_BEGIN_LEN: usize = 8;
 const CONDITIONAL_SCENE_CELL_LEN: usize = 26;
+const CONDITIONAL_SCENE_EXT_LEN: usize = 9;
 const COMMIT_LEN: usize = 9;
 const ACK_LEN: usize = 7;
 const EFFECT_HIT_LEN: usize = 3;
@@ -63,6 +73,7 @@ const _: () = assert!(CELL_LEN <= SPLIT_APP_MSG_MAX);
 const _: () = assert!(EXTENSION_LEN <= SPLIT_APP_MSG_MAX);
 const _: () = assert!(EXTENSION_OVERLAY_LEN <= SPLIT_APP_MSG_MAX);
 const _: () = assert!(CONDITIONAL_SCENE_CELL_LEN <= SPLIT_APP_MSG_MAX);
+const _: () = assert!(CONDITIONAL_SCENE_EXT_LEN <= SPLIT_APP_MSG_MAX);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Message {
@@ -126,6 +137,13 @@ pub enum Message {
         generation: u8,
         revision: u32,
         cell: RuntimeConditionalSceneCell,
+    },
+    /// Amends the most recently staged conditional-scene cell with its
+    /// connection condition; sent immediately after that cell's packet.
+    ConditionalSceneExt {
+        generation: u8,
+        revision: u32,
+        connection: ConnectionCondition,
     },
     Commit {
         generation: u8,
@@ -414,6 +432,38 @@ impl Message {
                 };
                 CONDITIONAL_SCENE_CELL_LEN
             }
+            Message::ConditionalSceneExt {
+                generation,
+                revision,
+                connection,
+            } => {
+                out[1] = TAG_CONDITIONAL_SCENE_EXT;
+                out[2] = generation;
+                put_u32(&mut out, 3, revision);
+                let mut gates = 0u8;
+                if let Some(transport) = connection.transport {
+                    gates |= 0x80
+                        | match transport {
+                            ActiveTransport::Usb => 0,
+                            ActiveTransport::Ble => 1,
+                            ActiveTransport::NoneActive => 2,
+                        };
+                }
+                if let Some(state) = connection.ble_state {
+                    gates |= 0x40
+                        | (match state {
+                            BleState::Advertising => 0,
+                            BleState::Connected => 1,
+                            BleState::Inactive => 2,
+                        } << 2);
+                }
+                out[7] = gates;
+                out[8] = connection
+                    .profile
+                    .map(|profile| 0x80 | (profile & 0x7f))
+                    .unwrap_or(0);
+                CONDITIONAL_SCENE_EXT_LEN
+            }
             Message::Commit {
                 generation,
                 revision,
@@ -496,6 +546,9 @@ impl Message {
                     layers: LayerState::new(bytes[7], bytes[8], get_u64(bytes, 9)),
                     indicators: get_indicators(bytes[17]),
                     powered: flag(bytes[22])?,
+                    // Not carried on the wire: each half reads its own copy of
+                    // the rmk-synced connection status at snapshot time.
+                    connection: ConnectionStatus::new(),
                 },
                 batteries: BatteryPair {
                     left: get_battery(bytes, 18)?,
@@ -509,6 +562,9 @@ impl Message {
                     layers: LayerState::new(bytes[7], bytes[8], get_u64(bytes, 9)),
                     indicators: get_indicators(bytes[17]),
                     powered: flag(bytes[22])?,
+                    // Not carried on the wire: each half reads its own copy of
+                    // the rmk-synced connection status at snapshot time.
+                    connection: ConnectionStatus::new(),
                 },
                 batteries: BatteryPair {
                     left: get_battery(bytes, 18)?,
@@ -702,9 +758,49 @@ impl Message {
                                 u8::MAX => None,
                                 _ => return Err(DecodeError::Value),
                             },
+                            // Arrives separately in a trailing
+                            // ConditionalSceneExt packet when present.
+                            connection: None,
                         },
                         slot: LedSlot(slot as u16),
                         effect,
+                    },
+                })
+            }
+            TAG_CONDITIONAL_SCENE_EXT if bytes.len() == CONDITIONAL_SCENE_EXT_LEN => {
+                let gates = bytes[7];
+                let transport = if gates & 0x80 != 0 {
+                    Some(match gates & 0x03 {
+                        0 => ActiveTransport::Usb,
+                        1 => ActiveTransport::Ble,
+                        2 => ActiveTransport::NoneActive,
+                        _ => return Err(DecodeError::Value),
+                    })
+                } else {
+                    None
+                };
+                let ble_state = if gates & 0x40 != 0 {
+                    Some(match (gates >> 2) & 0x03 {
+                        0 => BleState::Advertising,
+                        1 => BleState::Connected,
+                        2 => BleState::Inactive,
+                        _ => return Err(DecodeError::Value),
+                    })
+                } else {
+                    None
+                };
+                let profile = if bytes[8] & 0x80 != 0 {
+                    Some(bytes[8] & 0x7f)
+                } else {
+                    None
+                };
+                Ok(Message::ConditionalSceneExt {
+                    generation: bytes[2],
+                    revision: get_u32(bytes, 3),
+                    connection: ConnectionCondition {
+                        transport,
+                        profile,
+                        ble_state,
                     },
                 })
             }
@@ -733,6 +829,7 @@ impl Message {
             | TAG_EXTENSION_OVERLAY
             | TAG_CONDITIONAL_SCENE_BEGIN
             | TAG_CONDITIONAL_SCENE_CELL
+            | TAG_CONDITIONAL_SCENE_EXT
             | TAG_EFFECT_HIT
             | TAG_CONTEXT_UPDATE => Err(DecodeError::Length),
             _ => Err(DecodeError::Tag),
@@ -860,6 +957,15 @@ pub fn try_queue_snapshot(
             revision: snapshot.revision,
             cell,
         }) {
+            return false;
+        }
+        if let Some(connection) = cell.conditions.connection
+            && !queue(Message::ConditionalSceneExt {
+                generation,
+                revision: snapshot.revision,
+                connection,
+            })
+        {
             return false;
         }
     }
@@ -1064,6 +1170,25 @@ impl SnapshotStage {
                         .push(cell)
                         .is_err()
                 {
+                    self.stage = None;
+                }
+                None
+            }
+            Message::ConditionalSceneExt {
+                generation,
+                revision,
+                connection,
+            } => {
+                let stage = self.stage.as_mut()?;
+                let amended = stage.generation == generation
+                    && stage.snapshot.revision == revision
+                    && stage
+                        .snapshot
+                        .runtime_conditional_scenes
+                        .last_conditions_mut()
+                        .map(|conditions| conditions.connection = Some(connection))
+                        .is_some();
+                if !amended {
                     self.stage = None;
                 }
                 None

@@ -482,6 +482,7 @@ static PERIPHERAL_CONTEXT: BlockingMutex<rmk::RawMutex, Cell<LightingContext>> =
             kana: false,
         },
         powered: false,
+        connection: rmk::types::connection::ConnectionStatus::new(),
     }));
 
 #[derive(Clone, Copy)]
@@ -504,6 +505,9 @@ impl SnapshotProvider for PeripheralState {
         ) {
             context.powered = local_vbus_present();
         }
+        // The split link replicates the central's connection status into this
+        // half's own global; the lighting context packet does not carry it.
+        context.connection = rmk::state::current_connection_status();
         context
     }
 }
