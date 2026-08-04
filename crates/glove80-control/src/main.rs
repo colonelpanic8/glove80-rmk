@@ -8,6 +8,7 @@ use clap::{Parser, Subcommand};
 use glove80_config::{keycodes, rynk_keycode};
 
 mod config;
+mod connection;
 mod keymap;
 mod lighting;
 mod rynk_client;
@@ -51,6 +52,11 @@ enum Command {
         #[command(subcommand)]
         command: lighting::LightingCommand,
     },
+    /// Read and drive the transports and BLE slots.
+    Connection {
+        #[command(subcommand)]
+        command: connection::ConnectionCommand,
+    },
     /// Read and edit the live keymap.
     Keymap {
         #[command(subcommand)]
@@ -80,6 +86,7 @@ fn selector(cli: &Cli) -> transport::Selector {
 fn run(cli: Cli) -> Result<()> {
     match &cli.command {
         Command::Config { command } => config::run(&selector(&cli), command),
+        Command::Connection { command } => connection::run(&selector(&cli), command),
         Command::Lighting { command } => lighting::run(&selector(&cli), command),
         Command::Keymap { command } => keymap::run(&selector(&cli), command),
         Command::Version => version::run(&selector(&cli)),

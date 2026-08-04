@@ -22,6 +22,7 @@ use rynk_ble::BleDevice;
 use rynk_serial::SerialDevice;
 
 use crate::config::ConfigCommand;
+use crate::connection::ConnectionCommand;
 use crate::keymap::{self, KeymapCommand};
 use crate::lighting::{EffectArg, EffectSpec, LayerPolicyArg, LightingCommand};
 use crate::rynk_hid::HidDevice;
@@ -94,6 +95,52 @@ pub fn run_version(selector: &Selector) -> Result<()> {
             Device::Ble(device) => run_version_device(device).await,
         }
     })
+}
+
+pub fn run_connection(selector: &Selector, command: &ConnectionCommand) -> Result<()> {
+    let runtime =
+        tokio::runtime::Runtime::new().context("could not create the Rynk async runtime")?;
+    runtime.block_on(async {
+        match select_device(selector).await? {
+            Device::Hid(device) => run_connection_device(device, command).await,
+            Device::Serial(device) => run_connection_device(device, command).await,
+            Device::Ble(device) => run_connection_device(device, command).await,
+        }
+    })
+}
+
+async fn run_connection_device<D: RynkDevice>(
+    device: D,
+    command: &ConnectionCommand,
+) -> Result<()> {
+    let label = device.label();
+    let (client, mut driver) = connect_device(device, &label).await?;
+    match select(driver.run(&client), operate_connection(&client, command)).await {
+        Either::First(error) => Err(anyhow!("Rynk connection to {label} ended: {error}")),
+        Either::Second(result) => result,
+    }
+}
+
+async fn operate_connection(client: &Client, command: &ConnectionCommand) -> Result<()> {
+    match command {
+        ConnectionCommand::Status => {
+            let status = client.get_connection_status().await?;
+            print!("{}", crate::connection::render(&status));
+        }
+        ConnectionCommand::Switch { slot } => {
+            client.switch_ble_profile(*slot).await?;
+            // The switch drops any live BLE link and re-advertises; give the
+            // loop a beat so the echoed status reflects the new slot.
+            tokio::time::sleep(Duration::from_millis(400)).await;
+            let status = client.get_connection_status().await?;
+            print!("{}", crate::connection::render(&status));
+        }
+        ConnectionCommand::Clear { slot } => {
+            client.clear_ble_profile(*slot).await?;
+            println!("cleared the bond in slot {slot}");
+        }
+    }
+    Ok(())
 }
 
 pub fn run_bootloader(selector: &Selector, peripheral: bool) -> Result<()> {
