@@ -58,7 +58,14 @@ pub const OVERLAY_CAPACITY: usize = 64;
 /// queued in a `COMMAND_CAPACITY`-deep mailbox. Both runtime tables intern
 /// effects so repeated styles do not pay that multiplier per cell. Raising
 /// this value still requires measuring the final central binary.
-pub const SCENE_CAPACITY: usize = 160;
+///
+/// Widening a cell costs the same as raising the capacity. Adding the
+/// connection and effects predicates to `ConditionSet` grew every conditional
+/// cell, and at 160 the central ran out of stack: opening a conditional
+/// replace transaction faulted and reset the board. 112 restores the RAM
+/// budget the board shipped with before those predicates, and still covers
+/// the 95 scene cells and 45 conditional rules `config/glove80.toml` carries.
+pub const SCENE_CAPACITY: usize = 112;
 pub const COMMAND_CAPACITY: usize = 4;
 
 /// Number of simultaneous key hits each typing-reactive effect can remember.
