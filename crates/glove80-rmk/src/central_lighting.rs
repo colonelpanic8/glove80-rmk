@@ -59,8 +59,7 @@ pub fn init<'keymap, 'data>(
     HalfOutput,
     COMMAND_CAPACITY,
 > {
-    let provider =
-        KeymapLightingState::new(keymap).expect("Glove80 layer count fits lighting state");
+    let provider = KeymapLightingState::new(keymap).expect("board layer count fits lighting state");
     let mut engine = crate::lighting::engine(persisted_extension, persisted_overlay);
     install_lighting_scenes(
         &mut engine,

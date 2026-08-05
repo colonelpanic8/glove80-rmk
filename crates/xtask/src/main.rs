@@ -35,6 +35,7 @@ fn run() -> Result<()> {
     match args.next().as_deref() {
         Some("check") if args.next().is_none() => check(&root),
         Some("dist") if args.next().is_none() => dist(&root),
+        Some("dist-go60") if args.next().is_none() => dist_go60(&root),
         Some("inspect-uf2") => {
             let path = args.next().ok_or("inspect-uf2 requires a file")?;
             if args.next().is_some() {
@@ -51,7 +52,7 @@ fn run() -> Result<()> {
             );
             Ok(())
         }
-        _ => Err("usage: cargo run -p xtask -- <check|dist|inspect-uf2 FILE>".into()),
+        _ => Err("usage: cargo run -p xtask -- <check|dist|dist-go60|inspect-uf2 FILE>".into()),
     }
 }
 
@@ -257,6 +258,87 @@ fn dist(root: &Path) -> Result<()> {
 
     package_release(
         &dist,
+        "glove80-rmk",
+        &version,
+        &source_commit,
+        dirty,
+        &config_commit,
+        config_dirty == "true",
+        &rmk_commit,
+        &rmk_version,
+        &rust_toolchain,
+        &halves,
+    )
+}
+
+fn dist_go60(root: &Path) -> Result<()> {
+    let allow_dirty = env::var("GO60_ALLOW_DIRTY").as_deref() == Ok("1");
+    let rmk_commit = validate_submodule(root, allow_dirty)?;
+    let dirty = !git(root, &["status", "--porcelain", "--untracked-files=normal"])?.is_empty();
+    if dirty && !allow_dirty {
+        return Err(
+            "Go60 release bundles require a clean repository (set GO60_ALLOW_DIRTY=1 only for local validation)"
+                .into(),
+        );
+    }
+
+    let version = toml_value(
+        root.join("crates/go60-rmk/Cargo.toml"),
+        &["package", "version"],
+    )?;
+    let rust_toolchain = toml_value(root.join("rust-toolchain.toml"), &["toolchain", "channel"])?;
+    let source_commit = git(root, &["rev-parse", "HEAD"])?;
+    let rmk_version = git(
+        root,
+        &[
+            "-C",
+            "dependencies/rmk",
+            "describe",
+            "--tags",
+            "--always",
+            "--dirty",
+        ],
+    )?;
+    let config_commit =
+        env::var("GO60_CONFIG_GIT_COMMIT").unwrap_or_else(|_| "standalone".to_owned());
+    let config_dirty = env::var("GO60_CONFIG_GIT_DIRTY").unwrap_or_else(|_| "false".to_owned());
+    let source_dirty = if dirty { "true" } else { "false" };
+
+    let firmware_dir = root.join("crates/go60-rmk");
+    for binary in ["go60_lh", "go60_rh"] {
+        run_command(
+            &firmware_dir,
+            "cargo",
+            &["build", "--release", "--bin", binary],
+            &[
+                ("GO60_GIT_COMMIT", &source_commit),
+                ("GO60_GIT_DIRTY", source_dirty),
+                ("GO60_RMK_GIT_VERSION", &rmk_version),
+            ],
+        )?;
+    }
+
+    let target = firmware_dir.join("target/thumbv7em-none-eabihf/release");
+    let dist = root.join("dist/go60");
+    fs::create_dir_all(&dist)?;
+    let halves = [
+        Half::new("left", "lh", "go60_lh", 0x9809_b007),
+        Half::new("right", "rh", "go60_rh", 0x980a_b007),
+    ];
+    for half in &halves {
+        let base = format!("go60-rmk-{version}-{}", half.suffix);
+        let elf = dist.join(format!("{base}.elf"));
+        fs::copy(target.join(half.binary), &elf)?;
+        set_readable_permissions(&elf)?;
+        let elf_bytes = fs::read(&elf)?;
+        let segments = load_elf_segments(&elf_bytes)?;
+        let uf2 = encode_uf2(&segments, half.family)?;
+        fs::write(dist.join(format!("{base}.uf2")), uf2)?;
+    }
+
+    package_release(
+        &dist,
+        "go60-rmk",
         &version,
         &source_commit,
         dirty,
@@ -491,6 +573,7 @@ fn inspect_uf2(path: &Path, expected_family: Option<u32>) -> Result<Uf2Info> {
 #[allow(clippy::too_many_arguments)]
 fn package_release(
     dist: &Path,
+    project: &str,
     version: &str,
     source_commit: &str,
     dirty: bool,
@@ -504,7 +587,7 @@ fn package_release(
     let mut artifacts = Vec::new();
     let mut checksums = String::new();
     for half in halves {
-        let base = format!("glove80-rmk-{version}-{}", half.suffix);
+        let base = format!("{project}-{version}-{}", half.suffix);
         let uf2_name = format!("{base}.uf2");
         let elf_name = format!("{base}.elf");
         let uf2_path = dist.join(&uf2_name);
@@ -544,7 +627,7 @@ fn package_release(
     };
     let manifest = json!({
         "schemaVersion": 1,
-        "project": "glove80-rmk",
+        "project": project,
         "version": version,
         "source": { "commit": source_commit, "dirty": dirty },
         "configuration": configuration,

@@ -1,0 +1,85 @@
+[package]
+name = "go60-rmk"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+description = "Experimental RMK firmware for the MoErgo Go60"
+
+[workspace]
+
+[dependencies]
+rmk = { path = "../../dependencies/rmk/rmk", default-features = false, features = [
+    "defmt",
+    "storage",
+    "rynk",
+    "watchdog",
+    "nrf52840_ble",
+    "split",
+    "async_matrix",
+    "lighting",
+    "adafruit_bl",
+] }
+nrf-sdc = { git = "https://github.com/alexmoon/nrf-sdc", rev = "abe49d22ebfc85fae134eb082fbfddf752016a55", features = [
+    "defmt",
+    "peripheral",
+    "central",
+    "nrf52840",
+] }
+nrf-mpsl = { git = "https://github.com/alexmoon/nrf-sdc", rev = "abe49d22ebfc85fae134eb082fbfddf752016a55", features = [
+    "defmt",
+    "critical-section-impl",
+    "nrf52840",
+] }
+bt-hci = { version = "0.9", features = ["defmt"] }
+rmk-palettefx = { path = "../../dependencies/rmk-palettefx", features = ["rmk-lighting"] }
+
+cortex-m = "0.7.7"
+cortex-m-rt = "0.7.5"
+embassy-futures = "0.1"
+embassy-sync = "0.8"
+heapless = "0.8"
+embassy-time = { version = "0.5", features = ["tick-hz-32_768", "defmt", "defmt-timestamp-uptime"] }
+embassy-nrf = { version = "0.11", features = [
+    "defmt",
+    "nrf52840",
+    "time-driver-rtc1",
+    "gpiote",
+    "unstable-pac",
+    "nfc-pins-as-gpio",
+    "time",
+] }
+embassy-executor = { version = "0.10", features = [
+    "defmt",
+    "platform-cortex-m",
+    "executor-thread",
+] }
+defmt = "1"
+defmt-rtt = "1"
+panic-probe = { version = "1", features = ["print-defmt"] }
+static_cell = "2"
+
+[patch."https://github.com/colonelpanic8/rmk"]
+rmk = { path = "../../dependencies/rmk/rmk" }
+
+[[bin]]
+name = "go60_lh"
+path = "src/central.rs"
+
+[[bin]]
+name = "go60_rh"
+path = "src/peripheral.rs"
+
+[profile.dev]
+codegen-units = 1
+debug = true
+opt-level = 1
+overflow-checks = true
+lto = false
+panic = "unwind"
+
+[profile.release]
+codegen-units = 1
+debug = true
+opt-level = "z"
+overflow-checks = false
+lto = "fat"
