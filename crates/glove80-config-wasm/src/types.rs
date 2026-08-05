@@ -31,12 +31,37 @@ pub enum ConfigFormat {
     MoergoJson,
 }
 
-/// A parsed document together with the format it turned out to be.
+/// A parsed document together with the format it turned out to be, and whatever
+/// the parse had to say about it.
 #[derive(Clone, Debug, Deserialize, Serialize, Tsify)]
 #[tsify(into_wasm_abi, from_wasm_abi)]
 pub struct ParsedConfig {
     pub format: ConfigFormat,
     pub snapshot: RuntimeSnapshot,
+    /// Bindings that did not survive the trip exactly. Empty for a TOML
+    /// document, which describes the managed state directly and so has nothing
+    /// to approximate; an editor export is where a layout meets a keyboard that
+    /// expresses things differently.
+    ///
+    /// A parse that returns these still succeeded. They are the difference
+    /// between what the export asked for and what the keyboard will do, and
+    /// dropping them on the floor is how an import comes to look lossless when
+    /// it was not.
+    pub notes: Vec<ImportNote>,
+}
+
+/// One way an imported layout differs from its source.
+#[derive(Clone, Debug, Deserialize, Serialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi)]
+pub struct ImportNote {
+    /// True when the binding was imported but behaves differently; false when
+    /// it could not be represented at all. A parse only succeeds if every note
+    /// is an approximation, so the strict form never reaches a caller — it is
+    /// carried anyway so a report can say which kind it is showing.
+    pub approximated: bool,
+    /// Where in the source document, e.g. `layer 3 (Cursor), editor key 41`.
+    pub location: Option<String>,
+    pub message: String,
 }
 
 /// The managed runtime state as a browser holds it: the same protocol types the

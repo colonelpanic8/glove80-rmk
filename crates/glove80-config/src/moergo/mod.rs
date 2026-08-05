@@ -50,22 +50,39 @@ pub struct ImportedLayout {
 /// Parse a MoErgo editor JSON backup into the managed runtime model.
 /// Lighting is absent because the editor backup has no Rynk lighting state.
 pub fn runtime_config_from_moergo_json(text: &str) -> Result<RuntimeConfig> {
-    let imported = import_moergo_layout(text)?;
-    // This entry point promises a keymap that means what the export meant, so
-    // a dropped key is an error here even though the richer import reports it
-    // and carries on.
-    if let Some(dropped) = imported
-        .diagnostics
-        .iter()
-        .find(|diagnostic| diagnostic.severity == Severity::Dropped)
-    {
-        bail!(
-            "{} {}",
-            dropped.location.as_deref().unwrap_or_default(),
-            dropped.message
-        );
+    import_moergo_layout(text)?.into_strict_runtime()
+}
+
+impl ImportedLayout {
+    /// The keymap, on the promise that it means what the export meant.
+    ///
+    /// A caller that can show the whole report should keep the `ImportedLayout`
+    /// and read `diagnostics` instead; this is for the callers that can only
+    /// succeed or fail.
+    pub fn into_strict_runtime(self) -> Result<RuntimeConfig> {
+        // A dropped key is an error here even though the import itself reports
+        // it and carries on. Every drop is named: stopping at the first would
+        // send the reader back around the loop once per unportable key, and the
+        // useful question — how much of this layout is unportable — needs all.
+        let dropped: Vec<String> = self
+            .diagnostics
+            .iter()
+            .filter(|diagnostic| diagnostic.severity == Severity::Dropped)
+            .map(|diagnostic| match &diagnostic.location {
+                Some(location) => format!("{location}: {}", diagnostic.message),
+                None => diagnostic.message.clone(),
+            })
+            .collect();
+        if !dropped.is_empty() {
+            bail!(
+                "{} binding{} cannot be imported:\n  {}",
+                dropped.len(),
+                if dropped.len() == 1 { "" } else { "s" },
+                dropped.join("\n  ")
+            );
+        }
+        Ok(self.runtime)
     }
-    Ok(imported.runtime)
 }
 
 /// Parse a MoErgo editor JSON backup, including its custom behaviors.

@@ -28,7 +28,7 @@ use glove80_config::{
 use wasm_bindgen::prelude::*;
 
 pub use types::{
-    ConfigFormat, EffectParamSet, EffectParamWrite, ExtensionCatalog, LightingSnapshot,
+    ConfigFormat, EffectParamSet, EffectParamWrite, ExtensionCatalog, ImportNote, LightingSnapshot,
     ParsedConfig, RuntimeSnapshot,
 };
 
@@ -68,6 +68,34 @@ fn parse_text(text: &str, format: ConfigFormat) -> anyhow::Result<RuntimeConfig>
     }
 }
 
+/// [`parse_text`], keeping what the parse had to say about the document.
+///
+/// Only an editor export produces notes: a TOML file describes the managed state
+/// directly, so there is nothing in it to approximate.
+fn parse_text_reporting(
+    text: &str,
+    format: ConfigFormat,
+) -> anyhow::Result<(RuntimeConfig, Vec<ImportNote>)> {
+    match format {
+        ConfigFormat::Toml => Ok((RuntimeConfig::from_toml(text)?, Vec::new())),
+        ConfigFormat::MoergoJson => {
+            let imported = glove80_config::import_moergo_layout(text)?;
+            let notes = imported
+                .diagnostics
+                .iter()
+                .map(|diagnostic| ImportNote {
+                    approximated: diagnostic.severity == glove80_config::Severity::Approximated,
+                    location: diagnostic.location.clone(),
+                    message: diagnostic.message.clone(),
+                })
+                .collect();
+            // Refuses a layout carrying any unrepresentable binding, naming
+            // every one of them rather than only the first.
+            Ok((imported.into_strict_runtime()?, notes))
+        }
+    }
+}
+
 /// Parse and validate a configuration document, then restate it in protocol
 /// types. The format is recognized from the text, so a caller can hand over
 /// whatever the user picked without inspecting it first.
@@ -95,8 +123,14 @@ pub fn parse_config_document(
     catalog: ExtensionCatalog,
 ) -> Result<ParsedConfig, JsValue> {
     let format = detect_config_format(text);
-    let snapshot = parse_config(text, catalog)?;
-    Ok(ParsedConfig { format, snapshot })
+    let (config, notes) = parse_text_reporting(text, format).map_err(js_error)?;
+    let snapshot = config.snapshot().map_err(js_error)?;
+    let snapshot = convert::snapshot_to_wire(&snapshot, &catalog).map_err(js_error)?;
+    Ok(ParsedConfig {
+        format,
+        snapshot,
+        notes,
+    })
 }
 
 /// Render live device state as a source document, the way `config pull` does.

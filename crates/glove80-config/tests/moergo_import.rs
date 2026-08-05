@@ -7,7 +7,9 @@
 //! layout's hand tags, so the import is expected to recover the intent and drop
 //! the scaffolding rather than transliterate it.
 
-use glove80_config::{import_moergo_layout, RuntimeConfig};
+use glove80_config::{
+    import_moergo_layout, runtime_config_from_moergo_json, RuntimeConfig, Severity,
+};
 
 const TAILORKEY: &str = include_str!("fixtures/tailorkey-v52-bilateral.json");
 
@@ -179,6 +181,49 @@ fn one_layer() -> String {
          name = \"Base\"\n\
          keys = \"\"\"\n{keys}\n\"\"\"\n"
     )
+}
+
+/// The strict entry point refuses a layout it cannot represent — and names every
+/// binding it choked on. Reporting only the first sends the reader back around
+/// the import loop once per unportable key, and hides the answer they actually
+/// want: how much of this layout is portable at all.
+#[test]
+fn refusing_a_layout_names_every_binding_it_cannot_import() {
+    let mut root: serde_json::Value = serde_json::from_str(TAILORKEY).expect("fixture parses");
+    let layers = root
+        .pointer_mut("/layers")
+        .and_then(serde_json::Value::as_array_mut)
+        .expect("layers");
+    // Two bindings the importer has no equivalent for, on the first layer.
+    for key in [0usize, 1] {
+        layers[0][key] = serde_json::json!({ "value": "&no_such_behavior", "params": [] });
+    }
+    let text = serde_json::to_string(&root).expect("reserialize");
+
+    let error = format!(
+        "{:#}",
+        runtime_config_from_moergo_json(&text).expect_err("an unportable layout must be refused")
+    );
+    assert!(
+        error.contains("2 bindings cannot be imported"),
+        "the count of unportable bindings should lead: {error}"
+    );
+    assert_eq!(
+        error.matches("no_such_behavior").count(),
+        2,
+        "both unportable bindings should be named, got: {error}"
+    );
+
+    // The permissive import sees the same two, and carries on with the rest.
+    let imported = import_moergo_layout(&text).expect("the report form still succeeds");
+    assert_eq!(
+        imported
+            .diagnostics
+            .iter()
+            .filter(|note| note.severity == Severity::Dropped)
+            .count(),
+        2
+    );
 }
 
 /// A morse need not define a hold: a tap-dance defines `tap` and `double_tap`
