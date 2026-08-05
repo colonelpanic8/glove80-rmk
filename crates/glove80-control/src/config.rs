@@ -507,6 +507,7 @@ async fn apply_behaviors(
     client: &Client,
     desired: &BehaviorSnapshot,
     before: &BehaviorSnapshot,
+    macro_chunk: u16,
 ) -> Result<()> {
     // The bulk writers write exactly the slots they are given, so a table that
     // shrank would keep its tail. Pad to what the keyboard currently holds and
@@ -559,19 +560,26 @@ async fn apply_behaviors(
     }
     if let Some(macros) = &desired.macros {
         if before.macros.as_ref() != Some(macros) {
-            write_macro_space(client, macros).await?;
+            write_macro_space(client, macros, macro_chunk).await?;
         }
     }
     Ok(())
 }
 
-async fn write_macro_space(client: &Client, space: &[u8]) -> Result<()> {
+async fn write_macro_space(client: &Client, space: &[u8], macro_chunk: u16) -> Result<()> {
+    // Chunk by what the device advertises, not by this build's constant. The two
+    // are generated differently on purpose — a host's `MACRO_DATA_SIZE` is the
+    // protocol ceiling so it can talk to any firmware, while a firmware's is its
+    // own `protocol_macro_chunk_size`. Sending a ceiling-sized chunk to firmware
+    // built with a smaller one overruns the vec it decodes into, and the write
+    // comes back as a bare `Malformed`.
+    let chunk_size = usize::from(macro_chunk).clamp(1, MACRO_CHUNK);
     // One extra terminator so a shorter sequence set does not leave the tail
     // of a longer one behind to be parsed as another macro.
     let mut payload = space.to_vec();
     payload.push(0);
-    for (index, chunk) in payload.chunks(MACRO_CHUNK).enumerate() {
-        let offset = u16::try_from(index * MACRO_CHUNK).context("macro space is too large")?;
+    for (index, chunk) in payload.chunks(chunk_size).enumerate() {
+        let offset = u16::try_from(index * chunk_size).context("macro space is too large")?;
         let data = rynk::rmk_types::protocol::rynk::MacroData {
             data: heapless::Vec::from_slice(chunk)
                 .map_err(|_| anyhow::anyhow!("macro chunk exceeds the protocol's chunk size"))?,
@@ -596,7 +604,13 @@ async fn apply_snapshot(client: &Client, desired: &Snapshot, before: &Snapshot) 
     // Before the keymap: a cell holding `TD(n)` or `TriggerMacro(n)` addresses
     // a table slot by index, so the tables have to be in place before any key
     // can point at them.
-    apply_behaviors(client, &desired.behaviors, &before.behaviors).await?;
+    apply_behaviors(
+        client,
+        &desired.behaviors,
+        &before.behaviors,
+        capabilities.macro_chunk_size,
+    )
+    .await?;
 
     // A source file owns the layers it lists. Fixed-capacity trailing layers
     // remain untouched rather than being destructively cleared.
