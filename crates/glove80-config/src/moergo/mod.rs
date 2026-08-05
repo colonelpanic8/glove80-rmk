@@ -146,7 +146,8 @@ pub fn import_moergo_layout(text: &str) -> Result<ImportedLayout> {
             None,
             format!(
                 "layer {layer} ({name}) rescales pointer movement with an input processor; \
-                 Rynk's mouse speed is a global interval, so that layer moves at the shared rate"
+                 the equivalent [[behavior.mouse_layer_scale]] entry is compile-time firmware \
+                 config, so it must be present in keyboard.toml rather than imported here"
             ),
         );
     }

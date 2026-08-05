@@ -3,7 +3,7 @@
 
 use rynk::rmk_types::action::{Action, KeyAction, KeyboardAction, LightAction};
 use rynk::rmk_types::keycode::{HidKeyCode, KeyCode, SpecialKey};
-use rynk::rmk_types::modifier::ModifierCombination;
+use rynk::rmk_types::modifier::{ModifierCombination, ModifierKey};
 
 pub fn to_via_keycode(key_action: KeyAction) -> u16 {
     match key_action {
@@ -119,6 +119,11 @@ pub fn to_via_keycode(key_action: KeyAction) -> u16 {
             _ => 0,
         },
         KeyAction::Morse(index) => 0x5700 | index as u16,
+        // Same bit layout as the firmware's keycode_convert: marker bit,
+        // 4-bit layer, 3-bit modifier index, 8-bit tap key.
+        KeyAction::LayerModTap(layer, modifier, tap) if layer < 16 => {
+            0x8000 | ((layer as u16) << 11) | ((modifier as u16) << 8) | tap as u16
+        }
         _ => 0,
     }
 }
@@ -159,6 +164,11 @@ pub fn from_via_keycode(code: u16) -> KeyAction {
         0x52c0..=0x52df => KeyAction::No,
         0x52e0..=0x52ff => KeyAction::Single(Action::PersistentDefaultLayer(code as u8 & 0xf)),
         0x5700..=0x57ff => KeyAction::Morse((code & 0xff) as u8),
+        0x8000..=0xffff => KeyAction::LayerModTap(
+            ((code >> 11) & 0x0f) as u8,
+            ModifierKey::from_repr(((code >> 8) & 0x07) as u8).expect("three-bit modifier index"),
+            (code as u8).into(),
+        ),
         0x7000..=0x701f => KeyAction::Single(Action::Modifier(
             ModifierCombination::from_packed_bits((code & 0x1f) as u8),
         )),

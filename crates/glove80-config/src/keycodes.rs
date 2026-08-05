@@ -40,6 +40,11 @@ const MOD_ALT: u8 = 0x04;
 const MOD_GUI: u8 = 0x08;
 /// Set = the right-hand variants of every modifier bit below it.
 const MOD_RIGHT: u8 = 0x10;
+
+/// `LMT` modifier names by their firmware `ModifierKey` index.
+const LMT_MODIFIERS: [&str; 8] = [
+    "MOD_LCTL", "MOD_LSFT", "MOD_LALT", "MOD_LGUI", "MOD_RCTL", "MOD_RSFT", "MOD_RALT", "MOD_RGUI",
+];
 const MOD_MEH: u8 = MOD_CTRL | MOD_SHIFT | MOD_ALT;
 const MOD_HYPR: u8 = MOD_MEH | MOD_GUI;
 
@@ -424,6 +429,12 @@ pub fn format_keycode(code: u16) -> String {
             }
         }
         0x4000..=0x4FFF => format!("LT({}, {})", (code >> 8) & 0xF, basic(code & 0xFF)),
+        0x8000..=0xFFFF => format!(
+            "LMT({}, {}, {})",
+            (code >> 11) & 0xF,
+            LMT_MODIFIERS[((code >> 8) & 0x7) as usize],
+            basic(code & 0xFF)
+        ),
         0x5000..=0x51FF if code & 0x0F != 0 => {
             format!(
                 "LM({}, {})",
@@ -568,6 +579,28 @@ fn parse_composite(name: &str, args: &str, original: &str) -> Result<u16> {
         "MOD" => return Ok(0x7000 | u16::from(parse_mod_list(args)?)),
         "OSM" => return Ok(0x52A0 | u16::from(parse_mod_list(args)?)),
         _ => {}
+    }
+
+    // LMT(layer, mod, kc): hold the layer and one modifier, tap kc once on
+    // activation. The firmware stores a single modifier index, not a mask.
+    if name == "LMT" {
+        let mut parts = args.splitn(3, ',');
+        let (layer, modifier, key) = (
+            parts.next().unwrap_or_default(),
+            parts.next().unwrap_or_default(),
+            parts.next().unwrap_or_default(),
+        );
+        if key.trim().is_empty() {
+            return Err(anyhow!("'{original}' needs layer, modifier and key"));
+        }
+        let index = LMT_MODIFIERS
+            .iter()
+            .position(|name| *name == modifier.trim())
+            .ok_or_else(|| anyhow!("'{original}' needs one modifier such as MOD_LALT"))?;
+        return Ok(0x8000
+            | (parse_layer(layer, "layer", 15)? << 11)
+            | ((index as u16) << 8)
+            | parse_basic(key)?);
     }
 
     // Two-argument composites: LT(layer, kc), LM(layer, mods), MT(mods, kc).

@@ -597,17 +597,14 @@ impl<'a> Lowering<'a> {
                 let modifier = binding.param_text(0)?;
                 let modifier = super::zmk_modifier(&modifier).ok()?;
                 let layer = self.remap_layer(binding.param_u8(1)? as usize)?;
-                // ZMK's version also taps Tab once on activation; Rynk's
-                // `LM` has no room for that, so the first step is manual.
-                self.report(
-                    Severity::Approximated,
-                    Some(here()),
-                    format!(
-                        "'{name}' also taps Tab when the chord engages, which LM({layer}, \
-                         {modifier}) does not reproduce; the first step is a manual Tab"
-                    ),
-                );
-                keycodes::parse_keycode(&format!("LM({layer}, {modifier})"))
+                // `LMT` is the chord exactly: hold the modifier and the layer
+                // for as long as the combo keys are held, tapping the wrapped
+                // key once when the chord engages.
+                let tap = self
+                    .tables
+                    .macro_named(name)
+                    .and_then(|entry| chord_tap_key(&entry.clone(), self.tables))?;
+                keycodes::parse_keycode(&format!("LMT({layer}, {modifier}, {tap})"))
                     .ok()
                     .map(from_via_keycode)
             }
@@ -747,6 +744,46 @@ fn holds_modifier_with_layer(entry: &super::behaviors::Macro) -> bool {
             .iter()
             .any(|binding| binding.name() == "&macro_pause_for_release")
         && entry.bindings.iter().any(|binding| binding.name() == "&mo")
+}
+
+/// The key a window-switcher chord taps when it engages.
+///
+/// The chord macro delegates its hold to an inner macro that presses the
+/// modifier and taps a fixed key (`&macro_tap`, `&kp TAB`); that key is the
+/// one `LMT` must reproduce.
+fn chord_tap_key(
+    entry: &super::behaviors::Macro,
+    tables: &super::behaviors::BehaviorTables,
+) -> Option<String> {
+    let inner_of = |entry: &super::behaviors::Macro| -> Option<String> {
+        let mut tapping = false;
+        for binding in &entry.bindings {
+            match binding.name() {
+                "&macro_tap" => tapping = true,
+                "&macro_press" | "&macro_release" => tapping = false,
+                "&kp" if tapping => {
+                    let text = binding.param_text(0)?;
+                    if text != "MACRO_PLACEHOLDER" {
+                        return super::zmk_keycode_to_via(&text)
+                            .ok()
+                            .filter(|code| *code <= 0xff)
+                            .map(keycodes::format_keycode);
+                    }
+                }
+                _ => {}
+            }
+        }
+        None
+    };
+
+    if let Some(key) = inner_of(entry) {
+        return Some(key);
+    }
+    entry
+        .bindings
+        .iter()
+        .filter_map(|binding| tables.macro_named(binding.name()))
+        .find_map(inner_of)
 }
 
 /// Whether a macro is the "press shift, tap the parameter, release shift"
