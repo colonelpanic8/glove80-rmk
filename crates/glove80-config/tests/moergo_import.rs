@@ -140,7 +140,18 @@ fn an_imported_layout_round_trips_through_toml() {
 /// about them, and applying it must not wipe what the keyboard already holds.
 #[test]
 fn a_file_without_behavior_tables_stays_silent_about_them() {
-    // `--` marks the four physical holes at r0c5, r0c8, r5c5 and r5c8.
+    let config =
+        RuntimeConfig::from_toml(&format!("default_layer = 0\n{}", one_layer())).expect("parse");
+    let snapshot = config.snapshot().expect("snapshot");
+
+    assert!(snapshot.behaviors.morses.is_none());
+    assert!(snapshot.behaviors.combos.is_none());
+    assert!(snapshot.behaviors.macros.is_none());
+}
+
+/// The smallest keymap the parser accepts: one layer of `A`, with `--` marking
+/// the four physical holes at r0c5, r0c8, r5c5 and r5c8.
+fn one_layer() -> String {
     let row = |holes: bool| {
         (0..14)
             .map(|col| {
@@ -162,19 +173,47 @@ fn a_file_without_behavior_tables_stays_silent_about_them() {
         row(true),
     ]
     .join("\n");
-    let config = RuntimeConfig::from_toml(&format!(
-        "default_layer = 0\n\
-         [[layer]]\n\
+    format!(
+        "[[layer]]\n\
          id = \"base\"\n\
          name = \"Base\"\n\
          keys = \"\"\"\n{keys}\n\"\"\"\n"
+    )
+}
+
+/// A morse need not define a hold: a tap-dance defines `tap` and `double_tap`
+/// and nothing else. Writing such a slot out has to produce a file that still
+/// parses, which it does not if the absent action is rendered as an empty name.
+#[test]
+fn a_morse_without_a_hold_survives_a_round_trip() {
+    let config = RuntimeConfig::from_toml(&format!(
+        "default_layer = 0\n{}\
+         [[morse]]\n\
+         tap = \"KC_A\"\n\
+         double_tap = \"KC_B\"\n",
+        one_layer()
     ))
     .expect("parse");
-    let snapshot = config.snapshot().expect("snapshot");
+    let wire = config.snapshot().expect("snapshot");
 
-    assert!(snapshot.behaviors.morses.is_none());
-    assert!(snapshot.behaviors.combos.is_none());
-    assert!(snapshot.behaviors.macros.is_none());
+    let text = config.to_toml().expect("serialize");
+    assert!(
+        !text.contains("hold = \"\""),
+        "an absent hold was written as an empty keycode:\n{text}"
+    );
+    let reparsed = RuntimeConfig::from_toml(&text).expect("the rendered file must parse again");
+    assert_eq!(reparsed.snapshot().expect("snapshot"), wire);
+}
+
+/// A slot that names no action at all is a mistake, not an empty morse.
+#[test]
+fn a_morse_with_no_actions_is_rejected() {
+    let error = RuntimeConfig::from_toml(&format!("default_layer = 0\n{}[[morse]]\n", one_layer()))
+        .expect_err("a morse with no actions must be rejected");
+    assert!(
+        format!("{error:#}").contains("at least one of tap"),
+        "unhelpful error: {error:#}"
+    );
 }
 
 /// The import is allowed to leave gaps, but never quietly: anything it drops

@@ -71,8 +71,14 @@ pub struct MorseConfig {
     /// Host-side label; the firmware does not store it.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub name: String,
-    pub tap: String,
-    pub hold: String,
+    /// The wire `Morse` holds each pattern independently, so both of these are
+    /// optional: a tap-dance defines `tap` and `double_tap` with no hold at all,
+    /// and rendering `hold = ""` for it would produce a file that no longer
+    /// parses. At least one action must be present.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tap: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hold: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub double_tap: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -666,8 +672,12 @@ impl MorseConfig {
             profile,
             ..Morse::default()
         };
-        let _ = morse.put(TAP, action_from_name(&self.tap).context("tap action")?);
-        let _ = morse.put(HOLD, action_from_name(&self.hold).context("hold action")?);
+        if let Some(text) = &self.tap {
+            let _ = morse.put(TAP, action_from_name(text).context("tap action")?);
+        }
+        if let Some(text) = &self.hold {
+            let _ = morse.put(HOLD, action_from_name(text).context("hold action")?);
+        }
         if let Some(text) = &self.double_tap {
             let _ = morse.put(DOUBLE_TAP, action_from_name(text).context("double tap")?);
         }
@@ -677,6 +687,9 @@ impl MorseConfig {
                 action_from_name(text).context("hold after tap")?,
             );
         }
+        if morse.actions.is_empty() {
+            bail!("a morse needs at least one of tap, hold, double_tap or hold_after_tap");
+        }
         Ok(morse)
     }
 
@@ -685,8 +698,8 @@ impl MorseConfig {
 
         Self {
             name: format!("morse {index}"),
-            tap: morse.get(TAP).map(action_name).unwrap_or_default(),
-            hold: morse.get(HOLD).map(action_name).unwrap_or_default(),
+            tap: morse.get(TAP).map(action_name),
+            hold: morse.get(HOLD).map(action_name),
             double_tap: morse.get(DOUBLE_TAP).map(action_name),
             hold_after_tap: morse.get(HOLD_AFTER_TAP).map(action_name),
             hold_timeout_ms: morse.profile.hold_timeout_ms(),
