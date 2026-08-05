@@ -175,7 +175,10 @@ pub fn import_moergo_layout(text: &str) -> Result<ImportedLayout> {
         let mut editor_order = vec![0u16; MOERGO_TO_MATRIX.len()];
         for (editor_index, binding) in keys.iter().enumerate() {
             let offset = MOERGO_TO_MATRIX[editor_index];
-            let code = binding_to_via(
+            // A binding that cannot be converted leaves its cell empty and is
+            // reported, rather than aborting the whole import: one unportable
+            // key should not hide the other seven hundred.
+            let code = match binding_to_via(
                 binding,
                 &layer_names,
                 layer_index,
@@ -183,7 +186,12 @@ pub fn import_moergo_layout(text: &str) -> Result<ImportedLayout> {
                 offset,
                 &layer_map,
                 &mut lowering,
-            )?;
+            ) {
+                Ok(code) => code,
+                Err(error) => {
+                    lowering.unmapped_binding(location(layer_index, editor_index, offset), &error)
+                }
+            };
             matrix[offset] = code;
             editor_order[editor_index] = code;
         }
@@ -231,6 +239,12 @@ pub fn import_moergo_layout(text: &str) -> Result<ImportedLayout> {
         .map(|(index, combo)| crate::ComboConfig::from_wire(combo, index))
         .collect();
     let macros = crate::MacroConfig::all_from_wire(&lowering.macros().concat());
+    let forks = lowering
+        .forks()
+        .iter()
+        .enumerate()
+        .map(|(index, fork)| crate::ForkConfig::from_wire(fork, index))
+        .collect();
 
     let config = RuntimeConfig {
         default_layer: 0,
@@ -238,6 +252,7 @@ pub fn import_moergo_layout(text: &str) -> Result<ImportedLayout> {
         morses,
         combos,
         macros,
+        forks,
         lighting: None,
     };
     config.snapshot()?;
@@ -612,6 +627,24 @@ fn binding_to_via(
             if params.len() != 1 {
                 bail!("{} {behavior} expects one mouse action parameter", here());
             }
+            // ZMK also writes scroll and movement in raw axis form, e.g.
+            // `&msc MOVE_Y(-33)`. RMK's wheel and pointer keycodes carry a
+            // direction but no magnitude, so the axis maps and the step does not.
+            if let Some(via) = params
+                .first()
+                .and_then(|raw| raw_axis_binding(behavior, raw))
+            {
+                lowering.report(
+                    lower::Severity::Approximated,
+                    Some(here()),
+                    format!(
+                        "{behavior} {} moves by a fixed step; RMK's mouse keycodes carry \
+                         only a direction, so the requested magnitude is lost",
+                        params.first().and_then(raw_axis_text).unwrap_or_default()
+                    ),
+                );
+                return keycodes::parse_keycode(via);
+            }
             let action = string_param(param(0)?, &here())?;
             let via = match (behavior, action) {
                 ("&mkp", "LCLK" | "MB1") => "KC_BTN1",
@@ -671,6 +704,71 @@ fn zmk_modifier(text: &str) -> Result<String> {
         _ => bail!("'{text}' is not a modifier key"),
     };
     Ok(modifier.into())
+}
+
+/// A modifier's own keycode, for the `&kp MOD` that ZMK writes when a key
+/// simply holds a modifier. Distinct from [`zmk_modifier`], which names the
+/// modifier as a bitmask argument for `OSM`/`MT`-style actions.
+/// `MOVE_X(n)` / `MOVE_Y(n)` as the nearest direction-only RMK keycode.
+///
+/// ZMK's mouse-move and mouse-scroll behaviors accept either a named direction
+/// or a raw signed axis step. Only the sign survives the trip: the axis picks
+/// the keycode and the magnitude has no representation.
+fn raw_axis_binding(behavior: &str, value: &Value) -> Option<&'static str> {
+    let object = value.as_object()?;
+    let axis = object.get("value")?.as_str()?;
+    let step: i64 = object
+        .get("params")?
+        .as_array()?
+        .first()?
+        .get("value")?
+        .as_str()?
+        .trim()
+        .parse()
+        .ok()?;
+    let positive = step >= 0;
+    Some(match (behavior, axis, positive) {
+        // Screen coordinates put Y downwards, but both behaviors follow ZMK's
+        // own named constants: SCRL_UP and MOVE_UP are the positive direction.
+        ("&msc", "MOVE_Y", true) => "KC_WH_U",
+        ("&msc", "MOVE_Y", false) => "KC_WH_D",
+        ("&msc", "MOVE_X", true) => "KC_WH_R",
+        ("&msc", "MOVE_X", false) => "KC_WH_L",
+        ("&mmv", "MOVE_Y", true) => "KC_MS_U",
+        ("&mmv", "MOVE_Y", false) => "KC_MS_D",
+        ("&mmv", "MOVE_X", true) => "KC_MS_R",
+        ("&mmv", "MOVE_X", false) => "KC_MS_L",
+        _ => return None,
+    })
+}
+
+/// The raw axis binding rendered back for a diagnostic, e.g. `MOVE_Y(-33)`.
+fn raw_axis_text(value: &Value) -> Option<String> {
+    let object = value.as_object()?;
+    let axis = object.get("value")?.as_str()?;
+    let step = object
+        .get("params")?
+        .as_array()?
+        .first()?
+        .get("value")?
+        .as_str()?;
+    Some(format!("{axis}({step})"))
+}
+
+fn zmk_modifier_keycode(text: &str) -> Result<String> {
+    let upper = text.trim().to_ascii_uppercase();
+    let keycode = match upper.as_str() {
+        "LCTRL" | "LEFT_CONTROL" => "KC_LCTL",
+        "LSHFT" | "LSHIFT" | "LEFT_SHIFT" => "KC_LSFT",
+        "LALT" | "LEFT_ALT" => "KC_LALT",
+        "LGUI" | "LEFT_GUI" => "KC_LGUI",
+        "RCTRL" | "RIGHT_CONTROL" => "KC_RCTL",
+        "RSHFT" | "RSHIFT" | "RIGHT_SHIFT" => "KC_RSFT",
+        "RALT" | "RIGHT_ALT" => "KC_RALT",
+        "RGUI" | "RIGHT_GUI" => "KC_RGUI",
+        _ => bail!("'{text}' is not a modifier key"),
+    };
+    Ok(keycode.into())
 }
 
 fn zmk_keycode_param_to_via(value: &Value, location: &str) -> Result<u16> {
@@ -808,6 +906,12 @@ fn zmk_keycode_to_via(text: &str) -> Result<u16> {
         "C_EJECT" | "K_EJECT" => "KC_EJCT",
         "C_BRI_UP" => "KC_BRIU",
         "C_BRI_DN" => "KC_BRID",
+        "C_MEDIA_HOME" => "KC_MSEL",
+        "K_CALC" | "K_CALCULATOR" => "KC_CALC",
+        "K_WWW" => "KC_WHOM",
+        // ZMK distinguishes play-only from play/pause; the HID consumer page RMK
+        // exposes has just the toggle, so both land there.
+        "C_PLAY" => "KC_MPLY",
         _ => return keycodes::parse_keycode(&upper),
     };
     keycodes::parse_keycode(qmk)

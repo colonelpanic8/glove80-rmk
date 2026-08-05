@@ -18,6 +18,8 @@
 use anyhow::{bail, Context, Result};
 use rynk::rmk_types::action::{Action, KeyAction};
 use rynk::rmk_types::combo::Combo;
+use rynk::rmk_types::fork::{Fork, StateBits};
+use rynk::rmk_types::modifier::ModifierCombination;
 use rynk::rmk_types::morse::{Morse, MorseMode, MorseProfile, HOLD, TAP};
 use serde_json::Value;
 
@@ -118,7 +120,36 @@ pub(crate) struct Lowering<'a> {
     morses: Vec<Morse>,
     /// Encoded macro sequences, in the byte format Rynk's macro space uses.
     macros: Vec<Vec<u8>>,
+    /// Forks recovered from the export's mod-morphs.
+    forks: Vec<Fork>,
     diagnostics: Vec<Diagnostic>,
+}
+
+/// A ZMK modifier-name list (`MOD_LSFT`) as an RMK modifier combination.
+fn zmk_modifier_combination(mods: &[String]) -> Result<ModifierCombination> {
+    let mut combination = ModifierCombination::default();
+    for name in mods {
+        combination = match name.trim().to_ascii_uppercase().as_str() {
+            "MOD_LCTL" => combination.with_left_ctrl(true),
+            "MOD_LSFT" => combination.with_left_shift(true),
+            "MOD_LALT" => combination.with_left_alt(true),
+            "MOD_LGUI" => combination.with_left_gui(true),
+            "MOD_RCTL" => combination.with_right_ctrl(true),
+            "MOD_RSFT" => combination.with_right_shift(true),
+            "MOD_RALT" => combination.with_right_alt(true),
+            "MOD_RGUI" => combination.with_right_gui(true),
+            other => bail!("'{other}' is not a ZMK modifier"),
+        };
+    }
+    Ok(combination)
+}
+
+/// The same list as the fork condition's state bits.
+fn zmk_state_bits(mods: &[String]) -> Result<StateBits> {
+    Ok(StateBits {
+        modifiers: zmk_modifier_combination(mods)?,
+        ..StateBits::default()
+    })
 }
 
 /// The HID keycodes for a VIA packed-modifier byte, in a stable order so two
@@ -164,6 +195,7 @@ impl<'a> Lowering<'a> {
             layer_map,
             morses: Vec::new(),
             macros: Vec::new(),
+            forks: Vec::new(),
             diagnostics: Vec::new(),
         }
     }
@@ -186,6 +218,10 @@ impl<'a> Lowering<'a> {
 
     pub fn morses(&self) -> &[Morse] {
         &self.morses
+    }
+
+    pub fn forks(&self) -> &[Fork] {
+        &self.forks
     }
 
     pub fn macros(&self) -> &[Vec<u8>] {
@@ -215,6 +251,23 @@ impl<'a> Lowering<'a> {
     fn unmapped(&mut self, here: &dyn Fn() -> String, message: impl Into<String>) -> u16 {
         self.diagnostics
             .push(Diagnostic::new(Severity::Dropped, Some(here()), message));
+        0
+    }
+
+    /// [`Self::unmapped`] for a whole binding that failed to convert.
+    ///
+    /// Every error raised while reading a binding already names its own
+    /// location, so the prefix is stripped rather than repeated: the diagnostic
+    /// carries the location in its own field, which is what lets a report group
+    /// by it.
+    pub(crate) fn unmapped_binding(&mut self, location: String, error: &anyhow::Error) -> u16 {
+        let full = format!("{error:#}");
+        let message = full
+            .strip_prefix(&location)
+            .map(|rest| rest.trim_start_matches([' ', ':']).to_owned())
+            .unwrap_or(full);
+        self.diagnostics
+            .push(Diagnostic::new(Severity::Dropped, Some(location), message));
         0
     }
 
@@ -261,7 +314,73 @@ impl<'a> Lowering<'a> {
                 format!("macro behavior '{name}' has no Rynk equivalent"),
             ));
         }
+        if let Some(morph) = self.tables.mod_morph_named(name) {
+            return self.lower_mod_morph(&morph.clone(), here);
+        }
         Ok(self.unmapped(here, format!("unknown custom behavior '{name}'")))
+    }
+
+    /// Lowers a mod-morph into a fork.
+    ///
+    /// ZMK's mod-morph and RMK's fork are the same idea: one key whose output
+    /// swaps while a modifier is held. The keymap cell keeps the default output,
+    /// and the fork rewrites it when the modifiers match — so the key still does
+    /// the right thing on the unshifted path even if the fork table is empty.
+    ///
+    /// A fork matches on the trigger *action* rather than a key position, so the
+    /// same default output appearing elsewhere on any layer would morph too.
+    /// That ambiguity is reported rather than hidden.
+    fn lower_mod_morph(
+        &mut self,
+        morph: &super::behaviors::ModMorph,
+        here: &dyn Fn() -> String,
+    ) -> Result<u16> {
+        let default = morph
+            .cases
+            .iter()
+            .find(|case| case.mods.is_empty())
+            .with_context(|| format!("{} {} has no unmodified case", here(), morph.name))?;
+        let morphed = match morph.cases.iter().find(|case| !case.mods.is_empty()) {
+            Some(case) => case,
+            None => {
+                // Every case is unconditional, so there is nothing to fork on.
+                return self.convert_binding(&default.binding, here);
+            }
+        };
+        if morph.cases.len() > 2 {
+            self.report(
+                Severity::Approximated,
+                Some(here()),
+                format!(
+                    "{} has {} cases; a fork carries one condition, so only the first \
+                     modified case is kept",
+                    morph.name,
+                    morph.cases.len()
+                ),
+            );
+        }
+
+        let trigger = self.convert_binding(&default.binding, here)?;
+        let positive = self.convert_binding(&morphed.binding, here)?;
+        let match_any = zmk_state_bits(&morphed.mods)
+            .with_context(|| format!("{} {} condition", here(), morph.name))?;
+        let kept = zmk_modifier_combination(&morphed.keep_mods)
+            .with_context(|| format!("{} {} keepMods", here(), morph.name))?;
+
+        let fork = Fork {
+            trigger: from_via_keycode(trigger),
+            negative_output: from_via_keycode(trigger),
+            positive_output: from_via_keycode(positive),
+            match_any,
+            match_none: StateBits::default(),
+            kept_modifiers: kept,
+            bindable: true,
+        };
+        if !self.forks.contains(&fork) {
+            self.forks.push(fork);
+        }
+        // The cell holds the default output; the fork supplies the alternative.
+        Ok(trigger)
     }
 
     /// Lowers a parameterless key-sequence macro into Rynk's macro space,
@@ -439,6 +558,19 @@ impl<'a> Lowering<'a> {
                 keycodes::parse_keycode(&format!("LSFT({})", keycodes::format_keycode(tap)))
                     .with_context(|| format!("{} {} hold action", here(), hold_tap.name))?;
             (single_action(tap)?, single_action(shifted)?)
+        } else if hold_tap.tap_binding().starts_with("&sticky_key") {
+            // A modifier that arms as a one-shot when tapped and is simply held
+            // when held. `&kp MOD` on the hold side is the modifier's own
+            // keycode, which RMK holds for as long as the key is down.
+            let hold = param_text(params, 0).with_context(|| {
+                format!("{} {} is missing its hold modifier", here(), hold_tap.name)
+            })?;
+            let tap = param_text(params, 1).unwrap_or_else(|| hold.clone());
+            let held = keycodes::parse_keycode(&super::zmk_modifier_keycode(&hold)?)
+                .with_context(|| format!("{} {} hold action", here(), hold_tap.name))?;
+            let armed = keycodes::parse_keycode(&format!("OSM({})", super::zmk_modifier(&tap)?))
+                .with_context(|| format!("{} {} tap action", here(), hold_tap.name))?;
+            (single_action(armed)?, single_action(held)?)
         } else {
             bail!(
                 "{} hold-tap '{}' has no Rynk equivalent yet",
@@ -571,6 +703,24 @@ impl<'a> Lowering<'a> {
             }
         }
         out
+    }
+
+    /// A mod-morph case's output as a VIA keycode, through the same converter
+    /// the keymap path uses so a nested `LS(N9)` resolves identically.
+    fn convert_binding(&mut self, binding: &Binding, here: &dyn Fn() -> String) -> Result<u16> {
+        match binding.name() {
+            "&kp" => {
+                let param = binding
+                    .to_value()
+                    .get("params")
+                    .and_then(|params| params.as_array())
+                    .and_then(|params| params.first())
+                    .cloned()
+                    .with_context(|| format!("{} &kp is missing its keycode", here()))?;
+                super::zmk_keycode_param_to_via(&param, &here())
+            }
+            other => bail!("{} mod-morph case '{other}' has no Rynk equivalent", here()),
+        }
     }
 
     fn combo_output(&mut self, binding: &Binding, here: &dyn Fn() -> String) -> Option<KeyAction> {

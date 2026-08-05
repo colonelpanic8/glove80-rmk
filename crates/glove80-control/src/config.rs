@@ -421,7 +421,22 @@ async fn read_behaviors(client: &Client) -> Result<BehaviorSnapshot> {
         morses: client.read_all_morses().await.ok(),
         combos: client.read_all_combos().await.ok(),
         macros: read_macro_space(client).await.ok(),
+        forks: read_all_forks(client).await.ok(),
     })
+}
+
+/// Read the fork table a slot at a time.
+///
+/// The protocol has no bulk form for forks, so this walks to the capacity the
+/// device advertises. Any rejection means the firmware has no fork table, which
+/// the caller reads as "nothing to manage" rather than as a failure.
+async fn read_all_forks(client: &Client) -> Result<Vec<rynk::rmk_types::fork::Fork>> {
+    let capabilities = client.get_capabilities().await?;
+    let mut forks = Vec::new();
+    for index in 0..capabilities.max_forks {
+        forks.push(client.get_fork(index).await?);
+    }
+    Ok(forks)
 }
 
 /// Read macro space by walking it a chunk at a time.
@@ -468,6 +483,20 @@ async fn apply_behaviors(
                 .write_all_combos(combos.clone())
                 .await
                 .context("could not write the combo table")?;
+        }
+    }
+    if let Some(forks) = &desired.forks {
+        // No bulk form for forks, so write only the slots that differ.
+        let present = before.forks.as_deref().unwrap_or_default();
+        for (index, fork) in forks.iter().enumerate() {
+            if present.get(index) == Some(fork) {
+                continue;
+            }
+            let index = u8::try_from(index).context("more forks than the protocol can address")?;
+            client
+                .set_fork(index, *fork)
+                .await
+                .with_context(|| format!("could not write fork {index}"))?;
         }
     }
     if let Some(macros) = &desired.macros {

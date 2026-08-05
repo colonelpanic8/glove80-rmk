@@ -13,6 +13,10 @@ use glove80_config::{
 use serde_json::json;
 
 const TAILORKEY: &str = include_str!("fixtures/tailorkey-v52-bilateral.json");
+/// sunaku's Glorious Engrammer. Where TailorKey exercises the bilateral home-row
+/// idiom, this one exercises the tables TailorKey has none of: mod-morphs,
+/// sticky keys, and ZMK's raw mouse-axis form.
+const ENGRAMMER: &str = include_str!("fixtures/engrammer-v52a-no-code.json");
 
 fn combo_export(extra_triggers: bool) -> String {
     let mut keys = vec![json!({ "value": "&none" }); 80];
@@ -305,6 +309,73 @@ fn refusing_a_layout_names_every_binding_it_cannot_import() {
             .count(),
         2
     );
+}
+
+/// A mod-morph is a fork: one key whose output swaps while a modifier is held.
+#[test]
+fn mod_morphs_become_forks() {
+    let imported = import_moergo_layout(ENGRAMMER).expect("import");
+    // `&parang_left` is `(` alone and `<` with right shift held.
+    let forks = &imported.runtime.forks;
+    assert!(
+        forks.len() >= 2,
+        "expected the two parenthesis/angle morphs to become forks, got {forks:?}"
+    );
+    let parang = forks
+        .iter()
+        .find(|fork| fork.trigger == "LSFT(KC_9)")
+        .unwrap_or_else(|| panic!("no fork triggered by `(`: {forks:?}"));
+    assert_eq!(parang.output, "LSFT(KC_COMM)");
+    assert_eq!(parang.mods, ["RShift"]);
+    // The unshifted output stays on the key, so it still types `(` even if the
+    // fork table is empty.
+    assert_eq!(
+        imported.runtime.layers[0]
+            .keys
+            .matches("LSFT(KC_9)")
+            .count(),
+        1
+    );
+}
+
+/// A hold-tap whose tap side is a sticky key: tap arms a one-shot modifier,
+/// hold applies it directly.
+#[test]
+fn sticky_key_hold_taps_become_one_shot_morses() {
+    let imported = import_moergo_layout(ENGRAMMER).expect("import");
+    let armed = imported
+        .runtime
+        .morses
+        .iter()
+        .filter(|morse| morse.tap.as_deref() == Some("OSM(MOD_LSFT)"))
+        .collect::<Vec<_>>();
+    assert!(
+        !armed.is_empty(),
+        "expected a one-shot shift morse, got {:?}",
+        imported.runtime.morses
+    );
+    assert_eq!(armed[0].hold.as_deref(), Some("KC_LSFT"));
+}
+
+/// The only bindings this export loses are the three display-brightness
+/// keycodes RMK has no equivalent for. Everything else — 21 layers, 35 hold-taps,
+/// 25 macros, 21 combos, 2 mod-morphs — survives.
+#[test]
+fn the_engrammer_loses_only_what_rmk_cannot_express() {
+    let imported = import_moergo_layout(ENGRAMMER).expect("import");
+    let dropped: Vec<&str> = imported
+        .diagnostics
+        .iter()
+        .filter(|note| note.severity == Severity::Dropped)
+        .map(|note| note.message.as_str())
+        .collect();
+    assert_eq!(dropped.len(), 3, "unexpected drops: {dropped:?}");
+    for message in &dropped {
+        assert!(
+            message.contains("C_BRI_"),
+            "only the brightness keycodes should be unmappable, got: {message}"
+        );
+    }
 }
 
 /// A morse need not define a hold: a tap-dance defines `tap` and `double_tap`

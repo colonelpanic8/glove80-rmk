@@ -84,6 +84,35 @@ impl HoldTap {
     pub fn hold_binding(&self) -> &str {
         self.bindings.first().map_or("", String::as_str)
     }
+
+    /// The behavior invoked when the key resolves as a tap. ZMK writes a
+    /// hold-tap's bindings as `<&hold>, <&tap>`.
+    pub fn tap_binding(&self) -> &str {
+        self.bindings.get(1).map_or("", String::as_str)
+    }
+}
+
+/// A `zmk,behavior-mod-morph` node: one key whose output depends on which
+/// modifiers are held. The first case with no `mods` is the default output.
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ModMorph {
+    pub name: String,
+    #[serde(default)]
+    pub cases: Vec<MorphCase>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct MorphCase {
+    pub binding: Binding,
+    /// ZMK modifier names (`MOD_LSFT`) that select this case. Empty means the
+    /// default.
+    #[serde(default)]
+    pub mods: Vec<String>,
+    /// Modifiers passed through to the output rather than consumed.
+    #[serde(default)]
+    pub keep_mods: Vec<String>,
 }
 
 /// A `zmk,behavior-macro` node. `params` is non-empty for the one- and
@@ -121,6 +150,7 @@ pub(crate) struct BehaviorTables {
     pub hold_taps: Vec<HoldTap>,
     pub macros: Vec<Macro>,
     pub combos: Vec<Combo>,
+    pub mod_morphs: Vec<ModMorph>,
     /// `custom_defined_behaviors`, when the export carries raw devicetree.
     pub custom_devicetree: Option<String>,
     /// Names of the layers `inputListeners` rescales pointer movement on.
@@ -136,6 +166,7 @@ impl BehaviorTables {
             hold_taps: table(layout, "holdTaps")?,
             macros: table(layout, "macros")?,
             combos: table(layout, "combos")?,
+            mod_morphs: table(layout, "modMorphs")?,
             custom_devicetree: layout
                 .get("custom_defined_behaviors")
                 .and_then(Value::as_str)
@@ -148,6 +179,10 @@ impl BehaviorTables {
 
     pub fn hold_tap(&self, name: &str) -> Option<&HoldTap> {
         self.hold_taps.iter().find(|entry| entry.name == name)
+    }
+
+    pub fn mod_morph_named(&self, name: &str) -> Option<&ModMorph> {
+        self.mod_morphs.iter().find(|morph| morph.name == name)
     }
 
     pub fn macro_named(&self, name: &str) -> Option<&Macro> {

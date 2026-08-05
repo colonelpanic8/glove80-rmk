@@ -7,6 +7,7 @@
 
 use rynk::rmk_types::action::KeyAction;
 use rynk::rmk_types::combo::Combo;
+use rynk::rmk_types::fork::Fork;
 use rynk::rmk_types::morse::Morse;
 use rynk::rmk_types::protocol::rynk::{
     LightingBackgroundState, LightingExtendedConditionalSceneCell, LightingExtensionParam,
@@ -93,6 +94,9 @@ pub struct BehaviorSnapshot {
     /// concatenated, each closed by its own terminator, which is what
     /// `TriggerMacro` indexes into.
     pub macros: Option<Vec<u8>>,
+    /// Forks: one key's output swapped while a modifier is held. Not addressed
+    /// by index from a keymap cell — a fork matches the action it replaces.
+    pub forks: Option<Vec<Fork>>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, Tsify)]

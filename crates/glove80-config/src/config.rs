@@ -48,6 +48,8 @@ pub struct RuntimeConfig {
     pub combos: Vec<ComboConfig>,
     #[serde(default, rename = "macro", skip_serializing_if = "Vec::is_empty")]
     pub macros: Vec<MacroConfig>,
+    #[serde(default, rename = "fork", skip_serializing_if = "Vec::is_empty")]
+    pub forks: Vec<ForkConfig>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub lighting: Option<LightingConfig>,
 }
@@ -104,6 +106,27 @@ pub struct MorseConfig {
     /// `tap-unless-interrupted`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mode: Option<String>,
+}
+
+/// A fork: one key whose output swaps while a modifier is held — ZMK's
+/// mod-morph.
+///
+/// A fork matches on the *action* it replaces rather than a key position, so
+/// `trigger` follows that action wherever it sits. `keep_mods` names the
+/// modifiers passed through to the output instead of being consumed.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ForkConfig {
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub name: String,
+    /// The action the fork replaces, and its output when the condition is unmet.
+    pub trigger: String,
+    /// Output while any modifier in `mods` is held.
+    pub output: String,
+    /// Modifiers that select `output`, spelled the way `keys` spells them.
+    pub mods: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub keep_mods: Vec<String>,
 }
 
 /// A combo: pressing every key in `keys` together emits `output`.
@@ -451,6 +474,10 @@ pub struct BehaviorSnapshot {
     /// Macro space as the firmware stores it: the sequences concatenated, each
     /// ended by its own terminator, which is what `TriggerMacro` indexes into.
     pub macros: Option<Vec<u8>>,
+    /// Forks: one key's output swapped while a modifier is held. Unlike the
+    /// tables above, a keymap cell does not address these by index — a fork
+    /// matches on the action it replaces.
+    pub forks: Option<Vec<rynk::rmk_types::fork::Fork>>,
 }
 
 /// The lighting half of a [`Snapshot`]. Its `Option` fields distinguish state a
@@ -543,6 +570,18 @@ impl RuntimeConfig {
                             .collect::<Result<Vec<_>>>()
                     })
                     .transpose()?,
+                forks: (!self.forks.is_empty())
+                    .then(|| {
+                        self.forks
+                            .iter()
+                            .enumerate()
+                            .map(|(index, fork)| {
+                                fork.to_wire()
+                                    .with_context(|| format!("[[fork]] {index} ({})", fork.name))
+                            })
+                            .collect::<Result<Vec<_>>>()
+                    })
+                    .transpose()?,
                 macros: (!self.macros.is_empty())
                     .then(|| {
                         let mut space = Vec::new();
@@ -604,6 +643,21 @@ impl RuntimeConfig {
                 .map(|(index, combo)| {
                     let mut config = ComboConfig::from_wire(combo, index);
                     if let Some(old) = labels.and_then(|config| config.combos.get(index)) {
+                        config.name = old.name.clone();
+                    }
+                    config
+                })
+                .collect(),
+            forks: snapshot
+                .behaviors
+                .forks
+                .as_deref()
+                .unwrap_or_default()
+                .iter()
+                .enumerate()
+                .map(|(index, fork)| {
+                    let mut config = ForkConfig::from_wire(fork, index);
+                    if let Some(old) = labels.and_then(|config| config.forks.get(index)) {
                         config.name = old.name.clone();
                     }
                     config
@@ -720,6 +774,86 @@ impl MorseConfig {
             }),
         }
     }
+}
+
+impl ForkConfig {
+    pub(crate) fn to_wire(&self) -> Result<rynk::rmk_types::fork::Fork> {
+        use rynk::rmk_types::fork::{Fork, StateBits};
+
+        let trigger =
+            crate::rynk_keycode::from_via_keycode(crate::keycodes::parse_keycode(&self.trigger)?);
+        let output =
+            crate::rynk_keycode::from_via_keycode(crate::keycodes::parse_keycode(&self.output)?);
+        Ok(Fork {
+            trigger,
+            negative_output: trigger,
+            positive_output: output,
+            match_any: StateBits {
+                modifiers: modifier_list_to_wire(&self.mods)?,
+                ..StateBits::default()
+            },
+            match_none: StateBits::default(),
+            kept_modifiers: modifier_list_to_wire(&self.keep_mods)?,
+            bindable: true,
+        })
+    }
+
+    pub(crate) fn from_wire(fork: &rynk::rmk_types::fork::Fork, index: usize) -> Self {
+        Self {
+            name: format!("fork {index}"),
+            trigger: crate::keycodes::format_keycode(crate::rynk_keycode::to_via_keycode(
+                fork.trigger,
+            )),
+            output: crate::keycodes::format_keycode(crate::rynk_keycode::to_via_keycode(
+                fork.positive_output,
+            )),
+            mods: modifier_list_from_wire(fork.match_any.modifiers),
+            keep_mods: modifier_list_from_wire(fork.kept_modifiers),
+        }
+    }
+}
+
+/// Modifier names as the wire combination. Spelled like `keys` spells them
+/// (`LShift`), not like ZMK does (`MOD_LSFT`), because this is a Rynk file.
+fn modifier_list_to_wire(
+    names: &[String],
+) -> Result<rynk::rmk_types::modifier::ModifierCombination> {
+    let mut combination = rynk::rmk_types::modifier::ModifierCombination::default();
+    for name in names {
+        combination = match name.trim().to_ascii_lowercase().as_str() {
+            "lctrl" | "lctl" => combination.with_left_ctrl(true),
+            "lshift" | "lsft" => combination.with_left_shift(true),
+            "lalt" => combination.with_left_alt(true),
+            "lgui" => combination.with_left_gui(true),
+            "rctrl" | "rctl" => combination.with_right_ctrl(true),
+            "rshift" | "rsft" => combination.with_right_shift(true),
+            "ralt" => combination.with_right_alt(true),
+            "rgui" => combination.with_right_gui(true),
+            other => bail!("'{other}' is not a modifier name"),
+        };
+    }
+    Ok(combination)
+}
+
+fn modifier_list_from_wire(
+    combination: rynk::rmk_types::modifier::ModifierCombination,
+) -> Vec<String> {
+    let mut names = Vec::new();
+    for (held, name) in [
+        (combination.left_ctrl(), "LCtrl"),
+        (combination.left_shift(), "LShift"),
+        (combination.left_alt(), "LAlt"),
+        (combination.left_gui(), "LGui"),
+        (combination.right_ctrl(), "RCtrl"),
+        (combination.right_shift(), "RShift"),
+        (combination.right_alt(), "RAlt"),
+        (combination.right_gui(), "RGui"),
+    ] {
+        if held {
+            names.push(name.to_owned());
+        }
+    }
+    names
 }
 
 impl ComboConfig {
@@ -1032,6 +1166,14 @@ pub fn differences(desired: &Snapshot, live: &Snapshot) -> Vec<String> {
         for (index, combo) in wanted.iter().enumerate() {
             if present.get(index) != Some(combo) {
                 result.push(format!("combo {index}: file differs from keyboard"));
+            }
+        }
+    }
+    if let Some(wanted) = &desired.behaviors.forks {
+        let present = live.behaviors.forks.as_deref().unwrap_or_default();
+        for (index, fork) in wanted.iter().enumerate() {
+            if present.get(index) != Some(fork) {
+                result.push(format!("fork {index}: file differs from keyboard"));
             }
         }
     }

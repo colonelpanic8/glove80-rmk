@@ -84,6 +84,7 @@ pub fn snapshot_from_wire(
             morses: snapshot.behaviors.morses.clone(),
             combos: snapshot.behaviors.combos.clone(),
             macros: snapshot.behaviors.macros.clone(),
+            forks: snapshot.behaviors.forks.clone(),
         },
     })
 }
@@ -174,6 +175,7 @@ pub fn snapshot_to_wire(
             morses: snapshot.behaviors.morses.clone(),
             combos: snapshot.behaviors.combos.clone(),
             macros: snapshot.behaviors.macros.clone(),
+            forks: snapshot.behaviors.forks.clone(),
         },
     })
 }
