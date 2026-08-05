@@ -1,0 +1,732 @@
+//! Lowering of a MoErgo export's ZMK behaviors onto the Rynk runtime model.
+//!
+//! ZMK expresses a custom behavior as a devicetree node that a key binding
+//! references by name. Rynk has no such indirection: a keymap cell holds a
+//! typed action, and anything with its own timing is a [`Morse`] in a table the
+//! cell addresses by index. Lowering therefore allocates one morse per distinct
+//! (behavior, parameters) triple actually used by a layer and rewrites the cell
+//! to `TD(n)`.
+//!
+//! Everything produced here is runtime state. The morse table, the combo table
+//! and the keymap all have Rynk setters, so an import lands over the wire; only
+//! the table *capacities* and the hand tags that [`unilateral_tap`] reads are
+//! compile-time, and those are properties of the firmware rather than of any
+//! one layout.
+//!
+//! [`unilateral_tap`]: rynk::rmk_types::morse::MorseProfile::unilateral_tap
+
+use anyhow::{bail, Context, Result};
+use rynk::rmk_types::action::{Action, KeyAction};
+use rynk::rmk_types::combo::Combo;
+use rynk::rmk_types::morse::{Morse, MorseMode, MorseProfile, HOLD, TAP};
+use serde_json::Value;
+
+use super::behaviors::{BehaviorTables, Binding, HoldTap};
+use crate::keycodes;
+use crate::rynk_keycode::from_via_keycode;
+
+/// Something the import could not represent, named by where it came from.
+///
+/// Import does not fail on these: a layout is usually mostly portable, and a
+/// report of the exact keys that are not is more useful than a single error
+/// that hides the rest of the work.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Severity {
+    /// The binding has no equivalent and the key was left empty.
+    Dropped,
+    /// The binding was imported, but the result is not exactly what the export
+    /// asked for.
+    Approximated,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Diagnostic {
+    pub severity: Severity,
+    /// Human-readable source location, e.g. `layer 3 (Cursor), editor key 41`.
+    pub location: Option<String>,
+    pub message: String,
+}
+
+impl Diagnostic {
+    pub(crate) fn new(
+        severity: Severity,
+        location: Option<String>,
+        message: impl Into<String>,
+    ) -> Self {
+        Self {
+            severity,
+            location,
+            message: message.into(),
+        }
+    }
+}
+
+/// The bilateral home-row-mod idiom, recovered from a set of hold-taps.
+///
+/// ZMK cannot express "this hold is reachable only from the other hand", so
+/// TailorKey-style layouts build it out of one momentary layer per finger: the
+/// hold binding presses the modifier *and* activates that finger's layer, whose
+/// same-hand keys are rebound to variants that force the held key back to a
+/// tap. Rynk computes the same decision from the layout's hand tags, so the
+/// finger layers and their chained macros carry no information here and are
+/// dropped.
+#[derive(Debug, Default)]
+pub(crate) struct HrmIdiom {
+    /// Editor layer indices that exist only to serve the idiom.
+    pub finger_layers: Vec<usize>,
+}
+
+impl HrmIdiom {
+    /// A hold-tap belongs to the idiom when it restricts its hold to a set of
+    /// key positions, which is the only thing ZMK offers for the purpose.
+    pub fn is_member(hold_tap: &HoldTap) -> bool {
+        !hold_tap.hold_trigger_key_positions.is_empty()
+    }
+
+    pub fn detect(tables: &BehaviorTables) -> Self {
+        let mut finger_layers = Vec::new();
+        for hold_tap in tables.hold_taps.iter().filter(|ht| Self::is_member(ht)) {
+            // The hold side is a macro that presses the modifier and turns on
+            // the finger layer; the `&mo` inside it names the layer to drop.
+            let Some(hold_macro) = tables.macro_named(hold_tap.hold_binding()) else {
+                continue;
+            };
+            for binding in &hold_macro.bindings {
+                if binding.name() != "&mo" {
+                    continue;
+                }
+                if let Some(layer) = binding.param_u8(0) {
+                    let layer = layer as usize;
+                    if !finger_layers.contains(&layer) {
+                        finger_layers.push(layer);
+                    }
+                }
+            }
+        }
+        finger_layers.sort_unstable();
+        Self { finger_layers }
+    }
+}
+
+/// Allocates the morse table while rewriting keymap cells, and collects
+/// everything that did not survive the trip.
+pub(crate) struct Lowering<'a> {
+    tables: &'a BehaviorTables,
+    hrm: HrmIdiom,
+    /// Editor layer index -> Rynk layer index, with dropped layers absent.
+    layer_map: Vec<Option<u8>>,
+    morses: Vec<Morse>,
+    /// Encoded macro sequences, in the byte format Rynk's macro space uses.
+    macros: Vec<Vec<u8>>,
+    diagnostics: Vec<Diagnostic>,
+}
+
+/// The HID keycodes for a VIA packed-modifier byte, in a stable order so two
+/// identical macros encode identically and share a slot.
+fn modifier_keys(packed: u8) -> Vec<u8> {
+    const MODIFIERS: [(u8, u8); 8] = [
+        (0b0000_0001, 0xe0), // LCtrl
+        (0b0000_0010, 0xe1), // LShift
+        (0b0000_0100, 0xe2), // LAlt
+        (0b0000_1000, 0xe3), // LGui
+        (0b0001_0001, 0xe4), // RCtrl
+        (0b0001_0010, 0xe5), // RShift
+        (0b0001_0100, 0xe6), // RAlt
+        (0b0001_1000, 0xe7), // RGui
+    ];
+    let right = packed & 0b0001_0000 != 0;
+    MODIFIERS
+        .iter()
+        .filter(|(bit, _)| {
+            let is_right = bit & 0b0001_0000 != 0;
+            is_right == right && packed & bit & 0b0000_1111 != 0
+        })
+        .map(|(_, key)| *key)
+        .collect()
+}
+
+impl<'a> Lowering<'a> {
+    pub fn new(tables: &'a BehaviorTables, layer_count: usize) -> Self {
+        let hrm = HrmIdiom::detect(tables);
+        let mut layer_map = Vec::with_capacity(layer_count);
+        let mut next = 0u8;
+        for editor_layer in 0..layer_count {
+            if hrm.finger_layers.contains(&editor_layer) {
+                layer_map.push(None);
+            } else {
+                layer_map.push(Some(next));
+                next += 1;
+            }
+        }
+        Self {
+            tables,
+            hrm,
+            layer_map,
+            morses: Vec::new(),
+            macros: Vec::new(),
+            diagnostics: Vec::new(),
+        }
+    }
+
+    pub fn finger_layers(&self) -> &[usize] {
+        &self.hrm.finger_layers
+    }
+
+    /// The Rynk index of an editor layer, or `None` when that layer was
+    /// dropped as part of the home-row-mod idiom.
+    pub fn remap_layer(&self, editor_layer: usize) -> Option<u8> {
+        self.layer_map.get(editor_layer).copied().flatten()
+    }
+
+    /// The whole remap, so a caller can hold it across a loop that also needs
+    /// `&mut self` to allocate morses.
+    pub fn layer_map(&self) -> &[Option<u8>] {
+        &self.layer_map
+    }
+
+    pub fn morses(&self) -> &[Morse] {
+        &self.morses
+    }
+
+    pub fn macros(&self) -> &[Vec<u8>] {
+        &self.macros
+    }
+
+    pub fn diagnostics(&self) -> &[Diagnostic] {
+        &self.diagnostics
+    }
+
+    pub fn report(
+        &mut self,
+        severity: Severity,
+        location: Option<String>,
+        message: impl Into<String>,
+    ) {
+        self.diagnostics
+            .push(Diagnostic::new(severity, location, message));
+    }
+
+    /// Records a key the import cannot represent and leaves the cell empty.
+    ///
+    /// A layout is usually mostly portable, so refusing the whole import over
+    /// one binding hides the rest of the work. The cell becomes `KC_NO` and the
+    /// diagnostic names it, which is what makes the gap reviewable instead of
+    /// silent.
+    fn unmapped(&mut self, here: &dyn Fn() -> String, message: impl Into<String>) -> u16 {
+        self.diagnostics
+            .push(Diagnostic::new(Severity::Dropped, Some(here()), message));
+        0
+    }
+
+    /// Interns a morse, so repeated bindings of the same behavior with the same
+    /// parameters (every `&AS_v1_TKZ` on a row, say) share one table slot.
+    fn intern(&mut self, morse: Morse) -> Result<u16> {
+        let index = match self.morses.iter().position(|entry| *entry == morse) {
+            Some(index) => index,
+            None => {
+                self.morses.push(morse);
+                self.morses.len() - 1
+            }
+        };
+        let index = u8::try_from(index).map_err(|_| {
+            anyhow::anyhow!("layout needs more than 256 morse keys, which Rynk cannot address")
+        })?;
+        Ok(0x5700 | index as u16)
+    }
+
+    /// Resolves a binding that names a custom behavior, returning the VIA
+    /// keycode the keymap cell should hold.
+    ///
+    /// `params` are the editor's positional parameters for the cell and `here`
+    /// names the cell for diagnostics.
+    pub fn resolve(
+        &mut self,
+        name: &str,
+        params: &[Value],
+        here: &dyn Fn() -> String,
+    ) -> Result<u16> {
+        if let Some(hold_tap) = self.tables.hold_tap(name) {
+            return self.lower_hold_tap(&hold_tap.clone(), params, here);
+        }
+        if let Some(entry) = self.tables.macro_named(name) {
+            let entry = entry.clone();
+            if let Some((hold_tap, forwarded)) = self.forwarded_hold_tap(&entry, params) {
+                return self.lower_hold_tap(&hold_tap, &forwarded, here);
+            }
+            if let Some(code) = self.lower_macro(&entry) {
+                return Ok(code);
+            }
+            return Ok(self.unmapped(
+                here,
+                format!("macro behavior '{name}' has no Rynk equivalent"),
+            ));
+        }
+        Ok(self.unmapped(here, format!("unknown custom behavior '{name}'")))
+    }
+
+    /// Lowers a parameterless key-sequence macro into Rynk's macro space,
+    /// returning the `TriggerMacro` keycode that runs it.
+    ///
+    /// Returns `None` for anything with parameters or a hold-until-release
+    /// step, which the byte format has no room for.
+    fn lower_macro(&mut self, entry: &super::behaviors::Macro) -> Option<u16> {
+        if !entry.params.is_empty() {
+            return None;
+        }
+
+        // ZMK's `&macro_tap` / `&macro_press` / `&macro_release` set the mode
+        // for the bindings that follow; a sequence starts out tapping.
+        #[derive(Clone, Copy, PartialEq)]
+        enum Mode {
+            Tap,
+            Press,
+            Release,
+        }
+        let mut mode = Mode::Tap;
+        let mut operations: Vec<u8> = Vec::new();
+        for binding in &entry.bindings {
+            match binding.name() {
+                "&macro_tap" => mode = Mode::Tap,
+                "&macro_press" => mode = Mode::Press,
+                "&macro_release" => mode = Mode::Release,
+                "&macro_pause_for_release" | "&macro_param_1to1" | "&macro_param_1to2" => {
+                    return None
+                }
+                "&kp" => {
+                    let code = binding.params.first().and_then(|param| {
+                        super::zmk_keycode_param_to_via(&param.to_value(), "").ok()
+                    })?;
+                    let key = (code & 0xff) as u8;
+                    // A modified keycode has no single-byte form, so the
+                    // modifiers are pressed around the key instead.
+                    let modifiers = modifier_keys((code >> 8) as u8);
+                    for modifier in &modifiers {
+                        operations.extend_from_slice(&[0x01, 0x02, *modifier]);
+                    }
+                    operations.extend_from_slice(&[
+                        0x01,
+                        match mode {
+                            Mode::Tap => 0x01,
+                            Mode::Press => 0x02,
+                            Mode::Release => 0x03,
+                        },
+                        key,
+                    ]);
+                    for modifier in modifiers.iter().rev() {
+                        operations.extend_from_slice(&[0x01, 0x03, *modifier]);
+                    }
+                }
+                _ => return None,
+            }
+        }
+        if operations.is_empty() {
+            return None;
+        }
+        operations.push(0x00);
+
+        let index = match self.macros.iter().position(|entry| *entry == operations) {
+            Some(index) => index,
+            None => {
+                self.macros.push(operations);
+                self.macros.len() - 1
+            }
+        };
+        // `TriggerMacro` has five bits of index in the VIA encoding.
+        (index < 32).then_some(0x7700 | index as u16)
+    }
+
+    /// Recognizes a macro that exists only to hand its own parameters to a
+    /// hold-tap and hold it until release.
+    ///
+    /// ZMK needs the wrapper because a hold-tap node takes exactly two
+    /// parameters and a key binding supplies one; the macro fans that single
+    /// parameter out with `&macro_param_1to1` / `&macro_param_1to2`. The
+    /// wrapper carries no behavior of its own, so lowering looks through it and
+    /// returns the hold-tap with its placeholders filled in.
+    fn forwarded_hold_tap(
+        &self,
+        entry: &super::behaviors::Macro,
+        params: &[Value],
+    ) -> Option<(HoldTap, Vec<Value>)> {
+        // `&macro_param_AtoB` routes the invoking parameter A to placeholder B.
+        let mut routes: Vec<(usize, usize)> = Vec::new();
+        for binding in &entry.bindings {
+            let name = binding.name();
+            if let Some(rest) = name.strip_prefix("&macro_param_") {
+                if let Some((from, to)) = rest.split_once("to") {
+                    if let (Ok(from), Ok(to)) = (from.parse::<usize>(), to.parse::<usize>()) {
+                        routes.push((from, to));
+                    }
+                }
+                continue;
+            }
+            let Some(hold_tap) = self.tables.hold_tap(name) else {
+                continue;
+            };
+            let forwarded = binding
+                .params
+                .iter()
+                .enumerate()
+                .map(|(index, param)| {
+                    if param.name() != "MACRO_PLACEHOLDER" {
+                        return param.value.clone();
+                    }
+                    routes
+                        .iter()
+                        .find(|(_, to)| *to == index + 1)
+                        .and_then(|(from, _)| params.get(from - 1).cloned())
+                        .unwrap_or(Value::Null)
+                })
+                .collect();
+            return Some((hold_tap.clone(), forwarded));
+        }
+        None
+    }
+
+    fn lower_hold_tap(
+        &mut self,
+        hold_tap: &HoldTap,
+        params: &[Value],
+        here: &dyn Fn() -> String,
+    ) -> Result<u16> {
+        let profile = profile_of(hold_tap);
+
+        // A hold-tap reaches a keymap cell with its two parameters already
+        // bound. Which parameter is the tap is settled by the node's
+        // `bindings`, not by position, so each shape reads them separately.
+        //
+        // Both sides are built by spelling the equivalent VIA keycode and
+        // decoding it, which keeps this path on the same conversion the keymap
+        // already trusts instead of assembling typed actions by hand.
+        let (tap_action, hold_action) = if HrmIdiom::is_member(hold_tap) {
+            // Home row mod: hold is always a plain modifier.
+            let modifier = param_text(params, 0)
+                .with_context(|| format!("{} {} is missing its modifier", here(), hold_tap.name))?;
+            let modifier = super::zmk_modifier(&modifier)
+                .with_context(|| format!("{} {} hold action", here(), hold_tap.name))?;
+            let tap = plain_key(keycode_param(params, 1, here)?, hold_tap, here)?;
+            tap_hold_sides(
+                &format!("MT({modifier}, {})", keycodes::format_keycode(tap)),
+                hold_tap,
+                here,
+            )?
+        } else if hold_tap.hold_binding() == "&mo" {
+            // Thumb layer access: hold turns on a layer, tap sends a key.
+            let editor_layer = param_u8(params, 0)
+                .with_context(|| format!("{} {} is missing its layer", here(), hold_tap.name))?
+                as usize;
+            let layer = self.remap_layer(editor_layer).with_context(|| {
+                format!(
+                    "{} {} targets layer {editor_layer}, which the import dropped",
+                    here(),
+                    hold_tap.name
+                )
+            })?;
+            let tap = plain_key(keycode_param(params, 1, here)?, hold_tap, here)?;
+            tap_hold_sides(
+                &format!("LT({layer}, {})", keycodes::format_keycode(tap)),
+                hold_tap,
+                here,
+            )?
+        } else if self
+            .tables
+            .macro_named(hold_tap.hold_binding())
+            .is_some_and(is_shift_wrapper)
+        {
+            // Autoshift: tap sends the key, hold sends it shifted.
+            let tap = plain_key(keycode_param(params, 0, here)?, hold_tap, here)?;
+            let shifted =
+                keycodes::parse_keycode(&format!("LSFT({})", keycodes::format_keycode(tap)))
+                    .with_context(|| format!("{} {} hold action", here(), hold_tap.name))?;
+            (single_action(tap)?, single_action(shifted)?)
+        } else {
+            bail!(
+                "{} hold-tap '{}' has no Rynk equivalent yet",
+                here(),
+                hold_tap.name
+            );
+        };
+
+        let mut morse = Morse {
+            profile,
+            ..Morse::default()
+        };
+        let _ = morse.put(TAP, tap_action);
+        let _ = morse.put(HOLD, hold_action);
+        self.intern(morse)
+    }
+
+    /// Lowers the combo table.
+    ///
+    /// ZMK matches a combo on key *positions*; Rynk matches on the *actions*
+    /// those positions hold, so each combo is resolved against the layer it is
+    /// declared for. A combo listing several layers becomes one Rynk combo per
+    /// layer, because `Combo::layer` takes a single index.
+    pub fn lower_combos(
+        &mut self,
+        action_at: &dyn Fn(usize, usize) -> Option<KeyAction>,
+        layer_count: usize,
+    ) -> Vec<Combo> {
+        let mut out = Vec::new();
+        // Rynk has one combo window for the whole keyboard, so the export's
+        // per-combo timeouts can only be honoured when they agree.
+        let mut windows: Vec<u32> = self
+            .tables
+            .combos
+            .iter()
+            .filter(|combo| !combo.key_positions.is_empty())
+            .filter_map(|combo| combo.timeout_ms)
+            .collect();
+        windows.sort_unstable();
+        windows.dedup();
+        let shared_timeout = (windows.len() == 1).then(|| windows[0]);
+
+        for combo in self.tables.combos.clone() {
+            // A template may carry combos purely as metadata to preserve on
+            // export; without trigger positions there is nothing to import.
+            if combo.key_positions.is_empty() {
+                continue;
+            }
+            let here = || format!("combo '{}'", combo.name);
+            if let Some(timeout) = combo.timeout_ms {
+                if Some(timeout) != shared_timeout {
+                    self.report(
+                        Severity::Approximated,
+                        Some(here()),
+                        format!(
+                            "wants a {timeout} ms window, but Rynk's combo timeout is global; \
+                             the shared setting applies instead"
+                        ),
+                    );
+                }
+            }
+            let Some(output) = self.combo_output(&combo.binding, &here) else {
+                continue;
+            };
+
+            // No `layers` key means every layer; -1 appears in exports as the
+            // same "any layer" marker.
+            let editor_layers: Vec<usize> = match &combo.layers {
+                Some(layers) if !layers.iter().any(|layer| *layer < 0) => {
+                    layers.iter().map(|layer| *layer as usize).collect()
+                }
+                _ => (0..layer_count).collect(),
+            };
+
+            for editor_layer in editor_layers {
+                let Some(layer) = self.remap_layer(editor_layer) else {
+                    continue;
+                };
+                let mut actions = heapless::Vec::new();
+                let mut usable = true;
+                for position in &combo.key_positions {
+                    match action_at(editor_layer, *position) {
+                        Some(action) if actions.push(action).is_ok() => {}
+                        Some(_) => {
+                            self.report(
+                                Severity::Dropped,
+                                Some(here()),
+                                "has more keys than Rynk's combo length allows",
+                            );
+                            usable = false;
+                            break;
+                        }
+                        None => {
+                            self.report(
+                                Severity::Dropped,
+                                Some(here()),
+                                format!("key position {position} is not readable on layer {editor_layer}"),
+                            );
+                            usable = false;
+                            break;
+                        }
+                    }
+                }
+                if usable {
+                    out.push(Combo {
+                        actions,
+                        output,
+                        layer: Some(layer),
+                    });
+                }
+            }
+        }
+        out
+    }
+
+    fn combo_output(&mut self, binding: &Binding, here: &dyn Fn() -> String) -> Option<KeyAction> {
+        match binding.name() {
+            "&kp" => binding
+                .param_text(0)
+                .and_then(|code| super::zmk_keycode_to_via(&code).ok())
+                .map(from_via_keycode),
+            "&caps_word" => Some(from_via_keycode(
+                crate::keycodes::parse_keycode("QK_CAPS_WORD_TOGGLE").ok()?,
+            )),
+            "&tog" => binding
+                .param_u8(0)
+                .and_then(|layer| self.remap_layer(layer as usize))
+                .map(|layer| KeyAction::Single(Action::LayerToggle(layer))),
+            // A window-switcher chord: hold a modifier and a layer together for
+            // as long as the combo keys are held, so the layer's Tab steps
+            // through the list.
+            name if self
+                .tables
+                .macro_named(name)
+                .is_some_and(holds_modifier_with_layer) =>
+            {
+                let modifier = binding.param_text(0)?;
+                let modifier = super::zmk_modifier(&modifier).ok()?;
+                let layer = self.remap_layer(binding.param_u8(1)? as usize)?;
+                // ZMK's version also taps Tab once on activation; Rynk's
+                // `LM` has no room for that, so the first step is manual.
+                self.report(
+                    Severity::Approximated,
+                    Some(here()),
+                    format!(
+                        "'{name}' also taps Tab when the chord engages, which LM({layer}, \
+                         {modifier}) does not reproduce; the first step is a manual Tab"
+                    ),
+                );
+                keycodes::parse_keycode(&format!("LM({layer}, {modifier})"))
+                    .ok()
+                    .map(from_via_keycode)
+            }
+            other => {
+                self.report(
+                    Severity::Approximated,
+                    Some(here()),
+                    format!("output behavior '{other}' has no Rynk equivalent"),
+                );
+                None
+            }
+        }
+    }
+}
+
+/// An editor parameter is either a bare value or a `{ "value": ... }` wrapper.
+fn param_value(params: &[Value], index: usize) -> Option<&Value> {
+    params.get(index).map(|param| {
+        param
+            .as_object()
+            .and_then(|object| object.get("value"))
+            .unwrap_or(param)
+    })
+}
+
+fn param_text(params: &[Value], index: usize) -> Option<String> {
+    param_value(params, index).map(|value| match value {
+        Value::String(text) => text.clone(),
+        other => other.to_string(),
+    })
+}
+
+fn param_u8(params: &[Value], index: usize) -> Option<u8> {
+    param_value(params, index)
+        .and_then(Value::as_u64)
+        .and_then(|value| u8::try_from(value).ok())
+}
+
+fn keycode_param(params: &[Value], index: usize, here: &dyn Fn() -> String) -> Result<u16> {
+    let value = params
+        .get(index)
+        .with_context(|| format!("{} is missing parameter {}", here(), index + 1))?;
+    super::zmk_keycode_param_to_via(value, &here())
+}
+
+fn single_action(code: u16) -> Result<Action> {
+    match from_via_keycode(code) {
+        KeyAction::Single(action) => Ok(action),
+        _ => bail!("only a plain key or action can sit on this side of a tap-hold"),
+    }
+}
+
+/// The tap side of a tap-hold must be an unmodified HID key, because that is
+/// all the `MT`/`LT` keycode encodings have room for.
+fn plain_key(code: u16, hold_tap: &HoldTap, here: &dyn Fn() -> String) -> Result<u16> {
+    if code > 0xff {
+        bail!(
+            "{} {} tap action must be an unmodified HID key",
+            here(),
+            hold_tap.name
+        );
+    }
+    Ok(code)
+}
+
+/// Splits a spelled `MT`/`LT` keycode back into its (tap, hold) actions.
+fn tap_hold_sides(
+    spelling: &str,
+    hold_tap: &HoldTap,
+    here: &dyn Fn() -> String,
+) -> Result<(Action, Action)> {
+    let code = keycodes::parse_keycode(spelling)
+        .with_context(|| format!("{} {}", here(), hold_tap.name))?;
+    match from_via_keycode(code) {
+        KeyAction::TapHold(tap, hold, _) => Ok((tap, hold)),
+        _ => bail!("{} {} did not lower to a tap-hold", here(), hold_tap.name),
+    }
+}
+
+/// Whether a macro turns on a layer *and* holds a modifier until its own key
+/// is released, which is what a window-switcher chord is built from.
+fn holds_modifier_with_layer(entry: &super::behaviors::Macro) -> bool {
+    entry.params.len() == 2
+        && entry
+            .bindings
+            .iter()
+            .any(|binding| binding.name() == "&macro_pause_for_release")
+        && entry.bindings.iter().any(|binding| binding.name() == "&mo")
+}
+
+/// Whether a macro is the "press shift, tap the parameter, release shift"
+/// shape that autoshift is built from.
+fn is_shift_wrapper(entry: &super::behaviors::Macro) -> bool {
+    let mut presses_shift = false;
+    let mut taps_param = false;
+    for binding in &entry.bindings {
+        match binding.name() {
+            "&kp" => {
+                if binding
+                    .param_text(0)
+                    .is_some_and(|code| code == "LSHFT" || code == "RSHFT")
+                {
+                    presses_shift = true;
+                }
+            }
+            "&macro_param_1to1" => taps_param = true,
+            _ => {}
+        }
+    }
+    presses_shift && taps_param
+}
+
+/// The Rynk profile equivalent of a ZMK hold-tap node's timing fields.
+///
+/// `unilateral_tap` is set for every member of the home-row-mod idiom: it is
+/// what replaces the node's `hold-trigger-key-positions`, which Rynk applies
+/// only to profile-indexed tap-holds and never to a morse key.
+fn profile_of(hold_tap: &HoldTap) -> MorseProfile {
+    let mode = match hold_tap.flavor.as_deref() {
+        Some("tap-preferred") => Some(MorseMode::Normal),
+        Some("hold-preferred") => Some(MorseMode::HoldOnOtherPress),
+        Some("balanced") => Some(MorseMode::PermissiveHold),
+        Some("tap-unless-interrupted") => Some(MorseMode::TapUnlessInterrupted),
+        _ => None,
+    };
+    MorseProfile::const_default()
+        .with_mode(mode)
+        .with_hold_timeout_ms(
+            hold_tap
+                .tapping_term_ms
+                .and_then(|ms| u16::try_from(ms).ok()),
+        )
+        .with_quick_tap_timeout_ms(hold_tap.quick_tap_ms.and_then(|ms| u16::try_from(ms).ok()))
+        .with_prior_idle_time_ms(
+            hold_tap
+                .require_prior_idle_ms
+                .and_then(|ms| u16::try_from(ms).ok()),
+        )
+        .with_unilateral_tap(HrmIdiom::is_member(hold_tap).then_some(true))
+        .with_hold_trigger_on_release(hold_tap.hold_trigger_on_release.then_some(true))
+}

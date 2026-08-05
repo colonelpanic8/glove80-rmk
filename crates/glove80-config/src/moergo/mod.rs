@@ -6,8 +6,13 @@
 //! converts only the intersection of those models and reports the exact layer
 //! and key for anything that cannot be represented without changing meaning.
 
+mod behaviors;
+mod lower;
+
 use anyhow::{bail, Context, Result};
 use serde_json::{json, Map, Value};
+
+pub use lower::{Diagnostic, Severity};
 
 use crate::{keycodes, LayerConfig, RuntimeConfig, Snapshot, COLS, LAYER_SIZE};
 
@@ -24,9 +29,53 @@ pub const MOERGO_TO_MATRIX: [usize; 80] = [
     64, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 48, 62, 76, 77, 63, 49, 79, 80, 81, 82, 83,
 ];
 
+/// A MoErgo export lowered onto the Rynk runtime model.
+///
+/// Every field is runtime state with a Rynk setter behind it, so an import
+/// reaches the keyboard without a firmware rebuild. What the firmware must
+/// already provide is capacity — layer count, morse and combo table sizes — and
+/// the hand tags that bilateral home row mods are decided from.
+#[derive(Clone, Debug)]
+pub struct ImportedLayout {
+    /// Keymap and layer names.
+    pub runtime: RuntimeConfig,
+    /// The morse table the keymap's `TD(n)` cells address.
+    pub morses: Vec<rynk::rmk_types::morse::Morse>,
+    /// Combos, already expanded to one entry per layer they are active on.
+    pub combos: Vec<rynk::rmk_types::combo::Combo>,
+    /// Macro sequences the keymap's `TriggerMacro` cells run, encoded in the
+    /// byte format Rynk's macro space uses.
+    pub macros: Vec<Vec<u8>>,
+    /// Editor layers dropped as home-row-mod scaffolding, by their original
+    /// index, so a caller can explain the renumbering.
+    pub dropped_layers: Vec<usize>,
+    /// Everything that did not survive the trip, named by source location.
+    pub diagnostics: Vec<Diagnostic>,
+}
+
 /// Parse a MoErgo editor JSON backup into the managed runtime model.
 /// Lighting is absent because the editor backup has no Rynk lighting state.
 pub fn runtime_config_from_moergo_json(text: &str) -> Result<RuntimeConfig> {
+    let imported = import_moergo_layout(text)?;
+    // This entry point promises a keymap that means what the export meant, so
+    // a dropped key is an error here even though the richer import reports it
+    // and carries on.
+    if let Some(dropped) = imported
+        .diagnostics
+        .iter()
+        .find(|diagnostic| diagnostic.severity == Severity::Dropped)
+    {
+        bail!(
+            "{} {}",
+            dropped.location.as_deref().unwrap_or_default(),
+            dropped.message
+        );
+    }
+    Ok(imported.runtime)
+}
+
+/// Parse a MoErgo editor JSON backup, including its custom behaviors.
+pub fn import_moergo_layout(text: &str) -> Result<ImportedLayout> {
     let root: Value = serde_json::from_str(text).context("invalid JSON")?;
     let layout = layout_object(&root)?;
     if let Some(keyboard) = layout.get("keyboard").and_then(Value::as_str) {
@@ -64,9 +113,40 @@ pub fn runtime_config_from_moergo_json(text: &str) -> Result<RuntimeConfig> {
         })
         .collect::<Result<Vec<_>>>()?;
 
+    let tables = behaviors::BehaviorTables::from_layout(layout)?;
+    let mut lowering = lower::Lowering::new(&tables, layers.len());
+    let layer_map = lowering.layer_map().to_vec();
+    if let Some(text) = &tables.custom_devicetree {
+        lowering.report(
+            lower::Severity::Dropped,
+            None,
+            format!(
+                "export carries {} bytes of raw devicetree in 'custom_defined_behaviors', \
+                 which the import does not read",
+                text.len()
+            ),
+        );
+    }
+
+    for layer in &tables.scaled_pointer_layers {
+        let name = layer_names.get(*layer).map_or("?", String::as_str);
+        lowering.report(
+            lower::Severity::Approximated,
+            None,
+            format!(
+                "layer {layer} ({name}) rescales pointer movement with an input processor; \
+                 Rynk's mouse speed is a global interval, so that layer moves at the shared rate"
+            ),
+        );
+    }
+
     let mut ids = std::collections::BTreeSet::new();
     let mut converted = Vec::with_capacity(layers.len());
+    let mut by_editor_layer: Vec<Option<Vec<u16>>> = vec![None; layers.len()];
     for (layer_index, layer) in layers.iter().enumerate() {
+        if layer_map.get(layer_index).copied().flatten().is_none() {
+            continue;
+        }
         let keys = layer
             .as_array()
             .with_context(|| format!("layers[{layer_index}] must be an array"))?;
@@ -78,11 +158,24 @@ pub fn runtime_config_from_moergo_json(text: &str) -> Result<RuntimeConfig> {
             );
         }
         let mut matrix = vec![0u16; LAYER_SIZE];
+        // Editor order, kept alongside the matrix so combos can resolve the
+        // key positions they are declared with.
+        let mut editor_order = vec![0u16; MOERGO_TO_MATRIX.len()];
         for (editor_index, binding) in keys.iter().enumerate() {
             let offset = MOERGO_TO_MATRIX[editor_index];
-            matrix[offset] =
-                binding_to_via(binding, &layer_names, layer_index, editor_index, offset)?;
+            let code = binding_to_via(
+                binding,
+                &layer_names,
+                layer_index,
+                editor_index,
+                offset,
+                &layer_map,
+                &mut lowering,
+            )?;
+            matrix[offset] = code;
+            editor_order[editor_index] = code;
         }
+        by_editor_layer[layer_index] = Some(editor_order);
         let name = layer_names[layer_index].clone();
         let base_id = slug(&name, layer_index);
         let mut id = base_id.clone();
@@ -98,12 +191,31 @@ pub fn runtime_config_from_moergo_json(text: &str) -> Result<RuntimeConfig> {
         });
     }
 
+    let combos = lowering.lower_combos(
+        &|editor_layer, position| {
+            by_editor_layer
+                .get(editor_layer)
+                .and_then(Option::as_ref)
+                .and_then(|codes| codes.get(position))
+                .map(|code| crate::rynk_keycode::from_via_keycode(*code))
+        },
+        layers.len(),
+    );
+
     let config = RuntimeConfig {
         default_layer: 0,
         layers: converted,
         lighting: None,
     };
-    config.snapshot().map(|_| config)
+    config.snapshot()?;
+    Ok(ImportedLayout {
+        runtime: config,
+        morses: lowering.morses().to_vec(),
+        combos,
+        macros: lowering.macros().to_vec(),
+        dropped_layers: lowering.finger_layers().to_vec(),
+        diagnostics: lowering.diagnostics().to_vec(),
+    })
 }
 
 /// Render a runtime snapshot as a MoErgo editor JSON backup.
@@ -258,6 +370,8 @@ fn binding_to_via(
     layer: usize,
     editor_index: usize,
     offset: usize,
+    layer_map: &[Option<u8>],
+    lowering: &mut lower::Lowering<'_>,
 ) -> Result<u16> {
     let object = binding.as_object().with_context(|| {
         format!(
@@ -306,11 +420,30 @@ fn binding_to_via(
             bail!("{} {behavior} expects no parameters", here())
         }
     };
+    // Layer numbers in the export index the editor's layers, which the import
+    // renumbers when it drops the home-row-mod finger layers.
+    let remap = |editor_layer: u8| -> Result<u8> {
+        let target = layer_map
+            .get(usize::from(editor_layer))
+            .copied()
+            .flatten()
+            .with_context(|| {
+                format!(
+                    "{} targets layer {editor_layer}, which the import dropped",
+                    here()
+                )
+            })?;
+        if target >= 16 {
+            bail!("{} layer {target} is outside Rynk's 0..15 range", here());
+        }
+        Ok(target)
+    };
     let one_layer = |verb: &str| -> Result<u16> {
         if params.len() != 1 {
             bail!("{} {behavior} expects one layer parameter", here());
         }
-        keycodes::parse_keycode(&format!("{verb}({})", layer_param(param(0)?, &here())?))
+        let target = remap(layer_param(param(0)?, &here())?)?;
+        keycodes::parse_keycode(&format!("{verb}({target})"))
     };
 
     let result = match behavior {
@@ -347,7 +480,7 @@ fn binding_to_via(
             if params.len() != 2 {
                 bail!("{} &lt expects layer and tap keycode parameters", here());
             }
-            let target = layer_param(param(0)?, &here())?;
+            let target = remap(layer_param(param(0)?, &here())?)?;
             let tap = zmk_keycode_param_to_via(&params[1], &here())?;
             if tap > 0xff {
                 bail!("{} &lt tap action must be an unmodified HID key", here());
@@ -404,6 +537,7 @@ fn binding_to_via(
                         here()
                     )
                 })?;
+            let target = remap(u8::try_from(target).unwrap_or(u8::MAX))?;
             keycodes::parse_keycode(&format!("MO({target})"))?
         }
         "&bt_0" | "&bt_1" | "&bt_2" | "&bt_3" => {
@@ -467,10 +601,12 @@ fn binding_to_via(
             };
             keycodes::parse_keycode(via)?
         }
-        _ => bail!(
-            "{} behavior '{behavior}' cannot be represented by the Rynk runtime keymap",
-            here()
-        ),
+        _ => lowering.resolve(behavior, params, &here).with_context(|| {
+            format!(
+                "{} behavior '{behavior}' cannot be represented by the Rynk runtime keymap",
+                here()
+            )
+        })?,
     };
     Ok(result)
 }
@@ -486,10 +622,9 @@ fn layer_param(value: &Value, location: &str) -> Result<u8> {
         .as_u64()
         .or_else(|| value.as_str().and_then(|text| text.parse().ok()))
         .with_context(|| format!("{location} layer parameter must be an integer"))?;
-    u8::try_from(number)
-        .ok()
-        .filter(|layer| *layer < 16)
-        .with_context(|| format!("{location} layer {number} is outside Rynk's 0..15 range"))
+    // Bounds are checked after remapping: an export may name a layer index
+    // that only fits Rynk's 0..15 range once the finger layers are dropped.
+    u8::try_from(number).with_context(|| format!("{location} layer {number} is not a layer index"))
 }
 
 fn zmk_modifier(text: &str) -> Result<String> {
@@ -1057,19 +1192,38 @@ mod tests {
         assert_eq!(value["keymap"]["layers"][0].as_array().unwrap().len(), 80);
     }
 
+    /// Converts one binding against empty behavior tables, which is the shape
+    /// every case here needs except the ones about custom behaviors.
+    fn convert(binding: &Value, layer_names: &[String]) -> Result<u16> {
+        let tables = behaviors::BehaviorTables::default();
+        let mut lowering = lower::Lowering::new(&tables, 16);
+        let layer_map = lowering.layer_map().to_vec();
+        binding_to_via(binding, layer_names, 0, 0, 0, &layer_map, &mut lowering)
+    }
+
     #[test]
     fn unsupported_custom_behavior_names_its_exact_key() {
-        let err = binding_to_via(
+        let tables = behaviors::BehaviorTables::default();
+        let mut lowering = lower::Lowering::new(&tables, 16);
+        let layer_map = lowering.layer_map().to_vec();
+        let code = binding_to_via(
             &json!({ "value": "&my_macro" }),
             &["Base".into()],
             0,
             52,
             MOERGO_TO_MATRIX[52],
+            &layer_map,
+            &mut lowering,
         )
-        .unwrap_err()
-        .to_string();
-        assert!(err.contains("editor key 52 (r0,c6)"), "{err}");
-        assert!(err.contains("&my_macro"), "{err}");
+        .unwrap();
+
+        // The key is left empty rather than guessed at, and the diagnostic
+        // says which one it was.
+        assert_eq!(code, 0);
+        let diagnostic = lowering.diagnostics().first().expect("a diagnostic");
+        let location = diagnostic.location.as_deref().unwrap_or_default();
+        assert!(location.contains("editor key 52 (r0,c6)"), "{location}");
+        assert!(diagnostic.message.contains("&my_macro"), "{diagnostic:?}");
     }
 
     #[test]
@@ -1086,9 +1240,9 @@ mod tests {
             }),
             json!({ "value": "&mt", "params": [{ "value": "LSHFT" }, { "value": "A" }] }),
         ] {
-            let code = binding_to_via(&binding_value, &["Base".into()], 0, 0, 0).unwrap();
+            let code = convert(&binding_value, &["Base".into()]).unwrap();
             let rendered = via_to_binding(code, 0, 0, 0).unwrap();
-            let reparsed = binding_to_via(&rendered, &["Base".into()], 0, 0, 0).unwrap();
+            let reparsed = convert(&rendered, &["Base".into()]).unwrap();
             assert_eq!(
                 reparsed,
                 code,
@@ -1106,9 +1260,9 @@ mod tests {
             json!({ "value": "&mmv", "params": [{ "value": "MOVE_LEFT" }] }),
             json!({ "value": "&msc", "params": [{ "value": "SCRL_DOWN" }] }),
         ] {
-            let code = binding_to_via(&binding_value, &["Base".into()], 0, 0, 0).unwrap();
+            let code = convert(&binding_value, &["Base".into()]).unwrap();
             let rendered = via_to_binding(code, 0, 0, 0).unwrap();
-            let reparsed = binding_to_via(&rendered, &["Base".into()], 0, 0, 0).unwrap();
+            let reparsed = convert(&rendered, &["Base".into()]).unwrap();
             assert_eq!(reparsed, code);
         }
     }
