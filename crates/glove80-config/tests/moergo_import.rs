@@ -311,6 +311,68 @@ fn refusing_a_layout_names_every_binding_it_cannot_import() {
     );
 }
 
+/// Every combo in the Engrammer arrives. Four fifths of them used to vanish:
+/// a combo whose output was a sticky key, a layer switch, a momentary layer or a
+/// custom behavior found no conversion, because the combo path carried a much
+/// smaller vocabulary than the keymap path did a few lines away.
+#[test]
+fn every_engrammer_combo_survives() {
+    let imported = import_moergo_layout(ENGRAMMER).expect("import");
+    let declared = 21;
+    assert_eq!(
+        imported.runtime.combos.len(),
+        declared,
+        "combos went missing: {:?}",
+        imported.runtime.combos
+    );
+}
+
+/// A combo whose output cannot be converted is *dropped*, not approximated.
+/// Recording it as an approximation let `validate` call a file clean while its
+/// combos quietly failed to arrive, which is the failure this severity exists to
+/// prevent.
+#[test]
+fn an_unconvertible_combo_output_is_a_drop() {
+    let mut root: serde_json::Value = serde_json::from_str(ENGRAMMER).expect("fixture parses");
+    root["combos"][0]["binding"] = serde_json::json!({ "value": "&no_such_behavior" });
+    let text = serde_json::to_string(&root).expect("reserialize");
+
+    let imported = import_moergo_layout(&text).expect("the report form still succeeds");
+    let dropped: Vec<&str> = imported
+        .diagnostics
+        .iter()
+        .filter(|note| note.severity == Severity::Dropped)
+        .map(|note| note.message.as_str())
+        .collect();
+    assert_eq!(
+        dropped.len(),
+        1,
+        "expected exactly one drop, got {dropped:?}"
+    );
+    assert!(dropped[0].contains("no_such_behavior"), "{dropped:?}");
+    // And the strict entry point refuses it, which it cannot do for an
+    // approximation.
+    assert!(runtime_config_from_moergo_json(&text).is_err());
+}
+
+/// Editors disagree about declaring a parameterized macro's `params`: TailorKey
+/// writes them, the Engrammer leaves the arity implied by its bindings. Reading
+/// only the declaration made the window-switcher chords unrecognizable, and
+/// would let a placeholder be encoded as a literal keycode.
+#[test]
+fn a_parameterized_macro_is_recognized_without_a_params_declaration() {
+    let imported = import_moergo_layout(ENGRAMMER).expect("import");
+    // The two switcher chords lower to `LMT`, which only happens if the chord
+    // macro was recognized despite declaring no params.
+    let switchers = imported
+        .runtime
+        .combos
+        .iter()
+        .filter(|combo| combo.output.starts_with("LMT("))
+        .count();
+    assert_eq!(switchers, 2, "combos: {:?}", imported.runtime.combos);
+}
+
 /// A mod-morph is a fork: one key whose output swaps while a modifier is held.
 #[test]
 fn mod_morphs_become_forks() {
@@ -436,6 +498,27 @@ fn every_gap_names_its_source_key() {
             !diagnostic.message.is_empty(),
             "empty diagnostic at {:?}",
             diagnostic.location
+        );
+    }
+}
+
+#[test]
+#[ignore = "reports coverage rather than asserting it"]
+fn engrammer_coverage_report() {
+    let imported = import_moergo_layout(ENGRAMMER).expect("import");
+    println!("=== Engrammer");
+    println!("layers:      {}", imported.runtime.layers.len());
+    println!("morses:      {}", imported.runtime.morses.len());
+    println!("combos:      {}", imported.runtime.combos.len());
+    println!("forks:       {}", imported.runtime.forks.len());
+    println!("macros:      {}", imported.runtime.macros.len());
+    println!("dropped:     {:?}", imported.dropped_layers);
+    println!("diagnostics: {}", imported.diagnostics.len());
+    for note in &imported.diagnostics {
+        println!(
+            "  {} :: {}",
+            note.location.as_deref().unwrap_or("(export)"),
+            note.message
         );
     }
 }

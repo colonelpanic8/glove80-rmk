@@ -389,7 +389,9 @@ impl<'a> Lowering<'a> {
     /// Returns `None` for anything with parameters or a hold-until-release
     /// step, which the byte format has no room for.
     fn lower_macro(&mut self, entry: &super::behaviors::Macro) -> Option<u16> {
-        if !entry.params.is_empty() {
+        // A parameterized macro has no fixed sequence to encode; its
+        // placeholders are filled from the invoking key.
+        if is_parameterized(entry) {
             return None;
         }
 
@@ -736,6 +738,27 @@ impl<'a> Lowering<'a> {
                 .param_u8(0)
                 .and_then(|layer| self.remap_layer(layer as usize))
                 .map(|layer| KeyAction::Single(Action::LayerToggle(layer))),
+            // These three are converted a few lines away for a keymap cell; a
+            // combo output is the same conversion, and leaving them out here is
+            // why a layout's sticky-modifier and layer-reset chords vanished.
+            "&sk" => binding
+                .param_text(0)
+                .and_then(|modifier| super::zmk_modifier(&modifier).ok())
+                .and_then(|modifier| keycodes::parse_keycode(&format!("OSM({modifier})")).ok())
+                .map(from_via_keycode),
+            "&to" => binding
+                .param_u8(0)
+                .and_then(|layer| self.remap_layer(layer as usize))
+                .map(|layer| KeyAction::Single(Action::DefaultLayer(layer))),
+            "&sl" => binding
+                .param_u8(0)
+                .and_then(|layer| self.remap_layer(layer as usize))
+                .and_then(|layer| keycodes::parse_keycode(&format!("OSL({layer})")).ok())
+                .map(from_via_keycode),
+            "&mo" => binding
+                .param_u8(0)
+                .and_then(|layer| self.remap_layer(layer as usize))
+                .map(|layer| KeyAction::Single(Action::LayerOn(layer))),
             // A window-switcher chord: hold a modifier and a layer together for
             // as long as the combo keys are held, so the layer's Tab steps
             // through the list.
@@ -758,9 +781,28 @@ impl<'a> Lowering<'a> {
                     .ok()
                     .map(from_via_keycode)
             }
+            other
+                if self.tables.hold_tap(other).is_some()
+                    || self.tables.macro_named(other).is_some()
+                    || self.tables.mod_morph_named(other).is_some() =>
+            {
+                // A custom behavior resolves to a single keycode for a keymap
+                // cell — a morse index for a hold-tap, a macro trigger — and a
+                // combo output is the same kind of value, so run the same
+                // resolver. `resolve` reports its own gaps and yields KC_NO,
+                // which is nothing worth firing a combo for.
+                let params: Vec<Value> = binding.params.iter().map(Binding::to_value).collect();
+                match self.resolve(other, &params, here) {
+                    Ok(0) | Err(_) => None,
+                    Ok(code) => Some(from_via_keycode(code)),
+                }
+            }
             other => {
+                // The combo is discarded right after this, so it is a drop. Any
+                // other severity would let `validate` call a file clean while
+                // two thirds of its combos quietly failed to arrive.
                 self.report(
-                    Severity::Approximated,
+                    Severity::Dropped,
                     Some(here()),
                     format!("output behavior '{other}' has no Rynk equivalent"),
                 );
@@ -888,12 +930,32 @@ fn tap_hold_sides(
 /// Whether a macro turns on a layer *and* holds a modifier until its own key
 /// is released, which is what a window-switcher chord is built from.
 fn holds_modifier_with_layer(entry: &super::behaviors::Macro) -> bool {
-    entry.params.len() == 2
+    // Editors disagree about whether to declare `params`: TailorKey writes
+    // `["code", "layer"]` while the Engrammer omits the array and leaves the
+    // arity implied by its `&macro_param_*` bindings. Read the bindings, which
+    // both spell the same way.
+    is_parameterized(entry)
         && entry
             .bindings
             .iter()
             .any(|binding| binding.name() == "&macro_pause_for_release")
         && entry.bindings.iter().any(|binding| binding.name() == "&mo")
+}
+
+/// Whether a macro takes parameters from its invoking key.
+///
+/// Trusting the declared `params` alone is not safe: an export may omit it and
+/// still carry `MACRO_PLACEHOLDER` bindings, which would then be encoded as a
+/// literal keycode.
+fn is_parameterized(entry: &super::behaviors::Macro) -> bool {
+    !entry.params.is_empty()
+        || entry.bindings.iter().any(|binding| {
+            binding.name().starts_with("&macro_param_")
+                || binding
+                    .params
+                    .iter()
+                    .any(|param| param.name() == "MACRO_PLACEHOLDER")
+        })
 }
 
 /// The key a window-switcher chord taps when it engages.
