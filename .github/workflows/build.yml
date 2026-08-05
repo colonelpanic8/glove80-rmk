@@ -51,6 +51,15 @@ jobs:
         with:
           name: glove80-rmk
           path: dist
+      - name: Download Go60 bundle
+        uses: actions/download-artifact@v4
+        with:
+          name: go60-rmk
+          path: dist-go60
+      # The Go60 bundle's manifest.json and SHA256SUMS would collide with the
+      # Glove80 bundle's as flat release assets, so it ships as one archive.
+      - name: Archive Go60 bundle
+        run: (cd dist-go60 && zip -r ../go60-rmk.zip .)
       - name: Create or update commit prerelease
         env:
           GH_TOKEN: ${{ github.token }}
@@ -78,10 +87,12 @@ jobs:
             echo "## Changes"
             echo
             echo "${changes:-- No commits since the previous release.}"
+            echo
+            echo "The experimental Go60 firmware is attached as go60-rmk.zip."
           } > release-notes.md
 
           if gh release view "${tag}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
-            gh release upload "${tag}" dist/* \
+            gh release upload "${tag}" dist/* go60-rmk.zip \
               --clobber \
               --repo "${GITHUB_REPOSITORY}"
             gh release edit "${tag}" \
@@ -90,7 +101,7 @@ jobs:
               --notes-file release-notes.md \
               --repo "${GITHUB_REPOSITORY}"
           else
-            gh release create "${tag}" dist/* \
+            gh release create "${tag}" dist/* go60-rmk.zip \
               --prerelease \
               --target "${GITHUB_SHA}" \
               --title "${title}" \
