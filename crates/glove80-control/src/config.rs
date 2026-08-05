@@ -18,7 +18,7 @@ use glove80_config::{
 use rynk::rmk_types::protocol::rynk::{
     Cmd, LightingError, LightingExtendedConditionalSceneCell, LightingExtensionNameKind,
     LightingExtensionParamsRequest, LightingFeatureFlags, LightingMutableState, RynkError,
-    SetLightingExtensionLayersRequest, SetLightingExtensionParamRequest,
+    SetKeymapBulkRequest, SetLightingExtensionLayersRequest, SetLightingExtensionParamRequest,
     SetLightingExtensionStateRequest, SetLightingLayerPolicyRequest, SetLightingOutputModeRequest,
     SetLightingStateRequest,
 };
@@ -502,6 +502,15 @@ fn claim_every_behavior_table(snapshot: &mut glove80_config::Snapshot) {
     behaviors.macros.get_or_insert_with(Vec::new);
 }
 
+/// One past the last slot holding anything, so a table only has to be written as
+/// far as it was actually used.
+fn last_populated<T>(slots: &[T], populated: impl Fn(&T) -> bool) -> usize {
+    slots
+        .iter()
+        .rposition(populated)
+        .map_or(0, |index| index + 1)
+}
+
 /// Write the behavior tables, skipping any the source is silent about.
 async fn apply_behaviors(
     client: &Client,
@@ -514,7 +523,12 @@ async fn apply_behaviors(
     // the surplus is overwritten with empty slots.
     if let Some(morses) = &desired.morses {
         let mut morses = morses.clone();
-        let held = before.morses.as_deref().unwrap_or_default().len();
+        // Pad only as far as the last slot the keyboard actually has something
+        // in. Padding to full capacity rewrote sixty-four slots to change one,
+        // which is a lot of flash traffic for no effect.
+        let held = last_populated(before.morses.as_deref().unwrap_or_default(), |morse| {
+            !morse.actions.is_empty()
+        });
         morses.resize(morses.len().max(held), Default::default());
         if before.morses.as_deref() != Some(morses.as_slice()) {
             client
@@ -525,7 +539,9 @@ async fn apply_behaviors(
     }
     if let Some(combos) = &desired.combos {
         let mut combos = combos.clone();
-        let held = before.combos.as_deref().unwrap_or_default().len();
+        let held = last_populated(before.combos.as_deref().unwrap_or_default(), |combo| {
+            combo.output != rynk::rmk_types::action::KeyAction::No
+        });
         // An unprogrammed combo triggers on nothing and outputs nothing.
         let empty = rynk::rmk_types::combo::Combo {
             actions: Default::default(),
@@ -592,6 +608,56 @@ async fn write_macro_space(client: &Client, space: &[u8], macro_chunk: u16) -> R
     Ok(())
 }
 
+/// Write one layer, in as few round trips as the device allows.
+///
+/// Per-key writes cost one round trip each, so a full layout ran to hundreds of
+/// them and took minutes — long enough that an interruption left the keyboard
+/// half-written, which is not a hypothetical. Bulk pages cut that to a handful.
+///
+/// The whole layer goes out rather than only the cells that differ: a page is
+/// contiguous, so sending scattered cells individually is what we are trying to
+/// avoid. Firmware that does not implement bulk transfer falls back to per-key.
+async fn write_layer(
+    client: &Client,
+    capabilities: &rynk::rmk_types::protocol::rynk::DeviceCapabilities,
+    layer: u8,
+    wanted: &[u16],
+) -> Result<()> {
+    let actions: Vec<_> = wanted
+        .iter()
+        .copied()
+        .map(crate::rynk_keycode::from_via_keycode)
+        .collect();
+
+    if capabilities.bulk_transfer_supported {
+        let per_page = usize::from(capabilities.max_bulk_keys).max(1);
+        for (page, chunk) in actions.chunks(per_page).enumerate() {
+            let offset = page * per_page;
+            let request = SetKeymapBulkRequest {
+                layer,
+                start_row: (offset / usize::from(COLS)) as u8,
+                start_col: (offset % usize::from(COLS)) as u8,
+                actions: chunk.to_vec(),
+            };
+            client
+                .set_keymap_bulk(request)
+                .await
+                .with_context(|| format!("writing layer {layer} from offset {offset}"))?;
+        }
+        return Ok(());
+    }
+
+    for (offset, action) in actions.into_iter().enumerate() {
+        let row = (offset / usize::from(COLS)) as u8;
+        let col = (offset % usize::from(COLS)) as u8;
+        client
+            .set_key(layer, row, col, action)
+            .await
+            .with_context(|| format!("writing layer {layer} r{row},c{col}"))?;
+    }
+    Ok(())
+}
+
 async fn apply_snapshot(client: &Client, desired: &Snapshot, before: &Snapshot) -> Result<()> {
     let capabilities = client.get_capabilities().await?;
     if desired.layers.len() > usize::from(capabilities.num_layers) {
@@ -613,31 +679,22 @@ async fn apply_snapshot(client: &Client, desired: &Snapshot, before: &Snapshot) 
     .await?;
 
     // A source file owns the layers it lists. Fixed-capacity trailing layers
-    // remain untouched rather than being destructively cleared.
+    // remain untouched rather than being destructively cleared, which is why this
+    // writes layer by layer rather than handing the whole keymap to
+    // `write_all_keymap`.
     for layer in 0..u8::try_from(desired.layers.len()).context("too many configured layers")? {
-        for offset in 0..LAYER_SIZE {
-            let wanted = desired
-                .layers
-                .get(usize::from(layer))
-                .map_or(0, |keys| keys[offset]);
-            let present = before
-                .layers
-                .get(usize::from(layer))
-                .map_or(0, |keys| keys[offset]);
-            if wanted != present {
-                let row = offset as u8 / COLS;
-                let col = offset as u8 % COLS;
-                client
-                    .set_key(
-                        layer,
-                        row,
-                        col,
-                        crate::rynk_keycode::from_via_keycode(wanted),
-                    )
-                    .await
-                    .with_context(|| format!("writing layer {layer} r{row},c{col}"))?;
-            }
+        let wanted = desired
+            .layers
+            .get(usize::from(layer))
+            .map_or([0; LAYER_SIZE].as_slice(), |keys| keys.as_slice());
+        let present = before
+            .layers
+            .get(usize::from(layer))
+            .map_or([0; LAYER_SIZE].as_slice(), |keys| keys.as_slice());
+        if wanted == present {
+            continue;
         }
+        write_layer(client, &capabilities, layer, wanted).await?;
     }
     if desired.default_layer != before.default_layer {
         client.set_default_layer(desired.default_layer).await?;
