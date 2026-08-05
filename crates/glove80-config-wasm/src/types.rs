@@ -6,6 +6,8 @@
 //! each of these a named TypeScript declaration.
 
 use rynk::rmk_types::action::KeyAction;
+use rynk::rmk_types::combo::Combo;
+use rynk::rmk_types::morse::Morse;
 use rynk::rmk_types::protocol::rynk::{
     LightingBackgroundState, LightingExtendedConditionalSceneCell, LightingExtensionParam,
     LightingExtensionState, LightingLayerPolicy, LightingOutputMode, LightingSceneCell,
@@ -46,6 +48,26 @@ pub struct RuntimeSnapshot {
     /// One entry per layer, each row-major over the 6x14 grid.
     pub layers: Vec<Vec<KeyAction>>,
     pub lighting: Option<LightingSnapshot>,
+    #[serde(default)]
+    pub behaviors: BehaviorSnapshot,
+}
+
+/// The tables a keymap cell addresses by index: morses for `TD(n)`, macros for
+/// `TriggerMacro(n)`, and the combos that fire alongside them.
+///
+/// Each field distinguishes silence from emptiness the way the lighting fields
+/// do: `undefined` means the source says nothing about that table and it must be
+/// left as the device holds it, so a document written before these existed can
+/// never read as "clear them".
+#[derive(Clone, Debug, Default, Deserialize, Serialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi)]
+pub struct BehaviorSnapshot {
+    pub morses: Option<Vec<Morse>>,
+    pub combos: Option<Vec<Combo>>,
+    /// Macro space exactly as the firmware stores it: the sequences
+    /// concatenated, each closed by its own terminator, which is what
+    /// `TriggerMacro` indexes into.
+    pub macros: Option<Vec<u8>>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, Tsify)]

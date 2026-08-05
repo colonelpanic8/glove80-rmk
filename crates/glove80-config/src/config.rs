@@ -432,8 +432,8 @@ pub struct Snapshot {
     ///
     /// `None` means the source does not describe the table and it should be
     /// left alone, the way the lighting fields distinguish silence from
-    /// emptiness. The TOML schema is silent about all three today, so only an
-    /// imported editor layout fills them in.
+    /// emptiness — so a file written before the `[[morse]]`, `[[combo]]` and
+    /// `[[macro]]` sections existed can never read as "clear them".
     pub behaviors: BehaviorSnapshot,
 }
 

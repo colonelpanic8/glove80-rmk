@@ -74,6 +74,22 @@ fn check(root: &Path) -> Result<()> {
         &[],
     )?;
     run_command(root, "cargo", &["test", "--workspace"], &[])?;
+    // `glove80-config-wasm` is wasm32-gated, so the host check above compiles an
+    // empty library and would pass with the crate thoroughly broken. Anything
+    // added to a shared type in `glove80-config` has to reach the browser too;
+    // this is the only check that notices when it did not.
+    run_command(
+        root,
+        "cargo",
+        &[
+            "check",
+            "-p",
+            "glove80-config-wasm",
+            "--target",
+            "wasm32-unknown-unknown",
+        ],
+        &[],
+    )?;
     Ok(())
 }
 

@@ -9,7 +9,9 @@
 use glove80_config as model;
 use rynk::rmk_types::protocol::rynk::LightingExtensionState;
 
-use crate::types::{EffectParamWrite, ExtensionCatalog, LightingSnapshot, RuntimeSnapshot};
+use crate::types::{
+    BehaviorSnapshot, EffectParamWrite, ExtensionCatalog, LightingSnapshot, RuntimeSnapshot,
+};
 
 /// The catalog restated as the model's advertised-parameter type. The model
 /// keys effects by name because that is what a file writes; the browser holds
@@ -78,6 +80,11 @@ pub fn snapshot_from_wire(
         default_layer: snapshot.default_layer,
         layers,
         lighting,
+        behaviors: model::BehaviorSnapshot {
+            morses: snapshot.behaviors.morses.clone(),
+            combos: snapshot.behaviors.combos.clone(),
+            macros: snapshot.behaviors.macros.clone(),
+        },
     })
 }
 
@@ -163,6 +170,11 @@ pub fn snapshot_to_wire(
         default_layer: snapshot.default_layer,
         layers,
         lighting,
+        behaviors: BehaviorSnapshot {
+            morses: snapshot.behaviors.morses.clone(),
+            combos: snapshot.behaviors.combos.clone(),
+            macros: snapshot.behaviors.macros.clone(),
+        },
     })
 }
 
