@@ -641,6 +641,36 @@ mod tests {
         assert_eq!(info.end, APPLICATION_START + UF2_PAYLOAD_SIZE as u32);
     }
 
+    /// Every key in `[layout].map` carries a hand tag.
+    ///
+    /// RMK decides bilateral home row mods from these tags, and an untagged
+    /// key is `Hand::Unknown`, which never counts as the same hand. Worse, the
+    /// code generator falls back to an all-`Unknown` table without complaining
+    /// if the tags go missing, so dropping one disables the feature silently
+    /// rather than failing the build.
+    #[test]
+    fn every_mapped_key_declares_a_hand() {
+        let root = repo_root().unwrap();
+        let text = fs::read_to_string(root.join("crates/glove80-rmk/keyboard.toml")).unwrap();
+        let start = text.find("map = \"\"\"").unwrap();
+        let body = &text[start + "map = \"\"\"".len()..];
+        let map = &body[..body.find("\"\"\"").unwrap()];
+
+        let untagged: Vec<&str> = map
+            .split_whitespace()
+            .filter(|token| token.starts_with('('))
+            .filter(|token| {
+                // (row, col[, hand][, @shape]) — the hand is the third field.
+                token
+                    .trim_matches(['(', ')'])
+                    .split(',')
+                    .nth(2)
+                    .is_none_or(|hand| !matches!(hand, "L" | "R" | "*"))
+            })
+            .collect();
+        assert!(untagged.is_empty(), "untagged keys: {untagged:?}");
+    }
+
     #[test]
     fn sha256_matches_reference_vector() {
         let path = env::temp_dir().join(format!("glove80-sha-{}", std::process::id()));

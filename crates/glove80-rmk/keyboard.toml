@@ -28,6 +28,14 @@ ble_profiles_num = 4
 # skipped event (15 ms maximum interval) to retain some radio savings.
 split_central_max_latency_powered = 0
 split_central_max_latency_battery = 1
+# Room for a layout imported from the MoErgo Layout Editor. The morse, combo
+# and macro tables are all written over Rynk, so an import needs no rebuild —
+# but their capacities are compile-time, and the defaults (8 morses, 8 combos)
+# fit only the keymap below. Sized for a large imported layout instead:
+# TailorKey v5.2 Bilateral lands at 59 morses, 20 combos and six short macros.
+morse_max_num = 128
+combo_max_num = 32
+macro_space_size = 512
 
 [layout]
 rows = 6
@@ -43,12 +51,12 @@ cols = 14
 # Written in the same order as the ZMK matrix transform in glove80.dtsi, which
 # is also the order the `[[keymap.layer]]` key strings below are read in.
 map = """
-(0,0,@drop) (0,1,@drop) (0,2) (0,3) (0,4) [8] (0,9) (0,10) (0,11) (0,12,@drop) (0,13,@drop)
-(1,0,@drop) (1,1,@drop) (1,2) (1,3) (1,4) (1,5) [6] (1,8) (1,9) (1,10) (1,11) (1,12,@drop) (1,13,@drop)
-(2,0,@drop) (2,1,@drop) (2,2) (2,3) (2,4) (2,5) [6] (2,8) (2,9) (2,10) (2,11) (2,12,@drop) (2,13,@drop)
-(3,0,@drop) (3,1,@drop) (3,2) (3,3) (3,4) (3,5) [6] (3,8) (3,9) (3,10) (3,11) (3,12,@drop) (3,13,@drop)
-(4,0,@drop) (4,1,@drop) (4,2) (4,3) (4,4) (4,5) (0,6,@thumb_0_6) (1,6,@thumb_1_6) (2,6,@thumb_2_6) (2,7,@thumb_2_7) (1,7,@thumb_1_7) (0,7,@thumb_0_7) (4,8) (4,9) (4,10) (4,11) (4,12,@drop) (4,13,@drop)
-(5,0,@drop) (5,1,@drop) (5,2) (5,3) (5,4) (3,6,@thumb_3_6) (4,6,@thumb_4_6) (5,6,@thumb_5_6) [2] (5,7,@thumb_5_7) (4,7,@thumb_4_7) (3,7,@thumb_3_7) (5,9) (5,10) (5,11) (5,12,@drop) (5,13,@drop)
+(0,0,L,@drop) (0,1,L,@drop) (0,2,L) (0,3,L) (0,4,L) [8] (0,9,R) (0,10,R) (0,11,R) (0,12,R,@drop) (0,13,R,@drop)
+(1,0,L,@drop) (1,1,L,@drop) (1,2,L) (1,3,L) (1,4,L) (1,5,L) [6] (1,8,R) (1,9,R) (1,10,R) (1,11,R) (1,12,R,@drop) (1,13,R,@drop)
+(2,0,L,@drop) (2,1,L,@drop) (2,2,L) (2,3,L) (2,4,L) (2,5,L) [6] (2,8,R) (2,9,R) (2,10,R) (2,11,R) (2,12,R,@drop) (2,13,R,@drop)
+(3,0,L,@drop) (3,1,L,@drop) (3,2,L) (3,3,L) (3,4,L) (3,5,L) [6] (3,8,R) (3,9,R) (3,10,R) (3,11,R) (3,12,R,@drop) (3,13,R,@drop)
+(4,0,L,@drop) (4,1,L,@drop) (4,2,L) (4,3,L) (4,4,L) (4,5,L) (0,6,*,@thumb_0_6) (1,6,*,@thumb_1_6) (2,6,*,@thumb_2_6) (2,7,*,@thumb_2_7) (1,7,*,@thumb_1_7) (0,7,*,@thumb_0_7) (4,8,R) (4,9,R) (4,10,R) (4,11,R) (4,12,R,@drop) (4,13,R,@drop)
+(5,0,L,@drop) (5,1,L,@drop) (5,2,L) (5,3,L) (5,4,L) (3,6,*,@thumb_3_6) (4,6,*,@thumb_4_6) (5,6,*,@thumb_5_6) [2] (5,7,*,@thumb_5_7) (4,7,*,@thumb_4_7) (3,7,*,@thumb_3_7) (5,9,R) (5,10,R) (5,11,R) (5,12,R,@drop) (5,13,R,@drop)
 """
 
 # The map walk is a left-to-right cursor, so anything off the uniform grid is
@@ -74,10 +82,11 @@ thumb_4_7 = { x = -0.0891, y = 1.2604, r = -40.0 }
 thumb_5_7 = { x = 0.1854, y = 2.125, r = -60.0 }
 
 [keymap]
-layers = 8
+layers = 16
 # Ported from legacy glove80-config/config/glove80.keymap. Layers: 0 Base,
 # 1 Lower, 2 Magic,
-# 3 Games, 4 Mac Hyper. Layers 5-7 are unassigned editable capacity.
+# 3 Games, 4 Mac Hyper. Layers 5-15 are unassigned editable capacity, sized so
+# an imported editor layout fits without a rebuild.
 # Substitutions from the ZMK keymap:
 #   - &magic hold-tap        -> MO(2) plus board-local lighting wake/status
 #   - lower left thumb arc   -> User0..User2 (select the slot AND prefer
