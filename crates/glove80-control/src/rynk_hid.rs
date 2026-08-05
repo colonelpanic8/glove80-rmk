@@ -15,8 +15,20 @@ use tokio::io::unix::AsyncFd;
 use crate::transport::ids::{USB_PID, USB_VID};
 use crate::transport::usb::{descriptor_usages, raw_info, report_descriptor};
 
-const RYNK_USAGE_PAGE: u16 = 0xff60;
+/// Vendor usage pages that can carry Rynk, newest first. Firmware built with
+/// RMK's `rynk` feature puts the protocol on its own `RynkHidReport`
+/// interface; before that it rode on the Via report, which older boards still
+/// expose.
+const RYNK_USAGE_PAGES: [u16; 2] = [0xff14, 0xff60];
 const RYNK_USAGE: u32 = 0x61;
+
+/// Whether a report descriptor belongs to an interface carrying Rynk.
+fn carries_rynk(descriptor: &[u8]) -> bool {
+    let usages = descriptor_usages(descriptor);
+    RYNK_USAGE_PAGES
+        .iter()
+        .any(|page| usages.contains(&(*page, RYNK_USAGE)))
+}
 
 pub struct HidDevice {
     path: PathBuf,
@@ -46,9 +58,7 @@ impl HidDevice {
                     return None;
                 }
                 let descriptor = report_descriptor(fd).ok()?;
-                descriptor_usages(&descriptor)
-                    .contains(&(RYNK_USAGE_PAGE, RYNK_USAGE))
-                    .then_some(Self { path })
+                carries_rynk(&descriptor).then_some(Self { path })
             })
             .collect())
     }
@@ -174,5 +184,39 @@ impl Write for HidWriter {
 
     async fn flush(&mut self) -> Result<(), Self::Error> {
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Report descriptors read off a Glove80 running the `rynk`-featured
+    /// firmware. The Rynk interface moved to its own vendor page when it
+    /// stopped riding on the Via report, and discovery silently found nothing
+    /// until it learned the new page -- so pin both against real bytes rather
+    /// than against the constant they are supposed to check.
+    const RYNK_INTERFACE: &[u8] = &[
+        0x06, 0x14, 0xff, 0x09, 0x61, 0xa1, 0x01, 0x09, 0x62, 0x15, 0x00, 0x26, 0xff, 0x00, 0x75,
+        0x08, 0x95, 0x20, 0x81, 0x02, 0x09, 0x63, 0x15, 0x00, 0x91, 0x02, 0xc0,
+    ];
+
+    const BOOT_KEYBOARD_INTERFACE: &[u8] = &[
+        0x05, 0x01, 0x09, 0x06, 0xa1, 0x01, 0x05, 0x07, 0x19, 0xe0, 0x29, 0xe7, 0x15, 0x00, 0x25,
+        0x01, 0x75, 0x01, 0x95, 0x08, 0x81, 0x02, 0xc0,
+    ];
+
+    #[test]
+    fn the_rynk_interface_is_told_apart_from_the_keyboard_it_shares_a_device_with() {
+        assert!(carries_rynk(RYNK_INTERFACE));
+        assert!(!carries_rynk(BOOT_KEYBOARD_INTERFACE));
+    }
+
+    /// Firmware predating the dedicated interface exposes Rynk on the Via
+    /// page, so a CLI that only knew the new one would stop talking to it.
+    #[test]
+    fn rynk_is_still_found_on_the_via_page_older_firmware_uses() {
+        let via = [0x06, 0x60, 0xff, 0x09, 0x61, 0xa1, 0x01, 0xc0];
+        assert!(carries_rynk(&via));
     }
 }
