@@ -194,6 +194,7 @@ pub fn import_moergo_layout(text: &str) -> Result<ImportedLayout> {
                 .map(|code| crate::rynk_keycode::from_via_keycode(*code))
         },
         layers.len(),
+        MOERGO_TO_MATRIX.len(),
     );
 
     // The lowered tables go onto the managed configuration itself rather than

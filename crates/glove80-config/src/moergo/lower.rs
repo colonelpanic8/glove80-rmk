@@ -466,6 +466,7 @@ impl<'a> Lowering<'a> {
         &mut self,
         action_at: &dyn Fn(usize, usize) -> Option<KeyAction>,
         layer_count: usize,
+        position_count: usize,
     ) -> Vec<Combo> {
         let mut out = Vec::new();
         // Rynk has one combo window for the whole keyboard, so the export's
@@ -543,6 +544,24 @@ impl<'a> Lowering<'a> {
                     }
                 }
                 if usable {
+                    if let Some(extra_positions) = ambiguous_combo_positions(
+                        &actions,
+                        &combo.key_positions,
+                        editor_layer,
+                        position_count,
+                        action_at,
+                    ) {
+                        self.report(
+                            Severity::Approximated,
+                            Some(here()),
+                            format!(
+                                "combo '{}' on editor layer {editor_layer} has the same trigger \
+                                 actions at extra key positions {extra_positions:?}; Rynk may \
+                                 fire it from that chord too",
+                                combo.name
+                            ),
+                        );
+                    }
                     out.push(Combo {
                         actions,
                         output,
@@ -602,6 +621,57 @@ impl<'a> Lowering<'a> {
             }
         }
     }
+}
+
+fn ambiguous_combo_positions(
+    trigger_actions: &[KeyAction],
+    declared_positions: &[usize],
+    editor_layer: usize,
+    position_count: usize,
+    action_at: &dyn Fn(usize, usize) -> Option<KeyAction>,
+) -> Option<Vec<usize>> {
+    let mut needed: Vec<(KeyAction, usize)> = Vec::new();
+    for action in trigger_actions
+        .iter()
+        .filter(|action| !matches!(action, KeyAction::No | KeyAction::Transparent))
+    {
+        match needed
+            .iter_mut()
+            .find(|(candidate, _)| *candidate == *action)
+        {
+            Some((_, count)) => *count += 1,
+            None => needed.push((*action, 1)),
+        }
+    }
+    if needed.is_empty() {
+        return None;
+    }
+
+    // A repeated action alone is not enough: another physical chord must be
+    // able to supply the complete trigger multiset. Requiring every member of
+    // this witness to be outside the declared positions also means a two-key
+    // combo with one layer-unique trigger cannot be reported as ambiguous.
+    let mut extra_positions = Vec::new();
+    for position in (0..position_count).filter(|position| !declared_positions.contains(position)) {
+        let Some(action) = action_at(editor_layer, position) else {
+            continue;
+        };
+        if matches!(action, KeyAction::No | KeyAction::Transparent) {
+            continue;
+        }
+        if let Some((_, count)) = needed
+            .iter_mut()
+            .find(|(candidate, count)| *count > 0 && *candidate == action)
+        {
+            *count -= 1;
+            extra_positions.push(position);
+        }
+    }
+
+    needed
+        .iter()
+        .all(|(_, count)| *count == 0)
+        .then_some(extra_positions)
 }
 
 /// An editor parameter is either a bare value or a `{ "value": ... }` wrapper.
