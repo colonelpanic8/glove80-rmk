@@ -180,18 +180,34 @@ async fn read_snapshot(client: &Client) -> Result<Snapshot> {
             capabilities.num_cols
         );
     }
-    let actions = if capabilities.bulk_transfer_supported {
-        client.read_all_keymap().await?
-    } else {
-        let mut actions = Vec::new();
-        for layer in 0..capabilities.num_layers {
-            for row in 0..ROWS {
-                for col in 0..COLS {
-                    actions.push(client.get_key(layer, row, col).await?);
-                }
+    // The bulk read is an optimization, so a device that advertises it but
+    // cannot deliver a decodable response falls back to reading key by key
+    // rather than failing the whole command. Firmware carrying a keymap
+    // written by an older keycode table can land in exactly that state.
+    let bulk = if capabilities.bulk_transfer_supported {
+        match client.read_all_keymap().await {
+            Ok(actions) => Some(actions),
+            Err(error) => {
+                eprintln!("bulk keymap read failed ({error}); falling back to key-by-key");
+                None
             }
         }
-        actions
+    } else {
+        None
+    };
+    let actions = match bulk {
+        Some(actions) => actions,
+        None => {
+            let mut actions = Vec::new();
+            for layer in 0..capabilities.num_layers {
+                for row in 0..ROWS {
+                    for col in 0..COLS {
+                        actions.push(client.get_key(layer, row, col).await?);
+                    }
+                }
+            }
+            actions
+        }
     };
     let mut layers = actions
         .chunks(LAYER_SIZE)
