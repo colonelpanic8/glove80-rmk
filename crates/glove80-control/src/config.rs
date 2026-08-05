@@ -33,13 +33,29 @@ pub enum ConfigCommand {
     /// Validate a runtime TOML or MoErgo Layout Editor JSON file offline.
     Validate { file: PathBuf },
     /// Compare a runtime TOML or MoErgo JSON file with the keyboard.
-    Diff { file: PathBuf },
+    Diff {
+        file: PathBuf,
+        /// Treat the file as the whole managed state, so a behavior table it
+        /// does not mention reads as empty rather than as "leave alone".
+        #[arg(long)]
+        exact: bool,
+    },
     /// Apply a runtime TOML or MoErgo JSON file and verify it by read-back.
     Apply {
         file: PathBuf,
         /// Show differences without writing anything.
         #[arg(long)]
         dry_run: bool,
+        /// Set the keyboard to exactly this file: behavior tables it does not
+        /// mention are cleared instead of left as the keyboard holds them.
+        ///
+        /// Without this, an absent `[[morse]]` / `[[combo]]` / `[[fork]]` /
+        /// `[[macro]]` section means "this file says nothing about that table",
+        /// which is what keeps a configuration written before those sections
+        /// existed from wiping them. That rule also means no file can ever clear
+        /// one, which is what this flag is for.
+        #[arg(long)]
+        exact: bool,
     },
     /// Pull the connected keyboard's runtime state into a TOML or JSON file.
     Pull {
@@ -137,15 +153,25 @@ pub async fn operate(client: &Client, command: &ConfigCommand) -> Result<()> {
                 .with_context(|| format!("could not write {}", file.display()))?;
             println!("pulled live runtime configuration into {}", file.display());
         }
-        ConfigCommand::Diff { file } => {
-            let desired = parse(file)?.snapshot()?;
+        ConfigCommand::Diff { file, exact } => {
+            let mut desired = parse(file)?.snapshot()?;
+            if *exact {
+                claim_every_behavior_table(&mut desired);
+            }
             let live = read_snapshot(client).await?;
             if !print_diff(&desired, &live) {
                 return Err(DiffFound.into());
             }
         }
-        ConfigCommand::Apply { file, dry_run } => {
-            let desired = parse(file)?.snapshot()?;
+        ConfigCommand::Apply {
+            file,
+            dry_run,
+            exact,
+        } => {
+            let mut desired = parse(file)?.snapshot()?;
+            if *exact {
+                claim_every_behavior_table(&mut desired);
+            }
             let before = read_snapshot(client).await?;
             let pending = differences(&desired, &before);
             if pending.is_empty() {
@@ -463,40 +489,72 @@ async fn read_macro_space(client: &Client) -> Result<Vec<u8>> {
     Ok(space)
 }
 
+/// Make a snapshot speak for every behavior table, so one it did not mention
+/// reads as empty rather than as silence.
+///
+/// This is the whole of `--exact`: the merge semantics live in the `Option`s, and
+/// filling them in is what turns "leave this alone" into "there is nothing here".
+fn claim_every_behavior_table(snapshot: &mut glove80_config::Snapshot) {
+    let behaviors = &mut snapshot.behaviors;
+    behaviors.morses.get_or_insert_with(Vec::new);
+    behaviors.combos.get_or_insert_with(Vec::new);
+    behaviors.forks.get_or_insert_with(Vec::new);
+    behaviors.macros.get_or_insert_with(Vec::new);
+}
+
 /// Write the behavior tables, skipping any the source is silent about.
 async fn apply_behaviors(
     client: &Client,
     desired: &BehaviorSnapshot,
     before: &BehaviorSnapshot,
 ) -> Result<()> {
+    // The bulk writers write exactly the slots they are given, so a table that
+    // shrank would keep its tail. Pad to what the keyboard currently holds and
+    // the surplus is overwritten with empty slots.
     if let Some(morses) = &desired.morses {
-        if before.morses.as_ref() != Some(morses) {
+        let mut morses = morses.clone();
+        let held = before.morses.as_deref().unwrap_or_default().len();
+        morses.resize(morses.len().max(held), Default::default());
+        if before.morses.as_deref() != Some(morses.as_slice()) {
             client
-                .write_all_morses(morses.clone())
+                .write_all_morses(morses)
                 .await
                 .context("could not write the morse table")?;
         }
     }
     if let Some(combos) = &desired.combos {
-        if before.combos.as_ref() != Some(combos) {
+        let mut combos = combos.clone();
+        let held = before.combos.as_deref().unwrap_or_default().len();
+        // An unprogrammed combo triggers on nothing and outputs nothing.
+        let empty = rynk::rmk_types::combo::Combo {
+            actions: Default::default(),
+            output: rynk::rmk_types::action::KeyAction::No,
+            layer: None,
+        };
+        combos.resize(combos.len().max(held), empty);
+        if before.combos.as_deref() != Some(combos.as_slice()) {
             client
-                .write_all_combos(combos.clone())
+                .write_all_combos(combos)
                 .await
                 .context("could not write the combo table")?;
         }
     }
     if let Some(forks) = &desired.forks {
-        // No bulk form for forks, so write only the slots that differ.
+        // No bulk form for forks, so write slot by slot. Slots past the end of
+        // the file are cleared rather than left behind, or a shrinking table
+        // would keep its tail firing.
         let present = before.forks.as_deref().unwrap_or_default();
-        for (index, fork) in forks.iter().enumerate() {
-            if present.get(index) == Some(fork) {
+        let empty = rynk::rmk_types::fork::Fork::default();
+        for index in 0..forks.len().max(present.len()) {
+            let wanted = forks.get(index).unwrap_or(&empty);
+            if present.get(index) == Some(wanted) {
                 continue;
             }
-            let index = u8::try_from(index).context("more forks than the protocol can address")?;
+            let slot = u8::try_from(index).context("more forks than the protocol can address")?;
             client
-                .set_fork(index, *fork)
+                .set_fork(slot, *wanted)
                 .await
-                .with_context(|| format!("could not write fork {index}"))?;
+                .with_context(|| format!("could not write fork {slot}"))?;
         }
     }
     if let Some(macros) = &desired.macros {

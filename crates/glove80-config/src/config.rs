@@ -1128,6 +1128,34 @@ pub fn param_differences(desired: &LightingSnapshot, live: &LightingSnapshot) ->
     result
 }
 
+/// Report slots the keyboard holds beyond what the file describes.
+///
+/// A file that claims a table but names fewer slots than the device has is
+/// asking for the rest to be empty. Walking only as far as the file goes would
+/// leave those in place and report nothing, which is how a shrinking table
+/// silently keeps its tail.
+fn report_surplus<T>(
+    result: &mut Vec<String>,
+    noun: &str,
+    wanted: usize,
+    present: &[T],
+    is_empty: impl Fn(&T) -> bool,
+) {
+    for (index, slot) in present.iter().enumerate().skip(wanted) {
+        if !is_empty(slot) {
+            result.push(format!(
+                "{noun} {index}: on the keyboard but not in the file"
+            ));
+        }
+    }
+}
+
+/// Whether a fork slot is unprogrammed. A fork that triggers on nothing can
+/// never fire, which is how the firmware spells an empty slot.
+fn is_empty_fork(fork: &rynk::rmk_types::fork::Fork) -> bool {
+    fork.trigger == rynk::rmk_types::action::KeyAction::No
+}
+
 pub fn differences(desired: &Snapshot, live: &Snapshot) -> Vec<String> {
     let mut result = Vec::new();
     if desired.default_layer != live.default_layer {
@@ -1160,6 +1188,9 @@ pub fn differences(desired: &Snapshot, live: &Snapshot) -> Vec<String> {
                 result.push(format!("morse {index}: file differs from keyboard"));
             }
         }
+        report_surplus(&mut result, "morse", wanted.len(), present, |morse| {
+            morse.actions.is_empty()
+        });
     }
     if let Some(wanted) = &desired.behaviors.combos {
         let present = live.behaviors.combos.as_deref().unwrap_or_default();
@@ -1168,6 +1199,11 @@ pub fn differences(desired: &Snapshot, live: &Snapshot) -> Vec<String> {
                 result.push(format!("combo {index}: file differs from keyboard"));
             }
         }
+        // An unprogrammed combo outputs nothing; that, not an empty trigger
+        // list, is how the firmware spells a free slot.
+        report_surplus(&mut result, "combo", wanted.len(), present, |combo| {
+            combo.output == rynk::rmk_types::action::KeyAction::No
+        });
     }
     if let Some(wanted) = &desired.behaviors.forks {
         let present = live.behaviors.forks.as_deref().unwrap_or_default();
@@ -1176,6 +1212,7 @@ pub fn differences(desired: &Snapshot, live: &Snapshot) -> Vec<String> {
                 result.push(format!("fork {index}: file differs from keyboard"));
             }
         }
+        report_surplus(&mut result, "fork", wanted.len(), present, is_empty_fork);
     }
     if let Some(wanted) = &desired.behaviors.macros {
         let present = live.behaviors.macros.as_deref().unwrap_or_default();
@@ -2072,6 +2109,60 @@ Density = 6
         let found = differences(&with_rule, &unsupported);
         assert_eq!(found.len(), 1, "{found:?}");
         assert!(found[0].contains("no runtime conditional table"));
+    }
+
+    /// A table that shrank has to report its tail. Walking only as far as the
+    /// file goes made a surplus slot invisible, which is how a keyboard kept
+    /// firing combos that the file it was set from does not contain.
+    #[test]
+    fn slots_the_keyboard_holds_beyond_the_file_are_reported() {
+        use rynk::rmk_types::action::KeyAction;
+        use rynk::rmk_types::combo::Combo;
+
+        let combo = |trigger: KeyAction| Combo {
+            actions: Default::default(),
+            output: trigger,
+            layer: None,
+        };
+        let empty = Combo {
+            actions: Default::default(),
+            output: KeyAction::No,
+            layer: None,
+        };
+
+        let mut desired = Snapshot {
+            default_layer: 0,
+            layers: Vec::new(),
+            lighting: None,
+            behaviors: BehaviorSnapshot {
+                // The file claims the table and names nothing in it.
+                combos: Some(Vec::new()),
+                ..BehaviorSnapshot::default()
+            },
+        };
+        let live = Snapshot {
+            default_layer: 0,
+            layers: Vec::new(),
+            lighting: None,
+            behaviors: BehaviorSnapshot {
+                combos: Some(vec![
+                    combo(KeyAction::Single(Action::LayerToggle(2))),
+                    empty.clone(),
+                ]),
+                ..BehaviorSnapshot::default()
+            },
+        };
+        let report = differences(&desired, &live);
+        assert_eq!(
+            report,
+            vec!["combo 0: on the keyboard but not in the file".to_string()],
+            "only the populated surplus slot should be reported"
+        );
+
+        // Silence is still silence: a file that does not claim the table at all
+        // leaves it alone, which is what keeps an older configuration safe.
+        desired.behaviors.combos = None;
+        assert!(differences(&desired, &live).is_empty());
     }
 
     #[test]
