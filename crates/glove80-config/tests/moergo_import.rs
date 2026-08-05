@@ -10,8 +10,44 @@
 use glove80_config::{
     import_moergo_layout, runtime_config_from_moergo_json, RuntimeConfig, Severity,
 };
+use serde_json::json;
 
 const TAILORKEY: &str = include_str!("fixtures/tailorkey-v52-bilateral.json");
+
+fn combo_export(extra_triggers: bool) -> String {
+    let mut keys = vec![json!({ "value": "&none" }); 80];
+    keys[0] = json!({ "value": "&kp", "params": [{ "value": "A" }] });
+    keys[1] = json!({ "value": "&kp", "params": [{ "value": "B" }] });
+    if extra_triggers {
+        keys[2] = keys[0].clone();
+        keys[3] = keys[1].clone();
+    }
+
+    json!({
+        "keyboard": "glove80",
+        "layer_names": ["Base"],
+        "layers": [keys],
+        "combos": [{
+            "name": "copy-pair",
+            "binding": { "value": "&kp", "params": [{ "value": "C" }] },
+            "keyPositions": [0, 1],
+            "layers": [0]
+        }]
+    })
+    .to_string()
+}
+
+fn combo_ambiguity_diagnostics(imported: &glove80_config::ImportedLayout) -> Vec<&str> {
+    imported
+        .diagnostics
+        .iter()
+        .filter(|diagnostic| {
+            diagnostic.severity == Severity::Approximated
+                && diagnostic.message.contains("extra key positions")
+        })
+        .map(|diagnostic| diagnostic.message.as_str())
+        .collect()
+}
 
 #[test]
 fn drops_the_per_finger_layers_the_home_row_mods_are_built_from() {
@@ -113,6 +149,51 @@ fn every_combo_resolves_on_each_layer_it_is_declared_for() {
             .iter()
             .all(|combo| combo.keys.len() >= 2),
         "a combo lost its trigger keys"
+    );
+}
+
+#[test]
+fn position_unique_combo_actions_are_not_reported_as_ambiguous() {
+    let imported = import_moergo_layout(&combo_export(false)).expect("import");
+
+    assert!(
+        combo_ambiguity_diagnostics(&imported).is_empty(),
+        "unique trigger positions were reported as ambiguous: {:?}",
+        imported.diagnostics
+    );
+}
+
+#[test]
+fn combo_actions_repeated_at_other_positions_are_reported() {
+    let imported = import_moergo_layout(&combo_export(true)).expect("import");
+    let diagnostics = combo_ambiguity_diagnostics(&imported);
+
+    assert_eq!(
+        diagnostics.len(),
+        1,
+        "diagnostics: {:?}",
+        imported.diagnostics
+    );
+    assert!(diagnostics[0].contains("copy-pair"), "{}", diagnostics[0]);
+    assert!(diagnostics[0].contains("[2, 3]"), "{}", diagnostics[0]);
+    assert_eq!(imported.runtime.combos.len(), 1, "the combo was dropped");
+}
+
+#[test]
+fn tailorkey_import_has_no_dropped_diagnostics() {
+    let imported = import_moergo_layout(TAILORKEY).expect("import");
+
+    assert!(
+        imported
+            .diagnostics
+            .iter()
+            .all(|diagnostic| diagnostic.severity != Severity::Dropped),
+        "dropped diagnostics: {:?}",
+        imported
+            .diagnostics
+            .iter()
+            .filter(|diagnostic| diagnostic.severity == Severity::Dropped)
+            .collect::<Vec<_>>()
     );
 }
 
