@@ -3,8 +3,10 @@
 use std::collections::BTreeMap;
 
 use anyhow::{bail, Context, Result};
-use rynk::rmk_types::action::KeyAction;
+use rynk::rmk_types::action::{Action, KeyAction};
 use rynk::rmk_types::ble::BleState as WireBleState;
+use rynk::rmk_types::combo::Combo;
+use rynk::rmk_types::morse::{Morse, MorseMode, MorseProfile};
 use rynk::rmk_types::protocol::rynk::{
     LightingActiveTransport, LightingBackgroundMode, LightingBackgroundState,
     LightingBatteryCondition, LightingBondedSlotCondition, LightingChargeCondition,
@@ -37,6 +39,15 @@ pub struct RuntimeConfig {
     pub default_layer: u8,
     #[serde(default, rename = "layer")]
     pub layers: Vec<LayerConfig>,
+    /// The behavior tables the keymap addresses by index. An absent section
+    /// means the file says nothing about that table and apply leaves it alone,
+    /// so a configuration written before these existed still round-trips.
+    #[serde(default, rename = "morse", skip_serializing_if = "Vec::is_empty")]
+    pub morses: Vec<MorseConfig>,
+    #[serde(default, rename = "combo", skip_serializing_if = "Vec::is_empty")]
+    pub combos: Vec<ComboConfig>,
+    #[serde(default, rename = "macro", skip_serializing_if = "Vec::is_empty")]
+    pub macros: Vec<MacroConfig>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub lighting: Option<LightingConfig>,
 }
@@ -46,6 +57,82 @@ pub struct LayerConfig {
     pub id: String,
     pub name: String,
     pub keys: String,
+}
+
+/// A morse (tap-dance) key, addressed from the keymap as `TD(n)` by its
+/// position in the file.
+///
+/// Actions are written with the same keycode names `keys` uses. Timing fields
+/// left out fall through to the keyboard's global defaults, which is how a
+/// thumb key and a home row mod can run different windows.
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct MorseConfig {
+    /// Host-side label; the firmware does not store it.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub name: String,
+    pub tap: String,
+    pub hold: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub double_tap: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hold_after_tap: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hold_timeout_ms: Option<u16>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gap_timeout_ms: Option<u16>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub quick_tap_ms: Option<u16>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prior_idle_ms: Option<u16>,
+    /// Send the tap when the interrupting key is on the same hand. This is
+    /// what makes a home row mod bilateral, and it needs the firmware's layout
+    /// to declare each key's hand.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unilateral_tap: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retro_tap: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hold_trigger_on_release: Option<bool>,
+    /// `normal`, `permissive-hold`, `hold-on-other-press` or
+    /// `tap-unless-interrupted`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mode: Option<String>,
+}
+
+/// A combo: pressing every key in `keys` together emits `output`.
+///
+/// The triggers are actions rather than positions, so a combo follows the keys
+/// it names wherever they sit.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ComboConfig {
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub name: String,
+    pub keys: Vec<String>,
+    pub output: String,
+    /// Restrict the combo to one layer. Absent means every layer.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub layer: Option<u8>,
+}
+
+/// A macro, addressed from the keymap as `TriggerMacro(n)` by its position in
+/// the file. The operation vocabulary is the firmware's own.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct MacroConfig {
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub name: String,
+    pub operations: Vec<MacroOperationConfig>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(tag = "operation", rename_all = "lowercase")]
+pub enum MacroOperationConfig {
+    Tap { keycode: String },
+    Down { keycode: String },
+    Up { keycode: String },
+    Delay { ms: u16 },
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -339,6 +426,25 @@ pub struct Snapshot {
     pub default_layer: u8,
     pub layers: Vec<Vec<u16>>,
     pub lighting: Option<LightingSnapshot>,
+    /// The behavior tables a keymap cell addresses by index: morses for
+    /// `TD(n)`, macros for `TriggerMacro(n)`, and the combos that fire
+    /// alongside them.
+    ///
+    /// `None` means the source does not describe the table and it should be
+    /// left alone, the way the lighting fields distinguish silence from
+    /// emptiness. The TOML schema is silent about all three today, so only an
+    /// imported editor layout fills them in.
+    pub behaviors: BehaviorSnapshot,
+}
+
+/// The behavior half of a [`Snapshot`].
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct BehaviorSnapshot {
+    pub morses: Option<Vec<rynk::rmk_types::morse::Morse>>,
+    pub combos: Option<Vec<rynk::rmk_types::combo::Combo>>,
+    /// Macro space as the firmware stores it: the sequences concatenated, each
+    /// ended by its own terminator, which is what `TriggerMacro` indexes into.
+    pub macros: Option<Vec<u8>>,
 }
 
 /// The lighting half of a [`Snapshot`]. Its `Option` fields distinguish state a
@@ -404,6 +510,47 @@ impl RuntimeConfig {
             default_layer: self.default_layer,
             layers,
             lighting,
+            behaviors: BehaviorSnapshot {
+                morses: (!self.morses.is_empty())
+                    .then(|| {
+                        self.morses
+                            .iter()
+                            .enumerate()
+                            .map(|(index, morse)| {
+                                morse
+                                    .to_wire()
+                                    .with_context(|| format!("[[morse]] {index} ({})", morse.name))
+                            })
+                            .collect::<Result<Vec<_>>>()
+                    })
+                    .transpose()?,
+                combos: (!self.combos.is_empty())
+                    .then(|| {
+                        self.combos
+                            .iter()
+                            .enumerate()
+                            .map(|(index, combo)| {
+                                combo
+                                    .to_wire()
+                                    .with_context(|| format!("[[combo]] {index} ({})", combo.name))
+                            })
+                            .collect::<Result<Vec<_>>>()
+                    })
+                    .transpose()?,
+                macros: (!self.macros.is_empty())
+                    .then(|| {
+                        let mut space = Vec::new();
+                        for (index, entry) in self.macros.iter().enumerate() {
+                            space.extend(
+                                entry.to_wire().with_context(|| {
+                                    format!("[[macro]] {index} ({})", entry.name)
+                                })?,
+                            );
+                        }
+                        Ok::<_, anyhow::Error>(space)
+                    })
+                    .transpose()?,
+            },
         })
     }
 
@@ -424,6 +571,44 @@ impl RuntimeConfig {
         Self {
             default_layer: snapshot.default_layer,
             layers,
+            morses: snapshot
+                .behaviors
+                .morses
+                .as_deref()
+                .unwrap_or_default()
+                .iter()
+                .enumerate()
+                .map(|(index, morse)| {
+                    let mut config = MorseConfig::from_wire(morse, index);
+                    // The firmware stores no label, so keep the one a previous
+                    // file gave this slot, as layer names are kept.
+                    if let Some(old) = labels.and_then(|config| config.morses.get(index)) {
+                        config.name = old.name.clone();
+                    }
+                    config
+                })
+                .collect(),
+            combos: snapshot
+                .behaviors
+                .combos
+                .as_deref()
+                .unwrap_or_default()
+                .iter()
+                .enumerate()
+                .map(|(index, combo)| {
+                    let mut config = ComboConfig::from_wire(combo, index);
+                    if let Some(old) = labels.and_then(|config| config.combos.get(index)) {
+                        config.name = old.name.clone();
+                    }
+                    config
+                })
+                .collect(),
+            macros: snapshot
+                .behaviors
+                .macros
+                .as_deref()
+                .map(MacroConfig::all_from_wire)
+                .unwrap_or_default(),
             lighting: snapshot
                 .lighting
                 .as_ref()
@@ -439,6 +624,221 @@ impl RuntimeConfig {
         }
         Ok(text)
     }
+}
+
+/// Spell a wire action the way the keymap's `keys` field spells one.
+fn action_name(action: Action) -> String {
+    crate::keycodes::format_keycode(crate::rynk_keycode::to_via_keycode(KeyAction::Single(
+        action,
+    )))
+}
+
+fn action_from_name(text: &str) -> Result<Action> {
+    match crate::rynk_keycode::from_via_keycode(crate::keycodes::parse_keycode(text)?) {
+        KeyAction::Single(action) => Ok(action),
+        _ => bail!("'{text}' is not a single action"),
+    }
+}
+
+impl MorseConfig {
+    pub(crate) fn to_wire(&self) -> Result<Morse> {
+        use rynk::rmk_types::morse::{DOUBLE_TAP, HOLD, HOLD_AFTER_TAP, TAP};
+
+        let mode = match self.mode.as_deref() {
+            None => None,
+            Some("normal") => Some(MorseMode::Normal),
+            Some("permissive-hold") => Some(MorseMode::PermissiveHold),
+            Some("hold-on-other-press") => Some(MorseMode::HoldOnOtherPress),
+            Some("tap-unless-interrupted") => Some(MorseMode::TapUnlessInterrupted),
+            Some(other) => bail!("unknown morse mode '{other}'"),
+        };
+        let profile = MorseProfile::const_default()
+            .with_mode(mode)
+            .with_hold_timeout_ms(self.hold_timeout_ms)
+            .with_gap_timeout_ms(self.gap_timeout_ms)
+            .with_quick_tap_timeout_ms(self.quick_tap_ms)
+            .with_prior_idle_time_ms(self.prior_idle_ms)
+            .with_unilateral_tap(self.unilateral_tap)
+            .with_retro_tap(self.retro_tap)
+            .with_hold_trigger_on_release(self.hold_trigger_on_release);
+
+        let mut morse = Morse {
+            profile,
+            ..Morse::default()
+        };
+        let _ = morse.put(TAP, action_from_name(&self.tap).context("tap action")?);
+        let _ = morse.put(HOLD, action_from_name(&self.hold).context("hold action")?);
+        if let Some(text) = &self.double_tap {
+            let _ = morse.put(DOUBLE_TAP, action_from_name(text).context("double tap")?);
+        }
+        if let Some(text) = &self.hold_after_tap {
+            let _ = morse.put(
+                HOLD_AFTER_TAP,
+                action_from_name(text).context("hold after tap")?,
+            );
+        }
+        Ok(morse)
+    }
+
+    pub(crate) fn from_wire(morse: &Morse, index: usize) -> Self {
+        use rynk::rmk_types::morse::{DOUBLE_TAP, HOLD, HOLD_AFTER_TAP, TAP};
+
+        Self {
+            name: format!("morse {index}"),
+            tap: morse.get(TAP).map(action_name).unwrap_or_default(),
+            hold: morse.get(HOLD).map(action_name).unwrap_or_default(),
+            double_tap: morse.get(DOUBLE_TAP).map(action_name),
+            hold_after_tap: morse.get(HOLD_AFTER_TAP).map(action_name),
+            hold_timeout_ms: morse.profile.hold_timeout_ms(),
+            gap_timeout_ms: morse.profile.gap_timeout_ms(),
+            quick_tap_ms: morse.profile.quick_tap_timeout_ms(),
+            prior_idle_ms: morse.profile.prior_idle_time_ms(),
+            unilateral_tap: morse.profile.unilateral_tap(),
+            retro_tap: morse.profile.retro_tap(),
+            hold_trigger_on_release: morse.profile.hold_trigger_on_release(),
+            mode: morse.profile.mode().map(|mode| {
+                match mode {
+                    MorseMode::Normal => "normal",
+                    MorseMode::PermissiveHold => "permissive-hold",
+                    MorseMode::HoldOnOtherPress => "hold-on-other-press",
+                    MorseMode::TapUnlessInterrupted => "tap-unless-interrupted",
+                }
+                .to_owned()
+            }),
+        }
+    }
+}
+
+impl ComboConfig {
+    pub(crate) fn to_wire(&self) -> Result<Combo> {
+        let mut actions = heapless::Vec::new();
+        for key in &self.keys {
+            let action =
+                crate::rynk_keycode::from_via_keycode(crate::keycodes::parse_keycode(key)?);
+            actions
+                .push(action)
+                .map_err(|_| anyhow::anyhow!("more keys than a combo can hold"))?;
+        }
+        if actions.len() < 2 {
+            bail!("a combo needs at least two keys");
+        }
+        Ok(Combo {
+            actions,
+            output: crate::rynk_keycode::from_via_keycode(crate::keycodes::parse_keycode(
+                &self.output,
+            )?),
+            layer: self.layer,
+        })
+    }
+
+    pub(crate) fn from_wire(combo: &Combo, index: usize) -> Self {
+        Self {
+            name: format!("combo {index}"),
+            keys: combo
+                .actions
+                .iter()
+                .map(|action| {
+                    crate::keycodes::format_keycode(crate::rynk_keycode::to_via_keycode(*action))
+                })
+                .collect(),
+            output: crate::keycodes::format_keycode(crate::rynk_keycode::to_via_keycode(
+                combo.output,
+            )),
+            layer: combo.layer,
+        }
+    }
+}
+
+impl MacroConfig {
+    /// One macro's bytes, terminator included.
+    pub(crate) fn to_wire(&self) -> Result<Vec<u8>> {
+        let mut bytes = Vec::new();
+        for operation in &self.operations {
+            let (tag, keycode) = match operation {
+                MacroOperationConfig::Tap { keycode } => (0x01, Some(keycode)),
+                MacroOperationConfig::Down { keycode } => (0x02, Some(keycode)),
+                MacroOperationConfig::Up { keycode } => (0x03, Some(keycode)),
+                MacroOperationConfig::Delay { ms } => {
+                    // Vial packs a delay as two bytes that are never zero.
+                    bytes.extend_from_slice(&[
+                        0x01,
+                        0x04,
+                        (ms % 255) as u8 + 1,
+                        (ms / 255) as u8 + 1,
+                    ]);
+                    continue;
+                }
+            };
+            let Some(keycode) = keycode else { continue };
+            let code = crate::keycodes::parse_keycode(keycode)?;
+            // A modified keycode has no one-byte form, so the modifiers are
+            // pressed around the key instead.
+            let modifiers = modifier_hid_keys((code >> 8) as u8);
+            for modifier in &modifiers {
+                bytes.extend_from_slice(&[0x01, 0x02, *modifier]);
+            }
+            bytes.extend_from_slice(&[0x01, tag, (code & 0xff) as u8]);
+            for modifier in modifiers.iter().rev() {
+                bytes.extend_from_slice(&[0x01, 0x03, *modifier]);
+            }
+        }
+        bytes.push(0x00);
+        Ok(bytes)
+    }
+
+    /// Split macro space back into one entry per terminator.
+    pub(crate) fn all_from_wire(space: &[u8]) -> Vec<Self> {
+        let mut out = Vec::new();
+        for (index, sequence) in space.split(|byte| *byte == 0).enumerate() {
+            if sequence.is_empty() {
+                continue;
+            }
+            let mut operations = Vec::new();
+            let mut cursor = 0;
+            while cursor + 2 < sequence.len() + 1 && cursor + 1 < sequence.len() {
+                match (sequence[cursor], sequence.get(cursor + 1)) {
+                    (0x01, Some(0x04)) if cursor + 3 < sequence.len() => {
+                        let ms = (sequence[cursor + 2].max(1) as u16 - 1)
+                            + (sequence[cursor + 3].max(1) as u16 - 1) * 255;
+                        operations.push(MacroOperationConfig::Delay { ms });
+                        cursor += 4;
+                    }
+                    (0x01, Some(tag @ 0x01..=0x03)) if cursor + 2 < sequence.len() => {
+                        let keycode = crate::keycodes::format_keycode(sequence[cursor + 2] as u16);
+                        operations.push(match tag {
+                            0x01 => MacroOperationConfig::Tap { keycode },
+                            0x02 => MacroOperationConfig::Down { keycode },
+                            _ => MacroOperationConfig::Up { keycode },
+                        });
+                        cursor += 3;
+                    }
+                    _ => break,
+                }
+            }
+            out.push(Self {
+                name: format!("macro {index}"),
+                operations,
+            });
+        }
+        out
+    }
+}
+
+/// The HID keycodes for a VIA packed-modifier byte, in a stable order.
+fn modifier_hid_keys(packed: u8) -> Vec<u8> {
+    const MODIFIERS: [(u8, u8); 4] = [
+        (0b0000_0001, 0xe0), // Ctrl
+        (0b0000_0010, 0xe1), // Shift
+        (0b0000_0100, 0xe2), // Alt
+        (0b0000_1000, 0xe3), // Gui
+    ];
+    // Bit 4 selects the right-hand set, which sits four keycodes further on.
+    let right = if packed & 0b0001_0000 != 0 { 4 } else { 0 };
+    MODIFIERS
+        .iter()
+        .filter(|(bit, _)| packed & bit != 0)
+        .map(|(_, key)| key + right)
+        .collect()
 }
 
 impl LightingConfig {
@@ -604,6 +1004,33 @@ pub fn differences(desired: &Snapshot, live: &Snapshot) -> Vec<String> {
             }
         }
     }
+    // A table the source is silent about is left alone, so only a `Some`
+    // participates in the diff.
+    if let Some(wanted) = &desired.behaviors.morses {
+        let present = live.behaviors.morses.as_deref().unwrap_or_default();
+        for (index, morse) in wanted.iter().enumerate() {
+            if present.get(index) != Some(morse) {
+                result.push(format!("morse {index}: file differs from keyboard"));
+            }
+        }
+    }
+    if let Some(wanted) = &desired.behaviors.combos {
+        let present = live.behaviors.combos.as_deref().unwrap_or_default();
+        for (index, combo) in wanted.iter().enumerate() {
+            if present.get(index) != Some(combo) {
+                result.push(format!("combo {index}: file differs from keyboard"));
+            }
+        }
+    }
+    if let Some(wanted) = &desired.behaviors.macros {
+        let present = live.behaviors.macros.as_deref().unwrap_or_default();
+        // Macro space is zero-filled past the end, so compare only as far as
+        // the file describes.
+        if present.len() < wanted.len() || present[..wanted.len()] != wanted[..] {
+            result.push(format!("macro space: {} byte(s) differ", wanted.len()));
+        }
+    }
+
     match (&desired.lighting, &live.lighting) {
         (Some(wanted), Some(present)) => {
             if wanted.brightness != present.brightness {
@@ -1416,6 +1843,7 @@ Density = 6
             let mut snap = lighting_snapshot(None, None);
             snap.conditional_scenes = Some(cells);
             Snapshot {
+                behaviors: BehaviorSnapshot::default(),
                 default_layer: 0,
                 layers: Vec::new(),
                 lighting: Some(snap),
@@ -1440,6 +1868,7 @@ Density = 6
             let mut snap = lighting_snapshot(None, None);
             snap.conditional_scenes = None;
             Snapshot {
+                behaviors: BehaviorSnapshot::default(),
                 default_layer: 0,
                 layers: Vec::new(),
                 lighting: Some(snap),
@@ -1449,6 +1878,7 @@ Density = 6
             let mut snap = lighting_snapshot(None, None);
             snap.conditional_scenes = Some(Vec::new());
             Snapshot {
+                behaviors: BehaviorSnapshot::default(),
                 default_layer: 0,
                 layers: Vec::new(),
                 lighting: Some(snap),
@@ -1478,6 +1908,7 @@ Density = 6
                 effects: None,
             }]);
             Snapshot {
+                behaviors: BehaviorSnapshot::default(),
                 default_layer: 0,
                 layers: Vec::new(),
                 lighting: Some(snap),
@@ -1664,6 +2095,7 @@ Density = 6
     #[test]
     fn pull_records_only_parameters_that_differ_from_their_default() {
         let snapshot = Snapshot {
+            behaviors: BehaviorSnapshot::default(),
             default_layer: 0,
             layers: vec![vec![0; LAYER_SIZE]],
             lighting: Some(lighting_snapshot(
@@ -1684,6 +2116,7 @@ Density = 6
     #[test]
     fn pull_drops_parameters_when_the_keyboard_has_none() {
         let snapshot = Snapshot {
+            behaviors: BehaviorSnapshot::default(),
             default_layer: 0,
             layers: vec![vec![0; LAYER_SIZE]],
             lighting: Some(lighting_snapshot(

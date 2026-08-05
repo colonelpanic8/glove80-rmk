@@ -37,15 +37,9 @@ pub const MOERGO_TO_MATRIX: [usize; 80] = [
 /// the hand tags that bilateral home row mods are decided from.
 #[derive(Clone, Debug)]
 pub struct ImportedLayout {
-    /// Keymap and layer names.
+    /// Keymap, layer names, and the morse, combo and macro tables the keymap
+    /// addresses by index.
     pub runtime: RuntimeConfig,
-    /// The morse table the keymap's `TD(n)` cells address.
-    pub morses: Vec<rynk::rmk_types::morse::Morse>,
-    /// Combos, already expanded to one entry per layer they are active on.
-    pub combos: Vec<rynk::rmk_types::combo::Combo>,
-    /// Macro sequences the keymap's `TriggerMacro` cells run, encoded in the
-    /// byte format Rynk's macro space uses.
-    pub macros: Vec<Vec<u8>>,
     /// Editor layers dropped as home-row-mod scaffolding, by their original
     /// index, so a caller can explain the renumbering.
     pub dropped_layers: Vec<usize>,
@@ -191,7 +185,7 @@ pub fn import_moergo_layout(text: &str) -> Result<ImportedLayout> {
         });
     }
 
-    let combos = lowering.lower_combos(
+    let wire_combos = lowering.lower_combos(
         &|editor_layer, position| {
             by_editor_layer
                 .get(editor_layer)
@@ -202,17 +196,34 @@ pub fn import_moergo_layout(text: &str) -> Result<ImportedLayout> {
         layers.len(),
     );
 
+    // The lowered tables go onto the managed configuration itself rather than
+    // straight to the wire, so an import is an ordinary configuration: it can
+    // be written as TOML, hand-edited and applied through the same path a
+    // TOML source already takes.
+    let morses = lowering
+        .morses()
+        .iter()
+        .enumerate()
+        .map(|(index, morse)| crate::MorseConfig::from_wire(morse, index))
+        .collect();
+    let combos = wire_combos
+        .iter()
+        .enumerate()
+        .map(|(index, combo)| crate::ComboConfig::from_wire(combo, index))
+        .collect();
+    let macros = crate::MacroConfig::all_from_wire(&lowering.macros().concat());
+
     let config = RuntimeConfig {
         default_layer: 0,
         layers: converted,
+        morses,
+        combos,
+        macros,
         lighting: None,
     };
     config.snapshot()?;
     Ok(ImportedLayout {
         runtime: config,
-        morses: lowering.morses().to_vec(),
-        combos,
-        macros: lowering.macros().to_vec(),
         dropped_layers: lowering.finger_layers().to_vec(),
         diagnostics: lowering.diagnostics().to_vec(),
     })

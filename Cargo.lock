@@ -823,6 +823,7 @@ dependencies = [
  "clap",
  "embassy-futures",
  "glove80-config",
+ "heapless",
  "libc",
  "rynk",
  "rynk-ble",

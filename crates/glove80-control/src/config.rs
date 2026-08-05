@@ -11,8 +11,9 @@ use glove80_config::{
     conditional_scene_to_wire, differences, effects_from_wire, effects_to_wire, live_param_tables,
     output_mode_from_wire, output_mode_to_wire, params_to_writes, runtime_config_from_moergo_json,
     scene_from_wire, scene_policy_from_wire, scene_policy_to_wire, scene_to_wire,
-    snapshot_to_moergo_json, trim_trailing_transparent_layers, EffectParams, EffectsConfig,
-    LightingSnapshot, OutputModeConfig, ParamSpec, RuntimeConfig, Snapshot, COLS, LAYER_SIZE, ROWS,
+    snapshot_to_moergo_json, trim_trailing_transparent_layers, BehaviorSnapshot, EffectParams,
+    EffectsConfig, LightingSnapshot, OutputModeConfig, ParamSpec, RuntimeConfig, Snapshot, COLS,
+    LAYER_SIZE, ROWS,
 };
 use rynk::rmk_types::protocol::rynk::{
     Cmd, LightingError, LightingExtendedConditionalSceneCell, LightingExtensionNameKind,
@@ -294,6 +295,7 @@ async fn read_snapshot(client: &Client) -> Result<Snapshot> {
     Ok(Snapshot {
         default_layer: client.get_default_layer().await?,
         layers,
+        behaviors: read_behaviors(client).await?,
         lighting: Some(LightingSnapshot {
             brightness: state.output_brightness,
             output_mode,
@@ -390,6 +392,95 @@ fn params_unsupported(error: &RynkHostError) -> bool {
     )
 }
 
+/// Read the behavior tables a keymap cell addresses by index.
+///
+/// Firmware without these commands answers `UnknownCmd`, which reads as "this
+/// keyboard has no such table" rather than as a failure, so an older device
+/// still pulls and diffs its keymap.
+/// One macro chunk, which the protocol fixes for both directions.
+const MACRO_CHUNK: usize = rynk::rmk_types::constants::MACRO_DATA_SIZE;
+
+async fn read_behaviors(client: &Client) -> Result<BehaviorSnapshot> {
+    Ok(BehaviorSnapshot {
+        morses: client.read_all_morses().await.ok(),
+        combos: client.read_all_combos().await.ok(),
+        macros: read_macro_space(client).await.ok(),
+    })
+}
+
+/// Read macro space by walking it a chunk at a time.
+///
+/// Chunks come back full size and zero-filled past the end, so there is no
+/// short read to stop on; the walk stops when a chunk adds nothing but padding.
+async fn read_macro_space(client: &Client) -> Result<Vec<u8>> {
+    let mut space = Vec::new();
+    let mut offset = 0u16;
+    loop {
+        let chunk = client.get_macro(offset).await?;
+        if chunk.data.is_empty() || chunk.data.iter().all(|byte| *byte == 0) {
+            break;
+        }
+        space.extend_from_slice(&chunk.data);
+        offset = offset
+            .checked_add(u16::try_from(chunk.data.len()).context("macro chunk too large")?)
+            .context("macro space offset overflowed")?;
+    }
+    // Trailing padding is not part of any sequence.
+    while space.last() == Some(&0) {
+        space.pop();
+    }
+    Ok(space)
+}
+
+/// Write the behavior tables, skipping any the source is silent about.
+async fn apply_behaviors(
+    client: &Client,
+    desired: &BehaviorSnapshot,
+    before: &BehaviorSnapshot,
+) -> Result<()> {
+    if let Some(morses) = &desired.morses {
+        if before.morses.as_ref() != Some(morses) {
+            client
+                .write_all_morses(morses.clone())
+                .await
+                .context("could not write the morse table")?;
+        }
+    }
+    if let Some(combos) = &desired.combos {
+        if before.combos.as_ref() != Some(combos) {
+            client
+                .write_all_combos(combos.clone())
+                .await
+                .context("could not write the combo table")?;
+        }
+    }
+    if let Some(macros) = &desired.macros {
+        if before.macros.as_ref() != Some(macros) {
+            write_macro_space(client, macros).await?;
+        }
+    }
+    Ok(())
+}
+
+async fn write_macro_space(client: &Client, space: &[u8]) -> Result<()> {
+    // One extra terminator so a shorter sequence set does not leave the tail
+    // of a longer one behind to be parsed as another macro.
+    let mut payload = space.to_vec();
+    payload.push(0);
+    for (index, chunk) in payload.chunks(MACRO_CHUNK).enumerate() {
+        let offset = u16::try_from(index * MACRO_CHUNK).context("macro space is too large")?;
+        let data = rynk::rmk_types::protocol::rynk::MacroData {
+            data: heapless::Vec::from_slice(chunk)
+                .map_err(|_| anyhow::anyhow!("macro chunk exceeds the protocol's chunk size"))?,
+        };
+        client
+            .set_macro(offset, data)
+            .await
+            .context("could not write macro space")?;
+    }
+    Ok(())
+}
+
 async fn apply_snapshot(client: &Client, desired: &Snapshot, before: &Snapshot) -> Result<()> {
     let capabilities = client.get_capabilities().await?;
     if desired.layers.len() > usize::from(capabilities.num_layers) {
@@ -399,6 +490,11 @@ async fn apply_snapshot(client: &Client, desired: &Snapshot, before: &Snapshot) 
             capabilities.num_layers
         );
     }
+    // Before the keymap: a cell holding `TD(n)` or `TriggerMacro(n)` addresses
+    // a table slot by index, so the tables have to be in place before any key
+    // can point at them.
+    apply_behaviors(client, &desired.behaviors, &before.behaviors).await?;
+
     // A source file owns the layers it lists. Fixed-capacity trailing layers
     // remain untouched rather than being destructively cleared.
     for layer in 0..u8::try_from(desired.layers.len()).context("too many configured layers")? {
