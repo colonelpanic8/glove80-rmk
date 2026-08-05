@@ -357,11 +357,12 @@ fn sticky_key_hold_taps_become_one_shot_morses() {
     assert_eq!(armed[0].hold.as_deref(), Some("KC_LSFT"));
 }
 
-/// The only bindings this export loses are the three display-brightness
-/// keycodes RMK has no equivalent for. Everything else — 21 layers, 35 hold-taps,
-/// 25 macros, 21 combos, 2 mod-morphs — survives.
+/// Nothing in this export is lost. It was three display-brightness keys short
+/// until the host learned their names — the firmware had carried
+/// `HidKeyCode::Brightness{Minimum,Maximum,Auto}` and mapped them to the
+/// consumer page all along, so nothing needed to change on the device.
 #[test]
-fn the_engrammer_loses_only_what_rmk_cannot_express() {
+fn the_engrammer_imports_without_dropping_anything() {
     let imported = import_moergo_layout(ENGRAMMER).expect("import");
     let dropped: Vec<&str> = imported
         .diagnostics
@@ -369,12 +370,23 @@ fn the_engrammer_loses_only_what_rmk_cannot_express() {
         .filter(|note| note.severity == Severity::Dropped)
         .map(|note| note.message.as_str())
         .collect();
-    assert_eq!(dropped.len(), 3, "unexpected drops: {dropped:?}");
-    for message in &dropped {
-        assert!(
-            message.contains("C_BRI_"),
-            "only the brightness keycodes should be unmappable, got: {message}"
-        );
+    assert!(dropped.is_empty(), "unexpected drops: {dropped:?}");
+}
+
+/// The brightness keys reach the keymap by name now, in both spellings the
+/// editor and a hand-written file might use.
+#[test]
+fn display_brightness_keys_resolve() {
+    for name in [
+        "KC_BRMN",
+        "KC_BRMX",
+        "KC_BRAU",
+        "KC_BRIGHTNESS_MINIMUM",
+        "KC_BRIGHTNESS_MAXIMUM",
+        "KC_BRIGHTNESS_AUTO",
+    ] {
+        glove80_config::keycodes::parse_keycode(name)
+            .unwrap_or_else(|error| panic!("{name} should resolve: {error:#}"));
     }
 }
 

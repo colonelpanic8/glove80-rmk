@@ -230,6 +230,11 @@ const BASIC: &[(u16, &str, &[&str])] = &[
     (0x00C0, "KC_ASST", &["KC_ASSISTANT"]),
     (0x00C1, "KC_MCTL", &["KC_MISSION_CONTROL"]),
     (0x00C2, "KC_LPAD", &["KC_LAUNCHPAD"]),
+    // The firmware has always carried these three and mapped them to the
+    // consumer page; only the host had no name to reach them by.
+    (0x00C3, "KC_BRMN", &["KC_BRIGHTNESS_MINIMUM"]),
+    (0x00C4, "KC_BRMX", &["KC_BRIGHTNESS_MAXIMUM"]),
+    (0x00C5, "KC_BRAU", &["KC_BRIGHTNESS_AUTO"]),
     (0x00CD, "KC_MS_U", &["KC_MS_UP"]),
     (0x00CE, "KC_MS_D", &["KC_MS_DOWN"]),
     (0x00CF, "KC_MS_L", &["KC_MS_LEFT"]),
