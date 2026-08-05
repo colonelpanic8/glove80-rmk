@@ -30,7 +30,15 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+    # Two commits landing together would otherwise race for the same calendar
+    # version, and the loser's `gh release create` would fail on the taken tag.
+    concurrency:
+      group: release-master
+      cancel-in-progress: false
     steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - name: Download release bundle
         uses: actions/download-artifact@v4
         with:
@@ -40,10 +48,30 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          short_sha="${GITHUB_SHA::12}"
-          tag="master-${short_sha}"
-          title="Master build ${short_sha}"
-          notes="Automated, unqualified firmware build from master at ${GITHUB_SHA}. Flash the -rh.uf2 image on the right half first, then the -lh.uf2 image on the left half."
+          # Re-running a published commit must land back on its own release
+          # instead of minting a second version for identical firmware.
+          tag="$(git tag --points-at "${GITHUB_SHA}" --list 'v*' | head -1)"
+          if [ -z "${tag}" ]; then
+            day="$(git show -s --format=%cd --date=format-local:%Y.%m.%d "${GITHUB_SHA}")"
+            build=1
+            while git rev-parse -q --verify "refs/tags/v${day}.${build}" >/dev/null; do
+              build=$((build + 1))
+            done
+            tag="v${day}.${build}"
+          fi
+          title="Glove80 firmware ${tag#v} (default configuration)"
+
+          previous="$(git describe --tags --abbrev=0 "${GITHUB_SHA}^" 2>/dev/null || true)"
+          if [ -n "${previous}" ]; then
+            changes="$(git log --reverse --pretty='- %s' "${previous}..${GITHUB_SHA}")"
+          else
+            changes="$(git log --reverse --pretty='- %s' -20 "${GITHUB_SHA}")"
+          fi
+          {
+            echo "## Changes"
+            echo
+            echo "${changes:-- No commits since the previous release.}"
+          } > release-notes.md
 
           if gh release view "${tag}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
             gh release upload "${tag}" dist/* \
@@ -52,13 +80,13 @@ jobs:
             gh release edit "${tag}" \
               --prerelease \
               --title "${title}" \
-              --notes "${notes}" \
+              --notes-file release-notes.md \
               --repo "${GITHUB_REPOSITORY}"
           else
             gh release create "${tag}" dist/* \
               --prerelease \
               --target "${GITHUB_SHA}" \
               --title "${title}" \
-              --notes "${notes}" \
+              --notes-file release-notes.md \
               --repo "${GITHUB_REPOSITORY}"
           fi
