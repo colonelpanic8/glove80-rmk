@@ -22,13 +22,14 @@ through a rebuild of the assembly (below).
 
 `dependencies/rmk` is pinned to `colonelpanic8/rmk`'s `assembled` branch, which
 is compiled by [fork-fold](https://github.com/colonelpanic8/fork-fold) from the
-stack in `~/Projects/rmk-assembly`. That repository's `manifest.toml` is the
-intent (upstream `HaoboGu/rmk` `main` as the base, plus an ordered list of
+stack vendored as the `dependencies/rmk-assembly` submodule here (upstream
+`colonelpanic8/rmk-assembly`). That repository's `manifest.toml` is the intent
+(upstream `HaoboGu/rmk` `main` as the base, plus an ordered list of
 `fork:fold/*` topic branches), `manifest.lock.json` is the fact (the OIDs and
 tree hash of the last build), and `resolutions/` plus `patches/` carry the
 tracked conflict resolutions and coherence fixups. Read
-`~/Projects/rmk-assembly/AGENTS.md` before operating on the stack; do not work
-from memory of the workflow.
+`dependencies/rmk-assembly/AGENTS.md` before operating on the stack; do not
+work from memory of the workflow.
 
 Consequences for work in this repository:
 
@@ -55,11 +56,13 @@ The loop for landing an RMK change here is:
 
 1. Commit it on the owning `fold/*` branch in `dependencies/rmk` (or another
    checkout) and push that branch to `colonelpanic8/rmk`.
-2. In `~/Projects/rmk-assembly`, `fork-fold update <entry>` (or `update` alone
-   to bump the base too), then `fork-fold build`, resolving any conflict the
-   build stops on per that repository's AGENTS.md.
-3. Push the rebuilt `assembled` branch to the fork and commit the assembly's
-   manifest, lock, resolutions, and patches together.
+2. In `dependencies/rmk-assembly`, `fork-fold update <entry>` (or `update`
+   alone to bump the base too), then `fork-fold build`, resolving any conflict
+   the build stops on per that repository's AGENTS.md.
+3. Push the rebuilt `assembled` branch to the fork, commit the assembly's
+   manifest, lock, resolutions, and patches together inside
+   `dependencies/rmk-assembly`, and push that commit — then commit the updated
+   `dependencies/rmk-assembly` submodule pointer here.
 4. Fetch in `dependencies/rmk`, check out the new `origin/assembled` tip, and
    move the outer pin as described below.
 
