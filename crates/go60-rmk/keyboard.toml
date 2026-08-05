@@ -2,7 +2,8 @@
 #
 # Matrix, pin, flash, LED, and USB facts are transcribed from the official
 # moergo-sc/zmk Go60 board definitions. The first port uses BLE between halves;
-# Cirque trackpads and automatic BLE/TRRS switching remain explicit follow-ups.
+# automatic BLE/TRRS switching remains an explicit follow-up. The Cirque
+# trackpads are wired in src/trackpad.rs, outside this file.
 
 [keyboard]
 name = "Go60"

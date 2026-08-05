@@ -7,12 +7,14 @@ lighting/replication modules with board constants for 30 LEDs per half and a
 40% hardware-output ceiling. Its hardware configuration is transcribed from
 MoErgo's official `moergo-sc/zmk` Go60 board definitions.
 
-The current port deliberately supports BLE split only. Do not claim feature
-parity or release it as a ZMK replacement until RMK has a Cirque Pinnacle
-driver, peripheral pointing forwarding is qualified, and the Go60's automatic
-BLE/TRRS half-duplex split switching is implemented. Build and validate its
-independent UF2 bundle with `just go60-firmware`; the official family IDs are
-`0x9809B007` (left) and `0x980AB007` (right).
+The current port supports BLE split and the two Cirque Pinnacle trackpads
+(RMK's `cirque_pinnacle` driver, carried through the assembly; wiring in
+`crates/go60-rmk/src/trackpad.rs`). Do not claim feature parity or release it
+as a ZMK replacement until the trackpads and peripheral pointing forwarding
+are qualified on hardware and the Go60's automatic BLE/TRRS half-duplex split
+switching is implemented. Build and validate its independent UF2 bundle with
+`just go60-firmware`; the official family IDs are `0x9809B007` (left) and
+`0x980AB007` (right).
 
 ## Nested RMK repository
 

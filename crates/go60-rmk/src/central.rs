@@ -14,6 +14,7 @@ mod lighting;
 mod remote_boot;
 #[path = "../../glove80-rmk/src/split_lighting.rs"]
 mod split_lighting;
+mod trackpad;
 
 use rmk::macros::rmk_central;
 
@@ -103,6 +104,19 @@ mod keyboard_central {
     #[register_processor(runnable)]
     fn remote_boot_dispatcher() {
         crate::central_lighting::RemoteBootDispatcher
+    }
+
+    #[register_processor(runnable)]
+    fn trackpad_device() {
+        crate::trackpad::init(0, p.TWISPI1, p.P0_19, p.P0_21, p.P0_22, p.P0_25, p.P0_23)
+    }
+
+    #[register_processor(event)]
+    fn pointing_processor() {
+        ::rmk::input_device::pointing::PointingProcessor::new(
+            &keymap,
+            ::rmk::input_device::pointing::PointingProcessorConfig::default(),
+        )
     }
 
     #[register_processor(event)]
