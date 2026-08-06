@@ -671,10 +671,21 @@ impl Runnable for PeripheralReplication {
             )
             .await
             {
-                embassy_futures::select::Either::First(_) => {
+                embassy_futures::select::Either::First(up) => {
                     self.stage.reset();
                     self.last_applied_revision = None;
-                    while rmk::split_app::SPLIT_APP_RX.try_receive().is_ok() {}
+                    // Drain the inbox only when the link went down. This half
+                    // marks the link up on the first *inbound* message, so on
+                    // the up edge the inbox already holds the head of the
+                    // reconnect snapshot -- draining here threw that snapshot
+                    // away and cost every reconnect a wasted burst plus the
+                    // central's ack timeout. Anything genuinely stale that
+                    // survives an up edge is harmless: the next Begin restarts
+                    // staging, and generation/revision matching rejects the
+                    // rest.
+                    if !up {
+                        while rmk::split_app::SPLIT_APP_RX.try_receive().is_ok() {}
+                    }
                 }
                 embassy_futures::select::Either::Second(message) => self.process(message).await,
             }
