@@ -131,7 +131,11 @@ mod keyboard_central {
 
     #[register_processor(event)]
     fn trackpad_layer_modes() {
-        crate::trackpad::LayerModes
+        // Seeding from storage here is what makes the pads' behavior
+        // configuration rather than firmware: nothing about them is decided
+        // until this is read back.
+        ::rmk::input_device::pointing_config::init(storage.read_pointing_config().await).await;
+        ::rmk::input_device::pointing_config::PointingLayerModes
     }
 
     #[register_processor(event)]

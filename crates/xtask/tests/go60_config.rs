@@ -74,8 +74,8 @@ fn go60_lighting_routes_every_physical_key_once_per_half() {
 /// build error, so nothing else catches a shortfall before a flash.
 #[test]
 fn go60_layer_change_has_a_slot_for_every_subscriber() {
-    // The split driver, the Rynk layer topic, the lighting state, and the
-    // trackpads' LayerModes processor.
+    // The split driver, the Rynk layer topic, the lighting state, and RMK's
+    // PointingLayerModes, which re-points the pads from the stored config.
     const SUBSCRIBERS: i64 = 4;
     assert!(
         config()["event"]["layer_change"]["subs"]
