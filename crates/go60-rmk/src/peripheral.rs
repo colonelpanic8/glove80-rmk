@@ -42,7 +42,7 @@ mod keyboard_peripheral {
 
     #[register_processor(runnable)]
     fn lighting_power_monitor() {
-        crate::lighting::peripheral_power_monitor()
+        crate::lighting::power_monitor()
     }
 
     #[register_processor(event)]

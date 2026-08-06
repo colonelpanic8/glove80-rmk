@@ -148,6 +148,13 @@ mod keyboard_central {
         crate::central_lighting::BatteryLightingState
     }
 
+    /// Report this half's VBUS-derived charge state; without it no charge
+    /// state is ever produced and `charge`-gated lighting rules never fire.
+    #[register_processor(runnable)]
+    fn lighting_power_monitor() {
+        crate::lighting::power_monitor()
+    }
+
     #[register_processor(event)]
     fn reactive_key_hits() {
         crate::lighting::ReactiveKeyHits::central()
