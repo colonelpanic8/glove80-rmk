@@ -18,7 +18,8 @@ use embassy_nrf::{Peri, bind_interrupts, peripherals};
 use rmk::event::{LayerChangeEvent, PointingProcessorEvent, publish_event};
 use rmk::input_device::cirque_pinnacle::{CirquePinnacle, PinnacleConfig, PinnacleSensitivity};
 use rmk::input_device::pointing::{
-    CursorConfig, PointingMode, PointingProcessor, PointingProcessorConfig, ScrollConfig,
+    CursorConfig, DragConfig, PointingMode, PointingProcessor, PointingProcessorConfig,
+    ScrollConfig,
 };
 use rmk::keymap::KeyMap;
 
@@ -45,11 +46,11 @@ pub fn default_mode(device_id: u8) -> PointingMode {
 /// absent from this table leave both pads at [`default_mode`].
 pub fn mode_for_layer(device_id: u8, layer: u8) -> PointingMode {
     match (layer, device_id) {
-        // Symbol Nav is held on the left thumb, so the left hand is already
-        // committed while it is down. Swap the pads for its duration: the
-        // free right hand points, and the left one scrolls.
+        // Symbol Nav is held on the left thumb, which turns both pads into
+        // pointing tools for as long as it is down: the left one moves the
+        // cursor, and the right one drags whatever its tap grabs.
         (SYMBOL_NAV_LAYER, LEFT_DEVICE_ID) => PointingMode::Cursor(CursorConfig::default()),
-        (SYMBOL_NAV_LAYER, RIGHT_DEVICE_ID) => PointingMode::Scroll(ScrollConfig::default()),
+        (SYMBOL_NAV_LAYER, RIGHT_DEVICE_ID) => PointingMode::Drag(DragConfig::default()),
         _ => default_mode(device_id),
     }
 }
