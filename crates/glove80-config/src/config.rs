@@ -577,38 +577,36 @@ impl RuntimeConfig {
         Self {
             default_layer: snapshot.default_layer,
             layers,
-            morses: snapshot
-                .behaviors
-                .morses
-                .as_deref()
-                .unwrap_or_default()
-                .iter()
-                .enumerate()
-                .map(|(index, morse)| {
-                    let mut config = MorseConfig::from_wire(morse, index);
-                    // The firmware stores no label, so keep the one a previous
-                    // file gave this slot, as layer names are kept.
-                    if let Some(old) = labels.and_then(|config| config.morses.get(index)) {
-                        config.name = old.name.clone();
-                    }
-                    config
-                })
-                .collect(),
-            combos: snapshot
-                .behaviors
-                .combos
-                .as_deref()
-                .unwrap_or_default()
-                .iter()
-                .enumerate()
-                .map(|(index, combo)| {
-                    let mut config = ComboConfig::from_wire(combo, index);
-                    if let Some(old) = labels.and_then(|config| config.combos.get(index)) {
-                        config.name = old.name.clone();
-                    }
-                    config
-                })
-                .collect(),
+            morses: used_slots(
+                snapshot.behaviors.morses.as_deref().unwrap_or_default(),
+                |morse| morse.actions.is_empty(),
+            )
+            .iter()
+            .enumerate()
+            .map(|(index, morse)| {
+                let mut config = MorseConfig::from_wire(morse, index);
+                // The firmware stores no label, so keep the one a previous
+                // file gave this slot, as layer names are kept.
+                if let Some(old) = labels.and_then(|config| config.morses.get(index)) {
+                    config.name = old.name.clone();
+                }
+                config
+            })
+            .collect(),
+            combos: used_slots(
+                snapshot.behaviors.combos.as_deref().unwrap_or_default(),
+                |combo| combo.actions.is_empty(),
+            )
+            .iter()
+            .enumerate()
+            .map(|(index, combo)| {
+                let mut config = ComboConfig::from_wire(combo, index);
+                if let Some(old) = labels.and_then(|config| config.combos.get(index)) {
+                    config.name = old.name.clone();
+                }
+                config
+            })
+            .collect(),
             macros: snapshot
                 .behaviors
                 .macros
@@ -632,6 +630,19 @@ impl RuntimeConfig {
     }
 }
 
+/// The part of a behavior table a device read actually describes.
+///
+/// A read answers with the whole table, because its length is the firmware's
+/// compile-time capacity rather than the number of entries in use, and a
+/// Glove80 has room for 128 morses and 32 combos. Everything past the last used
+/// slot is capacity, not configuration, so it has no business in a file. The
+/// tail is all that goes: a keymap cell addresses a morse as `TD(n)` by
+/// position, so a gap between two used slots keeps its place.
+fn used_slots<T>(table: &[T], empty: impl Fn(&T) -> bool) -> &[T] {
+    let used = table.iter().rposition(|entry| !empty(entry));
+    &table[..used.map_or(0, |index| index + 1)]
+}
+
 /// Spell a wire action the way the keymap's `keys` field spells one.
 fn action_name(action: Action) -> String {
     crate::keycodes::format_keycode(crate::rynk_keycode::to_via_keycode(KeyAction::Single(
@@ -642,6 +653,9 @@ fn action_name(action: Action) -> String {
 fn action_from_name(text: &str) -> Result<Action> {
     match crate::rynk_keycode::from_via_keycode(crate::keycodes::parse_keycode(text)?) {
         KeyAction::Single(action) => Ok(action),
+        // `KC_NO` decodes to the empty *key action*, and on a morse pattern it
+        // means the same thing the keymap means by it: this holds nothing.
+        KeyAction::No => Ok(Action::No),
         _ => bail!("'{text}' is not a single action"),
     }
 }
@@ -688,9 +702,24 @@ impl MorseConfig {
             );
         }
         if morse.actions.is_empty() {
-            bail!("a morse needs at least one of tap, hold, double_tap or hold_after_tap");
+            // `KC_NO` is how a file says "nothing here", and a slot the keymap
+            // addresses past has to be spellable: dropping it would move every
+            // later morse out from under the `TD(n)` that names it. A section
+            // that mentions no action at all is still a mistake rather than an
+            // empty slot.
+            if !self.names_an_action() {
+                bail!("a morse needs at least one of tap, hold, double_tap or hold_after_tap");
+            }
         }
         Ok(morse)
+    }
+
+    /// Whether the file wrote any action for this slot, `KC_NO` included.
+    fn names_an_action(&self) -> bool {
+        self.tap.is_some()
+            || self.hold.is_some()
+            || self.double_tap.is_some()
+            || self.hold_after_tap.is_some()
     }
 
     pub(crate) fn from_wire(morse: &Morse, index: usize) -> Self {
@@ -698,7 +727,13 @@ impl MorseConfig {
 
         Self {
             name: format!("morse {index}"),
-            tap: morse.get(TAP).map(action_name),
+            // An unused slot between two used ones is written out as an
+            // explicit `KC_NO` tap, which is what keeps the later slots at the
+            // indices the keymap already points at.
+            tap: morse
+                .get(TAP)
+                .map(action_name)
+                .or_else(|| morse.actions.is_empty().then(|| action_name(Action::No))),
             hold: morse.get(HOLD).map(action_name),
             double_tap: morse.get(DOUBLE_TAP).map(action_name),
             hold_after_tap: morse.get(HOLD_AFTER_TAP).map(action_name),
@@ -733,7 +768,16 @@ impl ComboConfig {
                 .map_err(|_| anyhow::anyhow!("more keys than a combo can hold"))?;
         }
         if actions.len() < 2 {
-            bail!("a combo needs at least two keys");
+            // An unused slot in the middle of the table is written out as a
+            // combo with no keys and no output, and has to parse back into the
+            // same gap rather than be rejected as a half-written rule.
+            let empty_slot = actions.is_empty()
+                && crate::rynk_keycode::from_via_keycode(crate::keycodes::parse_keycode(
+                    &self.output,
+                )?) == KeyAction::No;
+            if !empty_slot {
+                bail!("a combo needs at least two keys");
+            }
         }
         Ok(Combo {
             actions,
@@ -1870,6 +1914,90 @@ Density = 6
         let found = differences(&forward, &reversed);
         assert_eq!(found.len(), 2, "both positions differ: {found:?}");
         assert!(found.iter().all(|line| line.contains("conditional rule")));
+    }
+
+    /// The smallest keymap the parser accepts, with two behavior tables on it.
+    fn two_behavior_tables() -> String {
+        let row = |holes: bool| {
+            (0..14)
+                .map(|col| {
+                    if holes && (col == 5 || col == 8) {
+                        "--"
+                    } else {
+                        "KC_A"
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join(" ")
+        };
+        let keys = (0..6)
+            .map(|index| row(index == 0 || index == 5))
+            .collect::<Vec<_>>()
+            .join("\n");
+        format!(
+            "default_layer = 0\n\
+             [[layer]]\nid = \"base\"\nname = \"Base\"\nkeys = \"\"\"\n{keys}\n\"\"\"\n\
+             [[morse]]\ntap = \"KC_A\"\nhold = \"KC_LSFT\"\n\
+             [[combo]]\nkeys = [\"KC_A\", \"KC_B\"]\noutput = \"KC_C\"\n"
+        )
+    }
+
+    /// A pull reads the whole behavior table, because its size is the
+    /// firmware's capacity rather than the number of entries in use. The unused
+    /// tail is not configuration: writing it out produced `[[morse]]` sections
+    /// that name no action at all, and the file the pull had just written was
+    /// then rejected by its own parser.
+    #[test]
+    fn a_pull_leaves_the_unused_tail_of_a_behavior_table_out_of_the_file() {
+        let config = RuntimeConfig::from_toml(&two_behavior_tables()).expect("parse");
+        let mut snapshot = config.snapshot().expect("snapshot");
+        // What the device answers: the tables padded out to their capacity.
+        snapshot
+            .behaviors
+            .morses
+            .as_mut()
+            .expect("morses")
+            .resize(128, Morse::default());
+        snapshot
+            .behaviors
+            .combos
+            .as_mut()
+            .expect("combos")
+            .resize(32, Combo::empty());
+
+        let pulled = RuntimeConfig::from_snapshot(&snapshot, None);
+        assert_eq!(pulled.morses.len(), 1, "the unused morse slots were kept");
+        assert_eq!(pulled.combos.len(), 1, "the unused combo slots were kept");
+
+        let text = pulled.to_toml().expect("serialize");
+        let reparsed = RuntimeConfig::from_toml(&text).expect("a pulled file must parse again");
+        assert_eq!(
+            reparsed.snapshot().expect("snapshot").behaviors,
+            config.snapshot().expect("snapshot").behaviors,
+        );
+    }
+
+    /// An unused slot *inside* the table cannot be dropped: the keymap
+    /// addresses a morse as `TD(n)` by position, so compacting the table would
+    /// silently repoint every later key. It is written as a morse that holds
+    /// nothing, which is what `KC_NO` means, and comes back as the same gap.
+    #[test]
+    fn an_unused_slot_between_two_used_ones_keeps_its_position() {
+        let config = RuntimeConfig::from_toml(&two_behavior_tables()).expect("parse");
+        let mut snapshot = config.snapshot().expect("snapshot");
+        let morses = snapshot.behaviors.morses.as_mut().expect("morses");
+        let used = morses[0].clone();
+        *morses = vec![used.clone(), Morse::default(), used];
+
+        let pulled = RuntimeConfig::from_snapshot(&snapshot, None);
+        assert_eq!(pulled.morses.len(), 3, "the gap moved the last morse");
+
+        let text = pulled.to_toml().expect("serialize");
+        let reparsed = RuntimeConfig::from_toml(&text).expect("a pulled file must parse again");
+        assert_eq!(
+            reparsed.snapshot().expect("snapshot").behaviors.morses,
+            snapshot.behaviors.morses,
+        );
     }
 
     /// Firmware without the runtime conditional commands reports `None`, which
