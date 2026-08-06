@@ -10,6 +10,7 @@ mod lighting;
 #[allow(dead_code)]
 #[path = "../../glove80-rmk/src/split_lighting.rs"]
 mod split_lighting;
+#[allow(dead_code)]
 mod trackpad;
 
 use rmk::macros::rmk_peripheral;
@@ -23,7 +24,15 @@ mod keyboard_peripheral {
 
     #[register_processor(runnable)]
     fn trackpad_device() {
-        crate::trackpad::init(1, p.TWISPI1, p.P0_19, p.P0_21, p.P0_22, p.P0_25, p.P0_23)
+        crate::trackpad::init(
+            crate::trackpad::RIGHT_DEVICE_ID,
+            p.TWISPI1,
+            p.P0_19,
+            p.P0_21,
+            p.P0_22,
+            p.P0_25,
+            p.P0_23,
+        )
     }
 
     #[register_processor(runnable)]

@@ -108,15 +108,25 @@ mod keyboard_central {
 
     #[register_processor(runnable)]
     fn trackpad_device() {
-        crate::trackpad::init(0, p.TWISPI1, p.P0_19, p.P0_21, p.P0_22, p.P0_25, p.P0_23)
+        crate::trackpad::init(
+            crate::trackpad::LEFT_DEVICE_ID,
+            p.TWISPI1,
+            p.P0_19,
+            p.P0_21,
+            p.P0_22,
+            p.P0_25,
+            p.P0_23,
+        )
     }
 
     #[register_processor(event)]
-    fn pointing_processor() {
-        ::rmk::input_device::pointing::PointingProcessor::new(
-            &keymap,
-            ::rmk::input_device::pointing::PointingProcessorConfig::default(),
-        )
+    fn left_pointing_processor() {
+        crate::trackpad::processor(&keymap, crate::trackpad::LEFT_DEVICE_ID)
+    }
+
+    #[register_processor(event)]
+    fn right_pointing_processor() {
+        crate::trackpad::processor(&keymap, crate::trackpad::RIGHT_DEVICE_ID)
     }
 
     #[register_processor(event)]

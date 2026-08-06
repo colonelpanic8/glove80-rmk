@@ -7,11 +7,46 @@
 //! runs with 1x sensitivity, hardware 90° rotation, Y inversion, and the
 //! secondary tap disabled. Both halves are wired identically; the
 //! peripheral's events reach the central over the split link.
+//!
+//! The two pads are told apart by their RMK pointing-device id, and each
+//! gets its own [`PointingProcessor`] so they can behave differently: the
+//! left pad scrolls, the right pad moves the cursor.
 
 use embassy_nrf::gpio::{Input, Level, Output, OutputDrive, Pull};
 use embassy_nrf::spim::{self, Spim};
 use embassy_nrf::{Peri, bind_interrupts, peripherals};
 use rmk::input_device::cirque_pinnacle::{CirquePinnacle, PinnacleConfig, PinnacleSensitivity};
+use rmk::input_device::pointing::{
+    CursorConfig, PointingMode, PointingProcessor, PointingProcessorConfig, ScrollConfig,
+};
+use rmk::keymap::KeyMap;
+
+/// The left half runs the split central, so its pad is device 0.
+pub const LEFT_DEVICE_ID: u8 = 0;
+/// The right half is the split peripheral, so its pad is device 1.
+pub const RIGHT_DEVICE_ID: u8 = 1;
+
+/// The mode a pad starts in at boot.
+pub fn default_mode(device_id: u8) -> PointingMode {
+    match device_id {
+        LEFT_DEVICE_ID => PointingMode::Scroll(ScrollConfig::default()),
+        _ => PointingMode::Cursor(CursorConfig::default()),
+    }
+}
+
+/// A processor bound to a single pad. Without the `device_id` filter one
+/// processor would answer for both pads and they could not differ.
+pub fn processor<'a>(keymap: &'a KeyMap<'a>, device_id: u8) -> PointingProcessor<'a> {
+    let mut processor = PointingProcessor::new(
+        keymap,
+        PointingProcessorConfig {
+            device_id,
+            ..Default::default()
+        },
+    );
+    processor.set_pointing_mode(default_mode(device_id));
+    processor
+}
 
 bind_interrupts!(struct Irqs {
     TWISPI1 => spim::InterruptHandler<peripherals::TWISPI1>;
