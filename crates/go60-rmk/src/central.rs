@@ -130,6 +130,11 @@ mod keyboard_central {
     }
 
     #[register_processor(event)]
+    fn trackpad_layer_modes() {
+        crate::trackpad::LayerModes
+    }
+
+    #[register_processor(event)]
     fn magic_key_actions() {
         crate::remote_boot::MagicKeyActions
     }

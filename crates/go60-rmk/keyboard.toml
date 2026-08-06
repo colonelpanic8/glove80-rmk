@@ -97,7 +97,9 @@ subs = 4
 [event.layer_change]
 channel_size = 4
 pubs = 2
-subs = 3
+# The split driver, the Rynk topic, the lighting state, and the trackpads'
+# layer-driven modes. A subscriber past this count fails at boot, not build.
+subs = 4
 
 [event.lighting_changed]
 channel_size = 2

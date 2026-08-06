@@ -70,6 +70,21 @@ fn go60_lighting_routes_every_physical_key_once_per_half() {
     );
 }
 
+/// Too few subscriber slots is a boot-time panic inside RMK's pubsub, not a
+/// build error, so nothing else catches a shortfall before a flash.
+#[test]
+fn go60_layer_change_has_a_slot_for_every_subscriber() {
+    // The split driver, the Rynk layer topic, the lighting state, and the
+    // trackpads' LayerModes processor.
+    const SUBSCRIBERS: i64 = 4;
+    assert!(
+        config()["event"]["layer_change"]["subs"]
+            .as_integer()
+            .unwrap()
+            >= SUBSCRIBERS
+    );
+}
+
 fn strings(value: &toml::Value) -> Vec<&str> {
     value
         .as_array()
