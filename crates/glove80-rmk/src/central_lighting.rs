@@ -8,6 +8,7 @@ use embassy_futures::select::{Either, Either4, select, select4};
 use embassy_nrf::Peri;
 use embassy_nrf::gpio::Pin;
 use embassy_nrf::peripherals::{PWM0, SPI3};
+use embassy_time::{Duration, Instant, Timer};
 use rmk::core_traits::Runnable;
 use rmk::event::{
     BatteryStatusEvent, EventSubscriber, LayerChangeEvent, LedIndicatorEvent, LightingChangedEvent,
@@ -142,7 +143,18 @@ struct PendingAck {
     generation: u8,
     revision: u32,
     kind: TransferKind,
+    /// Absolute instant this transfer stops waiting and is resent. A deadline
+    /// rather than a per-iteration timer: rearming a fresh timeout every time
+    /// the task woke for something else meant a stream of layer changes could
+    /// postpone retransmission indefinitely.
+    deadline: Instant,
 }
+
+/// How long a transfer waits for the peripheral's acknowledgement.
+const ACK_TIMEOUT: Duration = Duration::from_millis(500);
+/// How long the central waits before re-offering a transfer the split queue
+/// had no room for.
+const SEND_BACKOFF: Duration = Duration::from_millis(50);
 
 pub const fn replication() -> CentralReplication {
     CentralReplication { generation: 0 }
@@ -172,6 +184,7 @@ impl CentralReplication {
                 generation: self.generation,
                 revision: snapshot.revision,
                 kind: TransferKind::FullSnapshot,
+                deadline: Instant::now() + ACK_TIMEOUT,
             })
         } else {
             None
@@ -210,6 +223,7 @@ impl CentralReplication {
             generation: self.generation,
             revision: snapshot.revision,
             kind,
+            deadline: Instant::now() + ACK_TIMEOUT,
         })
     }
 }
@@ -229,9 +243,23 @@ impl Runnable for CentralReplication {
         let mut context_dirty = false;
         let mut awaiting_ack: Option<PendingAck> = None;
         let mut last_acked_revision = None;
+        // Backoff deadline after the split queue refused a transfer. A
+        // deadline the select waits on, never an inline sleep: sleeping here
+        // meant a full queue made this task deaf to acks, events, and above
+        // all the link going down -- it would spin re-offering snapshots to a
+        // dead queue forever, which is exactly how the peripheral's replicated
+        // context froze for good.
+        let mut retry_at: Option<Instant> = None;
 
         loop {
-            if link_up && awaiting_ack.is_none() && (full_dirty || context_dirty) {
+            if retry_at.is_some_and(|at| at <= Instant::now()) {
+                retry_at = None;
+            }
+            if link_up
+                && awaiting_ack.is_none()
+                && (full_dirty || context_dirty)
+                && retry_at.is_none()
+            {
                 let pending = if full_dirty {
                     self.try_send_snapshot().await
                 } else {
@@ -243,18 +271,24 @@ impl Runnable for CentralReplication {
                         full_dirty = false;
                         context_dirty = false;
                     }
-                    None => {
-                        embassy_time::Timer::after_millis(50).await;
-                        continue;
-                    }
+                    None => retry_at = Some(Instant::now() + SEND_BACKOFF),
                 }
             }
 
+            // The one wake-up deadline: the outstanding ack's, or the send
+            // backoff's, whichever lands first. `Timer::at` keeps them
+            // absolute, so a wake for any other arm cannot postpone them.
+            let deadline = match (
+                awaiting_ack.as_ref().map(|pending| pending.deadline),
+                retry_at,
+            ) {
+                (Some(ack), Some(retry)) => Some(ack.min(retry)),
+                (deadline, None) | (None, deadline) => deadline,
+            };
             let timeout = async {
-                if awaiting_ack.is_some() {
-                    embassy_time::Timer::after_millis(500).await;
-                } else {
-                    core::future::pending::<()>().await;
+                match deadline {
+                    Some(at) => Timer::at(at).await,
+                    None => core::future::pending::<()>().await,
                 }
             };
             match select4(
@@ -274,6 +308,7 @@ impl Runnable for CentralReplication {
                     last_acked_revision = None;
                     full_dirty = up;
                     context_dirty = false;
+                    retry_at = None;
                 }
                 Either4::Second(_) => full_dirty = true,
                 Either4::Third(Either::First(_)) => context_dirty = true,
@@ -303,8 +338,16 @@ impl Runnable for CentralReplication {
                     }
                 }
                 Either4::Fourth(Either::Second(())) => {
-                    awaiting_ack = None;
-                    full_dirty = link_up;
+                    // One timer serves two deadlines; only the one that has
+                    // actually elapsed may act. An elapsed send backoff is
+                    // cleared at the top of the loop.
+                    if awaiting_ack
+                        .as_ref()
+                        .is_some_and(|pending| pending.deadline <= Instant::now())
+                    {
+                        awaiting_ack = None;
+                        full_dirty = link_up;
+                    }
                 }
             }
         }
