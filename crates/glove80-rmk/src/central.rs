@@ -125,6 +125,13 @@ mod keyboard_central {
         crate::central_lighting::BatteryLightingState
     }
 
+    /// Report this half's VBUS-derived charge state; without it no charge
+    /// state is ever produced and `charge`-gated lighting rules never fire.
+    #[register_processor(runnable)]
+    fn lighting_power_monitor() {
+        crate::lighting::power_monitor()
+    }
+
     /// Feed every key press to the local PaletteFx engine and mirror left-half
     /// hits to the peripheral, allowing spatial key effects to span the seam.
     #[register_processor(event)]

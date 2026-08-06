@@ -527,29 +527,48 @@ fn local_vbus_present() -> bool {
     embassy_nrf::pac::POWER.usbregstatus().read().vbusdetect()
 }
 
-/// Poll the peripheral's local VBUS bit and invalidate static lighting when it
-/// changes. The central USB connection state is deliberately not involved.
-pub struct PeripheralPowerMonitor {
+/// Poll this half's local VBUS bit; on a change, invalidate static lighting
+/// (under the local powered-only scope) and publish the charge state.
+///
+/// The board has no charger-status line configured, so VBUS presence stands
+/// in for the charge state: plugged is reported as charging, unplugged as
+/// discharging. There is no charge-termination detection, so a full battery
+/// still reads as charging while wired. Without this proxy no charge state
+/// is ever produced at all -- rmk's `ChargingStateReader` needs a
+/// charger-detect GPIO this board does not wire up -- and every
+/// `charge`-gated lighting rule is dead.
+pub struct PowerMonitor {
     powered: bool,
 }
 
-pub fn peripheral_power_monitor() -> PeripheralPowerMonitor {
-    PeripheralPowerMonitor {
+pub fn power_monitor() -> PowerMonitor {
+    PowerMonitor {
         powered: local_vbus_present(),
     }
 }
 
-impl Runnable for PeripheralPowerMonitor {
+impl Runnable for PowerMonitor {
     async fn run(&mut self) -> ! {
+        // Mirror rmk's ChargingStateReader settle: give the first battery ADC
+        // reading a head start, then announce the boot-time state so the
+        // charge state is defined without waiting for a plug/unplug edge.
+        Timer::after_secs(2).await;
+        self.powered = local_vbus_present();
+        rmk::event::publish_event(rmk::event::ChargingStateEvent {
+            charging: self.powered,
+        });
         loop {
             Timer::after_millis(100).await;
             let powered = local_vbus_present();
+            if powered == self.powered {
+                continue;
+            }
+            self.powered = powered;
+            rmk::event::publish_event(rmk::event::ChargingStateEvent { charging: powered });
             if matches!(
                 crate::LIGHTING_CONTROLS.powered_only_scope,
                 rmk::lighting::PoweredOnlyScope::Local
-            ) && powered != self.powered
-            {
-                self.powered = powered;
+            ) {
                 CORE_MAILBOX.snapshot_changed();
             }
         }

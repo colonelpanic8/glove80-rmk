@@ -26,10 +26,11 @@ mod keyboard_peripheral {
         crate::lighting::peripheral_replication()
     }
 
-    /// Re-render when this half's own USB/VBUS power changes.
+    /// Re-render when this half's own USB/VBUS power changes, and report the
+    /// VBUS-derived charge state.
     #[register_processor(runnable)]
     fn lighting_power_monitor() {
-        crate::lighting::peripheral_power_monitor()
+        crate::lighting::power_monitor()
     }
 
     /// Feed right-half presses directly to PaletteFx. Left-half presses arrive
