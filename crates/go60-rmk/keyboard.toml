@@ -20,16 +20,43 @@ split_central_max_latency_battery = 1
 [layout]
 rows = 5
 cols = 14
-# Physical order matches go60.dtsi's matrix transform: four 12-key rows,
-# six fifth-row finger keys, then the two three-key thumb arcs.
+# The map is the board's *physical* arrangement, not its scan matrix. Key
+# centres derived from this walk are the only geometry the lighting engine has,
+# so this arrangement — not column adjacency in the matrix — is what "nearby"
+# means to the spatial effects (Reactive, Ripple, Rain, Vortex).
+#
+# Positions are transcribed in key units from moosylog's Glide editor
+# (basic_edit/glide_v20.html, `GO60_GEO_RAW`), which places the board 17u wide:
+# each half's six finger columns carry their own stagger, and the thumb arcs are
+# one cap swept about a pivot 4.25u below its flat spot.
+#
+# Written in the same order as the matrix transform in go60.dtsi, which is also
+# the order the `[[keymap.layer]]` key strings below are read in: four 12-key
+# rows, six fifth-row finger keys, then the two three-key thumb arcs.
 map = """
-(0,0) (0,1) (0,2) (0,3) (0,4) (0,5) [5.5] (0,8) (0,9) (0,10) (0,11) (0,12) (0,13)
-(1,0) (1,1) (1,2) (1,3) (1,4) (1,5) [5.5] (1,8) (1,9) (1,10) (1,11) (1,12) (1,13)
-(2,0) (2,1) (2,2) (2,3) (2,4) (2,5) [5.5] (2,8) (2,9) (2,10) (2,11) (2,12) (2,13)
-(3,0) (3,1) (3,2) (3,3) (3,4) (3,5) [5.5] (3,8) (3,9) (3,10) (3,11) (3,12) (3,13)
-[2] (4,2) (4,3) (4,4) [8.5] (4,9) (4,10) (4,11)
-[5.2] (0,6) (1,6) (2,6) [1.5] (2,7) (1,7) (0,7)
+(0,0,@outer) (0,1,@outer) (0,2,@ring) (0,3) (0,4,@index) (0,5,@inner) [5] (0,8,@inner) (0,9,@index) (0,10) (0,11,@ring) (0,12,@outer) (0,13,@outer)
+(1,0,@outer) (1,1,@outer) (1,2,@ring) (1,3) (1,4,@index) (1,5,@inner) [5] (1,8,@inner) (1,9,@index) (1,10) (1,11,@ring) (1,12,@outer) (1,13,@outer)
+(2,0,@outer) (2,1,@outer) (2,2,@ring) (2,3) (2,4,@index) (2,5,@inner) [5] (2,8,@inner) (2,9,@index) (2,10) (2,11,@ring) (2,12,@outer) (2,13,@outer)
+(3,0,@outer) (3,1,@outer) (3,2,@ring) (3,3) (3,4,@index) (3,5,@inner) [5] (3,8,@inner) (3,9,@index) (3,10) (3,11,@ring) (3,12,@outer) (3,13,@outer)
+[2] (4,2,@ring) (4,3) (4,4,@index) [7] (4,9,@index) (4,10) (4,11,@ring)
+[4] [r=15@(4.5,9)] (0,6,@thumb_1) [r=30@(4.5,9)] (1,6,@thumb_2) [r=45@(4.5,9)] (2,6,@thumb_3) [5] [r=-45@(12.5,9)] (2,7,@thumb_1) [r=-30@(12.5,9)] (1,7,@thumb_2) [r=-15@(12.5,9)] (0,7,@thumb_3)
 """
+
+# The map walk is a left-to-right cursor on a flat grid, so anything off that
+# grid is carried by a named shape or a rotation region. The finger shapes are
+# the per-column stagger: the middle column sits highest and takes no shape.
+# The thumbs are a fan, expressed the way the board draws it — every cap starts
+# at the same flat spot (x = 4.5, y = 4.75 on the left) and `[r=deg@(x,y)]`
+# swings it about the shared pivot. `thumb_1..3` only walk the cursor back onto
+# that one flat spot, since each key advances it another unit.
+[layout.shapes]
+outer = { y = 0.9 }
+ring = { y = 0.25 }
+inner = { y = 0.25 }
+index = { y = 0.15 }
+thumb_1 = { x = 0.0, y = -0.75 }
+thumb_2 = { x = -1.0, y = -0.75 }
+thumb_3 = { x = -2.0, y = -0.75 }
 
 [keymap]
 layers = 5
