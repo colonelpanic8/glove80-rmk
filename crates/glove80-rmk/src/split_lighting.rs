@@ -893,70 +893,84 @@ impl Message {
 /// Best-effort delivery for a central-half key hit. Effect hits are ephemeral:
 /// dropping one while the split queue is saturated is preferable to delaying
 /// matrix-event processing or an atomic lighting snapshot.
+///
+/// Nothing drains the outbound queue while there is no peripheral session, so
+/// hits are refused outright when the link is down. Without that gate every
+/// left-half keystroke typed while the right half is disconnected consumes a
+/// slot permanently, and a hundred-odd of them leave no room for the snapshot
+/// the reconnect immediately asks for.
 pub fn try_queue_effect_hit(slot: LedSlot) -> bool {
-    slot.index() < LEDS_PER_HALF
+    // Reading the watch directly rather than through a receiver: both of the
+    // two receiver slots already belong to the halves' replication tasks.
+    rmk::split_app::SPLIT_APP_LINK.try_get() == Some(true)
+        && slot.index() < LEDS_PER_HALF
         && rmk::split_app::SPLIT_APP_TX
             .try_send(Message::EffectHit { slot }.encode())
             .is_ok()
 }
 
-/// Queue one complete snapshot. The staged peripheral state remains invisible
-/// unless every packet lands and the final commit is applied.
-pub fn try_queue_snapshot(
+/// Right-half packet counts for one snapshot transaction.
+struct SnapshotCounts {
+    overlay_cells: usize,
+    scene_cells: usize,
+    conditional_scene_cells: usize,
+}
+
+fn snapshot_counts(
+    snapshot: &StandardReplicaState<OVERLAY_CAPACITY, SCENE_CAPACITY>,
+) -> SnapshotCounts {
+    SnapshotCounts {
+        overlay_cells: snapshot
+            .overlay
+            .as_slice()
+            .iter()
+            .filter(|cell| cell.slot.index() >= LEDS_PER_HALF)
+            .count(),
+        scene_cells: snapshot
+            .scenes
+            .iter()
+            .filter(|cell| cell.slot.index() >= LEDS_PER_HALF)
+            .count(),
+        conditional_scene_cells: snapshot
+            .runtime_conditional_scenes
+            .iter()
+            .filter(|cell| cell.slot.index() >= LEDS_PER_HALF)
+            .count(),
+    }
+}
+
+/// Walk one snapshot transaction's packets in wire order, handing each to
+/// `sink`, and stop at the first packet `sink` refuses.
+///
+/// Reserving space and transmitting share this one walk, so the reservation
+/// can never disagree with what the sender goes on to enqueue.
+fn walk_snapshot(
     generation: u8,
     snapshot: &StandardReplicaState<OVERLAY_CAPACITY, SCENE_CAPACITY>,
     batteries: BatteryPair,
+    counts: &SnapshotCounts,
+    mut sink: impl FnMut(Message) -> bool,
 ) -> bool {
-    let cell_count = snapshot
-        .overlay
-        .as_slice()
-        .iter()
-        .filter(|cell| cell.slot.index() >= LEDS_PER_HALF)
-        .count();
-    if cell_count > LEDS_PER_HALF {
-        return false;
-    }
-    let scene_count = snapshot
-        .scenes
-        .iter()
-        .filter(|cell| cell.slot.index() >= LEDS_PER_HALF)
-        .count();
-    if scene_count > SCENE_CAPACITY {
-        return false;
-    }
-    let conditional_scene_count = snapshot
-        .runtime_conditional_scenes
-        .iter()
-        .filter(|cell| cell.slot.index() >= LEDS_PER_HALF)
-        .count();
-    if conditional_scene_count > SCENE_CAPACITY {
-        return false;
-    }
-    let queue = |message: Message| {
-        rmk::split_app::SPLIT_APP_TX
-            .try_send(message.encode())
-            .is_ok()
-    };
-    if !queue(Message::Begin {
+    if !sink(Message::Begin {
         generation,
         revision: snapshot.revision,
-        cell_count: cell_count as u8,
-        scene_count: scene_count as u8,
+        cell_count: counts.overlay_cells as u8,
+        scene_count: counts.scene_cells as u8,
         scene_policy: snapshot.scenes.policy(),
         sample_time_ms: snapshot.sample_time_ms,
         mutable: snapshot.mutable,
         output_mode: snapshot.output_mode,
-    }) || !queue(Message::Context {
+    }) || !sink(Message::Context {
         generation,
         revision: snapshot.revision,
         context: snapshot.context,
         batteries,
-    }) || !queue(Message::Extension {
+    }) || !sink(Message::Extension {
         generation,
         revision: snapshot.revision,
         extension: snapshot.extension,
         params: snapshot.extension_params,
-    }) || !queue(Message::ExtensionOverlay {
+    }) || !sink(Message::ExtensionOverlay {
         generation,
         revision: snapshot.revision,
         overlay: snapshot.extension_layers.and_then(|state| state.overlay),
@@ -970,7 +984,7 @@ pub fn try_queue_snapshot(
         .iter()
         .filter(|cell| cell.slot.index() >= LEDS_PER_HALF)
     {
-        if !queue(Message::Cell {
+        if !sink(Message::Cell {
             generation,
             revision: snapshot.revision,
             cell,
@@ -983,7 +997,7 @@ pub fn try_queue_snapshot(
         .iter()
         .filter(|cell| cell.slot.index() >= LEDS_PER_HALF)
     {
-        if !queue(Message::SceneCell {
+        if !sink(Message::SceneCell {
             generation,
             revision: snapshot.revision,
             cell,
@@ -993,10 +1007,10 @@ pub fn try_queue_snapshot(
     }
     // These packets are part of the versioned replica snapshot. Both halves
     // must run the same protocol version before the transaction is accepted.
-    if !queue(Message::ConditionalSceneBegin {
+    if !sink(Message::ConditionalSceneBegin {
         generation,
         revision: snapshot.revision,
-        cell_count: conditional_scene_count as u8,
+        cell_count: counts.conditional_scene_cells as u8,
     }) {
         return false;
     }
@@ -1005,7 +1019,7 @@ pub fn try_queue_snapshot(
         .iter()
         .filter(|cell| cell.slot.index() >= LEDS_PER_HALF)
     {
-        if !queue(Message::ConditionalSceneCell {
+        if !sink(Message::ConditionalSceneCell {
             generation,
             revision: snapshot.revision,
             cell,
@@ -1014,7 +1028,7 @@ pub fn try_queue_snapshot(
         }
         let conditions = cell.conditions;
         if (conditions.connection.is_some() || conditions.effects.is_some())
-            && !queue(Message::ConditionalSceneExt {
+            && !sink(Message::ConditionalSceneExt {
                 generation,
                 revision: snapshot.revision,
                 connection: conditions.connection,
@@ -1024,11 +1038,52 @@ pub fn try_queue_snapshot(
             return false;
         }
     }
-    queue(Message::Commit {
+    sink(Message::Commit {
         generation,
         revision: snapshot.revision,
-        cell_count: cell_count as u8,
-        scene_count: scene_count as u8,
+        cell_count: counts.overlay_cells as u8,
+        scene_count: counts.scene_cells as u8,
+    })
+}
+
+/// Queue one complete snapshot. The staged peripheral state remains invisible
+/// unless every packet lands and the final commit is applied.
+///
+/// The whole transaction is reserved before a single packet is enqueued. A
+/// partial fill used to be worse than useless: aborting at the tail left the
+/// queue exactly full, so the very next attempt aborted immediately as well,
+/// and the central's retry refilled the queue faster than the peripheral could
+/// drain it. That fixed point never released, and because no `Commit` ever
+/// reached the peripheral its replicated lighting context froze for good.
+/// Refusing early instead lets the residue drain monotonically while the
+/// central backs off.
+pub fn try_queue_snapshot(
+    generation: u8,
+    snapshot: &StandardReplicaState<OVERLAY_CAPACITY, SCENE_CAPACITY>,
+    batteries: BatteryPair,
+) -> bool {
+    let counts = snapshot_counts(snapshot);
+    if counts.overlay_cells > LEDS_PER_HALF
+        || counts.scene_cells > SCENE_CAPACITY
+        || counts.conditional_scene_cells > SCENE_CAPACITY
+    {
+        return false;
+    }
+    let mut packets = 0usize;
+    walk_snapshot(generation, snapshot, batteries, &counts, |_| {
+        packets += 1;
+        true
+    });
+    if rmk::split_app::SPLIT_APP_TX.free_capacity() < packets {
+        return false;
+    }
+    // The reservation above already guarantees room, and this walk yields to
+    // nothing that could take a slot away. Honouring a refusal anyway keeps
+    // the abort behaviour if that ever stops being true.
+    walk_snapshot(generation, snapshot, batteries, &counts, |message| {
+        rmk::split_app::SPLIT_APP_TX
+            .try_send(message.encode())
+            .is_ok()
     })
 }
 
