@@ -72,6 +72,9 @@ pub struct ImportNote {
 #[derive(Clone, Debug, Deserialize, Serialize, Tsify)]
 #[tsify(into_wasm_abi, from_wasm_abi)]
 pub struct RuntimeSnapshot {
+    /// Persistent BLE advertising-name template, when supported.
+    #[serde(default)]
+    pub bluetooth_name: Option<String>,
     pub default_layer: u8,
     /// One entry per layer, each row-major over the 6x14 grid.
     pub layers: Vec<Vec<KeyAction>>,

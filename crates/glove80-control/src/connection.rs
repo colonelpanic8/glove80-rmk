@@ -19,6 +19,19 @@ pub enum ConnectionCommand {
     Switch { slot: u8 },
     /// Forget the bond stored in a BLE slot.
     Clear { slot: u8 },
+    /// Read or replace the BLE advertising-name template.
+    Name {
+        #[command(subcommand)]
+        command: NameCommand,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum NameCommand {
+    /// Show the persistent name template.
+    Get,
+    /// Replace the template; `{slot}` expands to the one-based active slot.
+    Set { template: String },
 }
 
 pub fn run(selector: &Selector, command: &ConnectionCommand) -> Result<()> {

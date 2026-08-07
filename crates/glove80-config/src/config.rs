@@ -15,7 +15,7 @@ use rynk::rmk_types::protocol::rynk::{
     LightingConditionSet, LightingConditionalSceneCell, LightingConnectionCondition,
     LightingEffect, LightingEffectsCondition, LightingExtendedConditionalSceneCell,
     LightingExtensionState, LightingLayerCondition, LightingLayerPolicy, LightingLedId,
-    LightingNodeId, LightingOutputMode, LightingRgb8, LightingSceneCell,
+    LightingNodeId, LightingOutputMode, LightingRgb8, LightingSceneCell, BLE_NAME_MAX_LEN,
 };
 use serde::{Deserialize, Serialize};
 
@@ -37,6 +37,9 @@ impl std::error::Error for DiffFound {}
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct RuntimeConfig {
+    /// BLE advertising name. `{slot}` expands to the one-based active profile.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bluetooth_name: Option<String>,
     #[serde(default)]
     pub default_layer: u8,
     #[serde(default, rename = "layer")]
@@ -601,6 +604,8 @@ const fn solid() -> EffectKind {
 /// [`RuntimeConfig`] or by reading a live keyboard.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Snapshot {
+    /// `None` means the source or firmware does not manage the BLE name.
+    pub bluetooth_name: Option<String>,
     pub default_layer: u8,
     pub layers: Vec<Vec<KeyAction>>,
     pub lighting: Option<LightingSnapshot>,
@@ -666,6 +671,17 @@ impl RuntimeConfig {
         if self.layers.is_empty() {
             bail!("configuration must contain at least one [[layer]]");
         }
+        if let Some(name) = &self.bluetooth_name {
+            if name.is_empty() {
+                bail!("bluetooth_name must not be empty");
+            }
+            if name.len() > BLE_NAME_MAX_LEN {
+                bail!(
+                    "bluetooth_name is {} bytes, but BLE names are limited to {BLE_NAME_MAX_LEN}",
+                    name.len()
+                );
+            }
+        }
         let profile_names = self
             .behavior
             .as_ref()
@@ -720,6 +736,7 @@ impl RuntimeConfig {
             .transpose()?;
         let behavior = self.behavior.as_ref();
         Ok(Snapshot {
+            bluetooth_name: self.bluetooth_name.clone(),
             default_layer: self.default_layer,
             layers,
             lighting,
@@ -823,6 +840,7 @@ impl RuntimeConfig {
             })
             .collect();
         Self {
+            bluetooth_name: snapshot.bluetooth_name.clone(),
             default_layer: snapshot.default_layer,
             layers,
             morses: snapshot
@@ -1521,6 +1539,13 @@ fn is_empty_fork(fork: &rynk::rmk_types::fork::Fork) -> bool {
 
 pub fn differences(desired: &Snapshot, live: &Snapshot) -> Vec<String> {
     let mut result = Vec::new();
+    if desired.bluetooth_name.is_some() && desired.bluetooth_name != live.bluetooth_name {
+        result.push(format!(
+            "bluetooth name: file '{}' != keyboard '{}'",
+            desired.bluetooth_name.as_deref().unwrap_or_default(),
+            live.bluetooth_name.as_deref().unwrap_or("unsupported")
+        ));
+    }
     if desired.default_layer != live.default_layer {
         result.push(format!(
             "default layer: file {} != keyboard {}",
@@ -2514,6 +2539,40 @@ pub fn param_tables_from_wire(
 mod tests {
     use super::*;
 
+    fn minimal_runtime_config(bluetooth_name: Option<&str>) -> RuntimeConfig {
+        RuntimeConfig {
+            bluetooth_name: bluetooth_name.map(str::to_owned),
+            default_layer: 0,
+            layers: vec![LayerConfig {
+                id: "base".into(),
+                name: "Base".into(),
+                keys: render_key_actions(&[KeyAction::No; LAYER_SIZE], &[]),
+            }],
+            morses: Vec::new(),
+            combos: Vec::new(),
+            macros: Vec::new(),
+            forks: Vec::new(),
+            behavior: None,
+            lighting: None,
+        }
+    }
+
+    #[test]
+    fn bluetooth_name_validates_the_advertising_limit() {
+        let snapshot = minimal_runtime_config(Some("Glove80 {slot}"))
+            .snapshot()
+            .unwrap();
+        assert_eq!(snapshot.bluetooth_name.as_deref(), Some("Glove80 {slot}"));
+        let mut unsupported = snapshot.clone();
+        unsupported.bluetooth_name = None;
+        assert_eq!(differences(&snapshot, &unsupported).len(), 1);
+
+        assert!(minimal_runtime_config(Some("")).snapshot().is_err());
+        assert!(minimal_runtime_config(Some("12345678901234567"))
+            .snapshot()
+            .is_err());
+    }
+
     #[test]
     fn existing_style_keymap_round_trips() {
         let keys = "\n-- -- KC_A KC_TRNS LT(1,KC_ESC) -- -- -- -- -- -- -- -- --\n-- -- -- -- -- -- -- -- -- -- -- -- -- --\n-- -- -- -- -- -- -- -- -- -- -- -- -- --\n-- -- -- -- -- -- -- -- -- -- -- -- -- --\n-- -- -- -- -- -- -- -- -- -- -- -- -- --\n-- -- -- -- -- -- -- -- -- -- -- -- -- --\n";
@@ -2624,6 +2683,7 @@ Density = 6
             let mut snap = lighting_snapshot(None, None);
             snap.conditional_scenes = Some(cells);
             Snapshot {
+                bluetooth_name: None,
                 behaviors: BehaviorSnapshot::default(),
                 default_layer: 0,
                 layers: Vec::new(),
@@ -2649,6 +2709,7 @@ Density = 6
             let mut snap = lighting_snapshot(None, None);
             snap.conditional_scenes = None;
             Snapshot {
+                bluetooth_name: None,
                 behaviors: BehaviorSnapshot::default(),
                 default_layer: 0,
                 layers: Vec::new(),
@@ -2659,6 +2720,7 @@ Density = 6
             let mut snap = lighting_snapshot(None, None);
             snap.conditional_scenes = Some(Vec::new());
             Snapshot {
+                bluetooth_name: None,
                 behaviors: BehaviorSnapshot::default(),
                 default_layer: 0,
                 layers: Vec::new(),
@@ -2689,6 +2751,7 @@ Density = 6
                 effects: None,
             }]);
             Snapshot {
+                bluetooth_name: None,
                 behaviors: BehaviorSnapshot::default(),
                 default_layer: 0,
                 layers: Vec::new(),
@@ -2720,6 +2783,7 @@ Density = 6
         };
 
         let mut desired = Snapshot {
+            bluetooth_name: None,
             default_layer: 0,
             layers: Vec::new(),
             lighting: None,
@@ -2730,6 +2794,7 @@ Density = 6
             },
         };
         let live = Snapshot {
+            bluetooth_name: None,
             default_layer: 0,
             layers: Vec::new(),
             lighting: None,
@@ -2930,6 +2995,7 @@ Density = 6
     #[test]
     fn pull_records_only_parameters_that_differ_from_their_default() {
         let snapshot = Snapshot {
+            bluetooth_name: None,
             behaviors: BehaviorSnapshot::default(),
             default_layer: 0,
             layers: vec![vec![KeyAction::No; LAYER_SIZE]],
@@ -2951,6 +3017,7 @@ Density = 6
     #[test]
     fn pull_drops_parameters_when_the_keyboard_has_none() {
         let snapshot = Snapshot {
+            bluetooth_name: None,
             behaviors: BehaviorSnapshot::default(),
             default_layer: 0,
             layers: vec![vec![KeyAction::No; LAYER_SIZE]],
