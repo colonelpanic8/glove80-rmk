@@ -274,16 +274,20 @@ async fn run_maintenance_device<D: RynkDevice>(device: D) -> Result<()> {
 
 async fn read_maintenance(client: &Client) -> Result<()> {
     let mode = client.get_maintenance_mode().await?;
-    let live = if mode.enabled { "on" } else { "off" };
-    let default = if mode.default_enabled { "on" } else { "off" };
-    println!("maintenance mode: {live} (compiled default: {default})");
-    println!("toggle it with Magic+R; that key glows green when on and red when off");
+    let live = if mode.enabled { "unlocked" } else { "locked" };
+    let default = if mode.default_enabled {
+        "unlocked"
+    } else {
+        "locked"
+    };
+    println!("maintenance lock: {live} (compiled default: {default})");
+    println!("toggle it with Magic+R; that key glows green when unlocked and red when locked");
     Ok(())
 }
 
 async fn require_maintenance_mode(client: &Client) -> Result<()> {
     if !client.get_maintenance_mode().await?.enabled {
-        bail!("maintenance mode is off; hold Magic and tap R, then confirm that R glows green");
+        bail!("maintenance lock is engaged; hold Magic and tap R, then confirm that R glows green");
     }
     Ok(())
 }

@@ -47,10 +47,11 @@ cargo run -p glove80-control -- lighting scene-policy active-stack
 cargo run -p glove80-control -- lighting scene-read
 ```
 
-All remote mutations, matrix monitoring, storage reset, and bootloader entry
-require maintenance mode. Hold Magic and tap R to toggle it: R glows green
-while unattended host automation is allowed and red while it is denied. Use
-`glove80-control maintenance` to read both the live and compiled-default state.
+The maintenance lock covers all remote mutations, matrix monitoring, storage
+reset, and bootloader entry. Hold Magic and tap R to toggle it: R glows green
+while the lock is off and unattended automation is allowed, and red while the
+lock is engaged. Use `glove80-control maintenance` to read both the live and
+compiled-default state.
 
 The `config` commands provide a bidirectional TOML snapshot of managed runtime
 state. `config diff FILE` compares the file with a live keyboard;

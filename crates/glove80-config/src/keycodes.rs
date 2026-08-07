@@ -24,7 +24,7 @@
 //! - `0x7820..=0x7835` RGB effects — `UG_TOGG`, `UG_NEXT`, `UG_PREV`,
 //!   `UG_OMODE` (cycle the standard-lighting output mode),
 //!   hue/saturation/value/speed controls, and fixed RGB modes
-//! - `0x7C00..` QMK magic keys the firmware supports (`QK_BOOT`, `MAINT_TOG`, `CW_TOGG`,
+//! - `0x7C00..` QMK magic keys the firmware supports (`QK_BOOT`, `MAINT_LOCK_TOG`, `CW_TOGG`,
 //!   space cadet, …)
 //! - `0x7E00..=0x7E1F` user/custom keys — `USER(n)`
 //!
@@ -317,7 +317,11 @@ const EXTRA: &[(u16, &str, &[&str])] = &[
     (0x7C00, "QK_BOOT", &["QK_BOOTLOADER", "RESET"]),
     (0x7C01, "QK_RBT", &["QK_REBOOT"]),
     (0x7C03, "EE_CLR", &["QK_CLEAR_EEPROM"]),
-    (0x7C04, "MAINT_TOG", &["MAINTENANCE_MODE_TOGGLE"]),
+    (
+        0x7C04,
+        "MAINT_LOCK_TOG",
+        &["MAINT_TOG", "MAINTENANCE_MODE_TOGGLE"],
+    ),
     (0x7C16, "QK_GESC", &["QK_GRAVE_ESCAPE", "GRAVE_ESC"]),
     (0x7C18, "SC_LCPO", &["KC_LCPO"]),
     (0x7C19, "SC_RCPC", &["KC_RCPC"]),
@@ -750,7 +754,7 @@ mod tests {
         assert_eq!(format_keycode(0x7705), "MACRO(5)");
         assert_eq!(format_keycode(0x7E10), "USER(16)");
         assert_eq!(format_keycode(0x7C00), "QK_BOOT");
-        assert_eq!(format_keycode(0x7C04), "MAINT_TOG");
+        assert_eq!(format_keycode(0x7C04), "MAINT_LOCK_TOG");
         assert_eq!(format_keycode(0x7C73), "CW_TOGG");
         assert_eq!(format_keycode(0x7803), "BL_DOWN");
         assert_eq!(format_keycode(0x7804), "BL_UP");
@@ -772,6 +776,7 @@ mod tests {
         assert_eq!(parse_keycode("0X1104").unwrap(), 0x1104);
         assert_eq!(parse_keycode("4").unwrap(), 4);
         assert_eq!(parse_keycode("QK_BOOT").unwrap(), 0x7C00);
+        assert_eq!(parse_keycode("MAINT_LOCK_TOG").unwrap(), 0x7C04);
         assert_eq!(parse_keycode("MAINT_TOG").unwrap(), 0x7C04);
         assert_eq!(parse_keycode("BL_DOWN").unwrap(), 0x7803);
         assert_eq!(parse_keycode("QK_BACKLIGHT_UP").unwrap(), 0x7804);

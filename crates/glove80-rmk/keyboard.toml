@@ -223,9 +223,9 @@ enabled = true
 [host]
 vial_enabled = false
 rynk_enabled = true
-# Magic+R toggles host maintenance access. Off denies every remote mutation,
-# bootloader jump, storage reset, and raw matrix-state read.
-maintenance_mode_default = false
+# Magic+R toggles the maintenance lock. This build starts unlocked so host
+# automation can mutate configuration and push firmware without attendance.
+maintenance_lock_default = false
 
 [split]
 connection = "ble"
