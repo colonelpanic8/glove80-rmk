@@ -4,10 +4,12 @@ use std::collections::BTreeMap;
 
 use anyhow::{bail, Context, Result};
 use rynk::rmk_types::action::{Action, KeyAction};
+use rynk::rmk_types::auto_mouse::AutoMouseLayerConfig as WireAutoMouseLayerConfig;
 use rynk::rmk_types::ble::BleState as WireBleState;
 use rynk::rmk_types::combo::Combo;
 use rynk::rmk_types::morse::{Morse, MorseMode, MorseProfile};
 use rynk::rmk_types::protocol::rynk::{
+    BehaviorConfig as WireBehaviorConfig, BehaviorOptions as WireBehaviorOptions,
     LightingActiveTransport, LightingBackgroundMode, LightingBackgroundState,
     LightingBatteryCondition, LightingBondedSlotCondition, LightingChargeCondition,
     LightingConditionSet, LightingConditionalSceneCell, LightingConnectionCondition,
@@ -51,7 +53,154 @@ pub struct RuntimeConfig {
     #[serde(default, rename = "fork", skip_serializing_if = "Vec::is_empty")]
     pub forks: Vec<ForkConfig>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub behavior: Option<BehaviorConfig>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub lighting: Option<LightingConfig>,
+}
+
+/// Global and parameterized behavior state managed over Rynk.
+///
+/// The field names deliberately mirror the firmware configuration while using
+/// plain millisecond integers, as the rest of the runtime format does.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct BehaviorConfig {
+    #[serde(default = "default_combo_timeout_ms")]
+    pub combo_timeout_ms: u16,
+    #[serde(default = "default_oneshot_timeout_ms")]
+    pub oneshot_timeout_ms: u16,
+    #[serde(default = "default_tap_interval_ms")]
+    pub tap_interval_ms: u16,
+    #[serde(default = "default_tap_interval_ms")]
+    pub tap_capslock_interval_ms: u16,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tri_layer: Option<[u8; 3]>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub combo_prior_idle_ms: Option<u16>,
+    #[serde(default)]
+    pub oneshot_activate_on_keypress: bool,
+    #[serde(default)]
+    pub oneshot_quick_release: bool,
+    #[serde(default)]
+    pub morse: MorseBehaviorConfig,
+    #[serde(
+        default,
+        rename = "auto_mouse_layer",
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    pub auto_mouse_layers: Vec<AutoMouseLayerConfig>,
+}
+
+const fn default_combo_timeout_ms() -> u16 {
+    50
+}
+
+const fn default_oneshot_timeout_ms() -> u16 {
+    1_000
+}
+
+const fn default_tap_interval_ms() -> u16 {
+    20
+}
+
+impl Default for BehaviorConfig {
+    fn default() -> Self {
+        Self {
+            combo_timeout_ms: default_combo_timeout_ms(),
+            oneshot_timeout_ms: default_oneshot_timeout_ms(),
+            tap_interval_ms: default_tap_interval_ms(),
+            tap_capslock_interval_ms: default_tap_interval_ms(),
+            tri_layer: None,
+            combo_prior_idle_ms: None,
+            oneshot_activate_on_keypress: false,
+            oneshot_quick_release: false,
+            morse: MorseBehaviorConfig::default(),
+            auto_mouse_layers: Vec::new(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct MorseBehaviorConfig {
+    #[serde(default)]
+    pub enable_flow_tap: bool,
+    #[serde(default = "default_morse_prior_idle_ms")]
+    pub prior_idle_ms: u16,
+    #[serde(default)]
+    pub default_profile: MorseProfileConfig,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub profiles: BTreeMap<String, MorseProfileConfig>,
+}
+
+const fn default_morse_prior_idle_ms() -> u16 {
+    120
+}
+
+impl Default for MorseBehaviorConfig {
+    fn default() -> Self {
+        Self {
+            enable_flow_tap: false,
+            prior_idle_ms: default_morse_prior_idle_ms(),
+            default_profile: MorseProfileConfig {
+                unilateral_tap: Some(false),
+                mode: Some("normal".to_owned()),
+                hold_timeout_ms: Some(250),
+                gap_timeout_ms: Some(250),
+                ..MorseProfileConfig::default()
+            },
+            profiles: BTreeMap::new(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct MorseProfileConfig {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enable_flow_tap: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hold_timeout_ms: Option<u16>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gap_timeout_ms: Option<u16>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub quick_tap_ms: Option<u16>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prior_idle_ms: Option<u16>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unilateral_tap: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retro_tap: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hold_trigger_on_release: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mode: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct AutoMouseLayerConfig {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub device_id: Option<u8>,
+    pub target_layer: u8,
+    #[serde(default = "default_auto_mouse_timeout_ms")]
+    pub timeout_ms: u32,
+    #[serde(default = "default_auto_mouse_threshold")]
+    pub threshold: u16,
+    #[serde(default)]
+    pub deactivate_on_key: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub extra_mouse_keys: Vec<String>,
+    #[serde(default)]
+    pub reset_timeout_on_key: bool,
+}
+
+const fn default_auto_mouse_timeout_ms() -> u32 {
+    500
+}
+
+const fn default_auto_mouse_threshold() -> u16 {
+    1
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -453,7 +602,7 @@ const fn solid() -> EffectKind {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Snapshot {
     pub default_layer: u8,
-    pub layers: Vec<Vec<u16>>,
+    pub layers: Vec<Vec<KeyAction>>,
     pub lighting: Option<LightingSnapshot>,
     /// The behavior tables a keymap cell addresses by index: morses for
     /// `TD(n)`, macros for `TriggerMacro(n)`, and the combos that fire
@@ -469,6 +618,10 @@ pub struct Snapshot {
 /// The behavior half of a [`Snapshot`].
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct BehaviorSnapshot {
+    pub config: Option<WireBehaviorConfig>,
+    pub options: Option<WireBehaviorOptions>,
+    pub morse_profiles: Option<Vec<MorseProfile>>,
+    pub auto_mouse_layers: Option<Vec<WireAutoMouseLayerConfig>>,
     pub morses: Option<Vec<rynk::rmk_types::morse::Morse>>,
     pub combos: Option<Vec<rynk::rmk_types::combo::Combo>>,
     /// Macro space as the firmware stores it: the sequences concatenated, each
@@ -513,6 +666,11 @@ impl RuntimeConfig {
         if self.layers.is_empty() {
             bail!("configuration must contain at least one [[layer]]");
         }
+        let profile_names = self
+            .behavior
+            .as_ref()
+            .map(|behavior| behavior.morse.profiles.keys().cloned().collect::<Vec<_>>())
+            .unwrap_or_default();
         let mut ids = BTreeMap::new();
         let mut layers = Vec::with_capacity(self.layers.len());
         for (index, layer) in self.layers.iter().enumerate() {
@@ -523,7 +681,7 @@ impl RuntimeConfig {
                 bail!("duplicate layer id '{}'", layer.id);
             }
             layers.push(
-                parse_keys(&layer.keys)
+                parse_key_actions(&layer.keys, &profile_names)
                     .with_context(|| format!("layer {} ({})", index, layer.id))?,
             );
         }
@@ -534,16 +692,59 @@ impl RuntimeConfig {
                 layers.len()
             );
         }
+        if let Some(behavior) = &self.behavior {
+            if let Some(tri_layer) = behavior.tri_layer {
+                for layer in tri_layer {
+                    if usize::from(layer) >= layers.len() {
+                        bail!(
+                            "tri_layer references layer {layer}, but only {} layers are configured",
+                            layers.len()
+                        );
+                    }
+                }
+            }
+            for (index, auto_mouse) in behavior.auto_mouse_layers.iter().enumerate() {
+                if usize::from(auto_mouse.target_layer) >= layers.len() {
+                    bail!(
+                        "behavior.auto_mouse_layer {index} targets layer {}, but only {} layers are configured",
+                        auto_mouse.target_layer,
+                        layers.len()
+                    );
+                }
+            }
+        }
         let lighting = self
             .lighting
             .as_ref()
             .map(LightingConfig::snapshot)
             .transpose()?;
+        let behavior = self.behavior.as_ref();
         Ok(Snapshot {
             default_layer: self.default_layer,
             layers,
             lighting,
             behaviors: BehaviorSnapshot {
+                config: behavior.map(BehaviorConfig::wire_config),
+                options: behavior.map(BehaviorConfig::wire_options).transpose()?,
+                morse_profiles: behavior
+                    .map(|behavior| {
+                        behavior
+                            .morse
+                            .profiles
+                            .values()
+                            .map(MorseProfileConfig::to_wire)
+                            .collect::<Result<Vec<_>>>()
+                    })
+                    .transpose()?,
+                auto_mouse_layers: behavior
+                    .map(|behavior| {
+                        behavior
+                            .auto_mouse_layers
+                            .iter()
+                            .map(AutoMouseLayerConfig::to_wire)
+                            .collect::<Result<Vec<_>>>()
+                    })
+                    .transpose()?,
                 morses: (!self.morses.is_empty())
                     .then(|| {
                         self.morses
@@ -600,6 +801,14 @@ impl RuntimeConfig {
     }
 
     pub fn from_snapshot(snapshot: &Snapshot, labels: Option<&RuntimeConfig>) -> Self {
+        let behavior = BehaviorConfig::from_snapshot(
+            &snapshot.behaviors,
+            labels.and_then(|config| config.behavior.as_ref()),
+        );
+        let profile_names = behavior
+            .as_ref()
+            .map(|behavior| behavior.morse.profiles.keys().cloned().collect::<Vec<_>>())
+            .unwrap_or_default();
         let layers = snapshot
             .layers
             .iter()
@@ -609,7 +818,7 @@ impl RuntimeConfig {
                 LayerConfig {
                     id: old.map_or_else(|| format!("layer{index}"), |layer| layer.id.clone()),
                     name: old.map_or_else(|| format!("Layer {index}"), |layer| layer.name.clone()),
-                    keys: render_keys(keys),
+                    keys: render_key_actions(keys, &profile_names),
                 }
             })
             .collect();
@@ -669,6 +878,7 @@ impl RuntimeConfig {
                 .as_deref()
                 .map(MacroConfig::all_from_wire)
                 .unwrap_or_default(),
+            behavior,
             lighting: snapshot
                 .lighting
                 .as_ref()
@@ -697,6 +907,159 @@ fn action_from_name(text: &str) -> Result<Action> {
     match crate::rynk_keycode::from_via_keycode(crate::keycodes::parse_keycode(text)?) {
         KeyAction::Single(action) => Ok(action),
         _ => bail!("'{text}' is not a single action"),
+    }
+}
+
+impl BehaviorConfig {
+    fn wire_config(&self) -> WireBehaviorConfig {
+        WireBehaviorConfig {
+            combo_timeout_ms: self.combo_timeout_ms,
+            oneshot_timeout_ms: self.oneshot_timeout_ms,
+            tap_interval_ms: self.tap_interval_ms,
+            tap_capslock_interval_ms: self.tap_capslock_interval_ms,
+        }
+    }
+
+    fn wire_options(&self) -> Result<WireBehaviorOptions> {
+        Ok(WireBehaviorOptions {
+            tri_layer: self.tri_layer,
+            combo_prior_idle_ms: self.combo_prior_idle_ms,
+            oneshot_activate_on_keypress: self.oneshot_activate_on_keypress,
+            oneshot_quick_release: self.oneshot_quick_release,
+            morse_enable_flow_tap: self.morse.enable_flow_tap,
+            morse_prior_idle_ms: self.morse.prior_idle_ms,
+            morse_default_profile: self.morse.default_profile.to_wire()?,
+        })
+    }
+
+    fn from_snapshot(snapshot: &BehaviorSnapshot, labels: Option<&Self>) -> Option<Self> {
+        let config = snapshot.config?;
+        let options = snapshot.options?;
+        let default_profile = MorseProfileConfig::from_wire(options.morse_default_profile);
+        let mut profiles = BTreeMap::new();
+        for (index, profile) in snapshot
+            .morse_profiles
+            .as_deref()
+            .unwrap_or_default()
+            .iter()
+            .copied()
+            .enumerate()
+        {
+            let name = labels
+                .and_then(|behavior| behavior.morse.profiles.keys().nth(index))
+                .cloned()
+                .unwrap_or_else(|| format!("profile_{index:03}"));
+            profiles.insert(name, MorseProfileConfig::from_wire(profile));
+        }
+        Some(Self {
+            combo_timeout_ms: config.combo_timeout_ms,
+            oneshot_timeout_ms: config.oneshot_timeout_ms,
+            tap_interval_ms: config.tap_interval_ms,
+            tap_capslock_interval_ms: config.tap_capslock_interval_ms,
+            tri_layer: options.tri_layer,
+            combo_prior_idle_ms: options.combo_prior_idle_ms,
+            oneshot_activate_on_keypress: options.oneshot_activate_on_keypress,
+            oneshot_quick_release: options.oneshot_quick_release,
+            morse: MorseBehaviorConfig {
+                enable_flow_tap: options.morse_enable_flow_tap,
+                prior_idle_ms: options.morse_prior_idle_ms,
+                default_profile,
+                profiles,
+            },
+            auto_mouse_layers: snapshot
+                .auto_mouse_layers
+                .as_deref()
+                .unwrap_or_default()
+                .iter()
+                .map(AutoMouseLayerConfig::from_wire)
+                .collect(),
+        })
+    }
+}
+
+impl MorseProfileConfig {
+    fn to_wire(&self) -> Result<MorseProfile> {
+        let mode = match self.mode.as_deref() {
+            None => None,
+            Some("normal") => Some(MorseMode::Normal),
+            Some("permissive-hold") => Some(MorseMode::PermissiveHold),
+            Some("hold-on-other-press") => Some(MorseMode::HoldOnOtherPress),
+            Some("tap-unless-interrupted") => Some(MorseMode::TapUnlessInterrupted),
+            Some(other) => bail!("unknown morse mode '{other}'"),
+        };
+        Ok(MorseProfile::const_default()
+            .with_enable_flow_tap(self.enable_flow_tap)
+            .with_mode(mode)
+            .with_hold_timeout_ms(self.hold_timeout_ms)
+            .with_gap_timeout_ms(self.gap_timeout_ms)
+            .with_quick_tap_timeout_ms(self.quick_tap_ms)
+            .with_prior_idle_time_ms(self.prior_idle_ms)
+            .with_unilateral_tap(self.unilateral_tap)
+            .with_retro_tap(self.retro_tap)
+            .with_hold_trigger_on_release(self.hold_trigger_on_release))
+    }
+
+    fn from_wire(profile: MorseProfile) -> Self {
+        Self {
+            enable_flow_tap: profile.enable_flow_tap(),
+            hold_timeout_ms: profile.hold_timeout_ms(),
+            gap_timeout_ms: profile.gap_timeout_ms(),
+            quick_tap_ms: profile.quick_tap_timeout_ms(),
+            prior_idle_ms: profile.prior_idle_time_ms(),
+            unilateral_tap: profile.unilateral_tap(),
+            retro_tap: profile.retro_tap(),
+            hold_trigger_on_release: profile.hold_trigger_on_release(),
+            mode: profile.mode().map(|mode| match mode {
+                MorseMode::Normal => "normal".to_owned(),
+                MorseMode::PermissiveHold => "permissive-hold".to_owned(),
+                MorseMode::HoldOnOtherPress => "hold-on-other-press".to_owned(),
+                MorseMode::TapUnlessInterrupted => "tap-unless-interrupted".to_owned(),
+            }),
+        }
+    }
+}
+
+impl AutoMouseLayerConfig {
+    fn to_wire(&self) -> Result<WireAutoMouseLayerConfig> {
+        if self.timeout_ms == 0 {
+            bail!("auto mouse timeout_ms must be at least 1");
+        }
+        if self.threshold == 0 {
+            bail!("auto mouse threshold must be at least 1");
+        }
+        let mut extra_mouse_keys = Vec::with_capacity(self.extra_mouse_keys.len());
+        for name in &self.extra_mouse_keys {
+            match action_from_name(name)? {
+                Action::Key(key) => extra_mouse_keys.push(key),
+                _ => bail!("auto mouse extra key '{name}' is not a keycode"),
+            }
+        }
+        Ok(WireAutoMouseLayerConfig {
+            device_id: self.device_id,
+            target_layer: self.target_layer,
+            timeout_ms: self.timeout_ms,
+            threshold: self.threshold,
+            deactivate_on_key: self.deactivate_on_key,
+            extra_mouse_keys,
+            reset_timeout_on_key: self.reset_timeout_on_key,
+        })
+    }
+
+    fn from_wire(config: &WireAutoMouseLayerConfig) -> Self {
+        Self {
+            device_id: config.device_id,
+            target_layer: config.target_layer,
+            timeout_ms: config.timeout_ms,
+            threshold: config.threshold,
+            deactivate_on_key: config.deactivate_on_key,
+            extra_mouse_keys: config
+                .extra_mouse_keys
+                .iter()
+                .copied()
+                .map(|key| action_name(Action::Key(key)))
+                .collect(),
+            reset_timeout_on_key: config.reset_timeout_on_key,
+        }
     }
 }
 
@@ -1166,21 +1529,52 @@ pub fn differences(desired: &Snapshot, live: &Snapshot) -> Vec<String> {
     }
     for layer in 0..desired.layers.len() {
         for offset in 0..LAYER_SIZE {
-            let wanted = desired.layers.get(layer).map_or(0, |keys| keys[offset]);
-            let present = live.layers.get(layer).map_or(0, |keys| keys[offset]);
+            let wanted = desired
+                .layers
+                .get(layer)
+                .map_or(KeyAction::No, |keys| keys[offset]);
+            let present = live
+                .layers
+                .get(layer)
+                .map_or(KeyAction::No, |keys| keys[offset]);
             if wanted != present {
                 result.push(format!(
                     "layer {layer} r{},c{}: file {} != keyboard {}",
                     offset / usize::from(COLS),
                     offset % usize::from(COLS),
-                    crate::keycodes::format_keycode(wanted),
-                    crate::keycodes::format_keycode(present),
+                    render_key_action(wanted, &[]),
+                    render_key_action(present, &[]),
                 ));
             }
         }
     }
     // A table the source is silent about is left alone, so only a `Some`
     // participates in the diff.
+    for (name, differs) in [
+        (
+            "global behavior timing",
+            desired.behaviors.config.is_some() && desired.behaviors.config != live.behaviors.config,
+        ),
+        (
+            "global behavior options",
+            desired.behaviors.options.is_some()
+                && desired.behaviors.options != live.behaviors.options,
+        ),
+        (
+            "morse profiles",
+            desired.behaviors.morse_profiles.is_some()
+                && desired.behaviors.morse_profiles != live.behaviors.morse_profiles,
+        ),
+        (
+            "auto mouse layers",
+            desired.behaviors.auto_mouse_layers.is_some()
+                && desired.behaviors.auto_mouse_layers != live.behaviors.auto_mouse_layers,
+        ),
+    ] {
+        if differs {
+            result.push(format!("{name}: file differs from keyboard"));
+        }
+    }
     if let Some(wanted) = &desired.behaviors.morses {
         let present = live.behaviors.morses.as_deref().unwrap_or_default();
         for (index, morse) in wanted.iter().enumerate() {
@@ -1321,7 +1715,7 @@ pub fn parse_keys(text: &str) -> Result<Vec<u16>> {
     }
     let mut result = Vec::with_capacity(LAYER_SIZE);
     for (row, line) in rows.iter().enumerate() {
-        let tokens = line.split_whitespace().collect::<Vec<_>>();
+        let tokens = split_grid_tokens(line)?;
         if tokens.len() != usize::from(COLS) {
             bail!("row {row} must contain {COLS} keys, found {}", tokens.len());
         }
@@ -1329,7 +1723,7 @@ pub fn parse_keys(text: &str) -> Result<Vec<u16>> {
             result.push(if token == "--" {
                 0
             } else {
-                crate::keycodes::parse_keycode(token)?
+                crate::keycodes::parse_keycode(&token)?
             });
         }
     }
@@ -1343,6 +1737,142 @@ pub fn parse_keys(text: &str) -> Result<Vec<u16>> {
         }
     }
     Ok(result)
+}
+
+fn split_grid_tokens(line: &str) -> Result<Vec<String>> {
+    let mut tokens = Vec::new();
+    let mut depth = 0usize;
+    let mut start = None;
+    for (index, character) in line.char_indices() {
+        if character.is_whitespace() && depth == 0 {
+            if let Some(token_start) = start.take() {
+                tokens.push(line[token_start..index].trim().to_owned());
+            }
+            continue;
+        }
+        start.get_or_insert(index);
+        match character {
+            '(' => depth += 1,
+            ')' => {
+                depth = depth.checked_sub(1).context("unmatched ')' in key grid")?;
+            }
+            _ => {}
+        }
+    }
+    if depth != 0 {
+        bail!("unclosed '(' in key grid");
+    }
+    if let Some(token_start) = start {
+        tokens.push(line[token_start..].trim().to_owned());
+    }
+    Ok(tokens)
+}
+
+pub fn parse_key_actions(text: &str, profile_names: &[String]) -> Result<Vec<KeyAction>> {
+    let rows = text
+        .lines()
+        .map(|line| line.split('#').next().unwrap_or_default().trim())
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>();
+    if rows.len() != usize::from(ROWS) {
+        bail!(
+            "keys must contain {ROWS} non-empty rows, found {}",
+            rows.len()
+        );
+    }
+    let mut result = Vec::with_capacity(LAYER_SIZE);
+    for (row, line) in rows.iter().enumerate() {
+        let tokens = split_grid_tokens(line)?;
+        if tokens.len() != usize::from(COLS) {
+            bail!("row {row} must contain {COLS} keys, found {}", tokens.len());
+        }
+        for token in tokens {
+            result.push(parse_key_action(&token, profile_names)?);
+        }
+    }
+    for hole in HOLES {
+        if result[hole] != KeyAction::No {
+            bail!(
+                "physical hole r{},c{} must be --",
+                hole / usize::from(COLS),
+                hole % usize::from(COLS)
+            );
+        }
+    }
+    Ok(result)
+}
+
+fn parse_key_action(token: &str, profile_names: &[String]) -> Result<KeyAction> {
+    if token == "--" {
+        return Ok(KeyAction::No);
+    }
+    for (name, kind) in [("MT", 0u8), ("LT", 1), ("TH", 2)] {
+        let Some(inner) = token
+            .strip_prefix(name)
+            .and_then(|rest| rest.strip_prefix('('))
+            .and_then(|rest| rest.strip_suffix(')'))
+        else {
+            continue;
+        };
+        let arguments = split_call_arguments(inner)?;
+        if arguments.len() != 3 {
+            break;
+        }
+        let profile = profile_names
+            .iter()
+            .position(|candidate| candidate == &arguments[2])
+            .with_context(|| format!("unknown morse profile '{}'", arguments[2]))?;
+        let profile = u8::try_from(profile).context("more than 255 morse profiles")?;
+        let (tap, hold) = match kind {
+            0 => (
+                single_action(&arguments[0])?,
+                Action::Modifier(modifier_list_to_wire(
+                    &arguments[1]
+                        .split('|')
+                        .map(|name| name.trim().to_owned())
+                        .collect::<Vec<_>>(),
+                )?),
+            ),
+            1 => (
+                single_action(&arguments[1])?,
+                Action::LayerOn(arguments[0].parse().context("invalid LT layer")?),
+            ),
+            _ => (single_action(&arguments[0])?, single_action(&arguments[1])?),
+        };
+        return Ok(KeyAction::TapHold(tap, hold, profile));
+    }
+    Ok(crate::rynk_keycode::from_via_keycode(
+        crate::keycodes::parse_keycode(token)?,
+    ))
+}
+
+fn single_action(text: &str) -> Result<Action> {
+    match crate::rynk_keycode::from_via_keycode(crate::keycodes::parse_keycode(text)?) {
+        KeyAction::Single(action) => Ok(action),
+        _ => bail!("'{text}' is not a single action"),
+    }
+}
+
+fn split_call_arguments(text: &str) -> Result<Vec<String>> {
+    let mut arguments = Vec::new();
+    let mut depth = 0usize;
+    let mut start = 0usize;
+    for (index, character) in text.char_indices() {
+        match character {
+            '(' => depth += 1,
+            ')' => depth = depth.checked_sub(1).context("unmatched ')' in action")?,
+            ',' if depth == 0 => {
+                arguments.push(text[start..index].trim().to_owned());
+                start = index + 1;
+            }
+            _ => {}
+        }
+    }
+    if depth != 0 {
+        bail!("unclosed '(' in action");
+    }
+    arguments.push(text[start..].trim().to_owned());
+    Ok(arguments)
 }
 
 pub fn render_keys(keys: &[u16]) -> String {
@@ -1365,6 +1895,45 @@ pub fn render_keys(keys: &[u16]) -> String {
         text.push('\n');
     }
     text
+}
+
+pub fn render_key_actions(keys: &[KeyAction], profile_names: &[String]) -> String {
+    let mut text = String::from("\n");
+    for row in 0..usize::from(ROWS) {
+        for col in 0..usize::from(COLS) {
+            if col > 0 {
+                text.push(' ');
+            }
+            let action = keys[row * usize::from(COLS) + col];
+            text.push_str(&render_key_action(action, profile_names).replace(", ", ","));
+        }
+        text.push('\n');
+    }
+    text
+}
+
+fn render_key_action(action: KeyAction, profile_names: &[String]) -> String {
+    let KeyAction::TapHold(tap, hold, profile) = action else {
+        let code = crate::rynk_keycode::to_via_keycode(action);
+        return if code == 0 && action == KeyAction::No {
+            "--".to_owned()
+        } else {
+            crate::keycodes::format_keycode(code)
+        };
+    };
+    let suffix = profile_names
+        .get(usize::from(profile))
+        .map(|name| format!(", {name}"))
+        .unwrap_or_default();
+    match hold {
+        Action::Modifier(modifiers) => format!(
+            "MT({}, {}{suffix})",
+            action_name(tap),
+            modifier_list_from_wire(modifiers).join(" | ")
+        ),
+        Action::LayerOn(layer) => format!("LT({layer}, {}{suffix})", action_name(tap)),
+        _ => format!("TH({}, {}{suffix})", action_name(tap), action_name(hold)),
+    }
 }
 
 pub fn action_to_code(action: KeyAction, layer: usize, offset: usize) -> Result<u16> {
@@ -1787,11 +2356,13 @@ pub fn scene_policy_to_wire(policy: ScenePolicyConfig) -> LightingLayerPolicy {
 /// ones as transparent, so a keyboard always reports more layers than a source
 /// file names. Dropping the trailing layers that bind nothing is what lets a
 /// five-layer file round-trip against eight-layer firmware.
-pub fn trim_trailing_transparent_layers(layers: &mut Vec<Vec<u16>>) {
+pub fn trim_trailing_transparent_layers(layers: &mut Vec<Vec<KeyAction>>) {
     while layers.len() > 1
-        && layers
-            .last()
-            .is_some_and(|layer| layer.iter().all(|code| matches!(*code, 0 | 1)))
+        && layers.last().is_some_and(|layer| {
+            layer
+                .iter()
+                .all(|action| matches!(action, KeyAction::No | KeyAction::Transparent))
+        })
     {
         layers.pop();
     }
@@ -1951,6 +2522,24 @@ mod tests {
         assert_eq!(parsed[3], 0x0001);
         assert_eq!(parsed[4], 0x4129);
         assert_eq!(parse_keys(&render_keys(&parsed)).unwrap(), parsed);
+    }
+
+    #[test]
+    fn parameterized_tap_holds_round_trip_without_via_loss() {
+        let keys = "\n-- -- MT(A, LGui, hrm_pinky) LT(2, Escape, layer_hold) TH(B, LSFT, hrm_pinky) -- -- -- -- -- -- -- -- --\n-- -- -- -- -- -- -- -- -- -- -- -- -- --\n-- -- -- -- -- -- -- -- -- -- -- -- -- --\n-- -- -- -- -- -- -- -- -- -- -- -- -- --\n-- -- -- -- -- -- -- -- -- -- -- -- -- --\n-- -- -- -- -- -- -- -- -- -- -- -- -- --\n";
+        let profiles = vec!["hrm_pinky".to_owned(), "layer_hold".to_owned()];
+        let parsed = parse_key_actions(keys, &profiles).unwrap();
+        assert!(matches!(
+            parsed[2],
+            KeyAction::TapHold(_, Action::Modifier(_), 0)
+        ));
+        assert!(matches!(
+            parsed[3],
+            KeyAction::TapHold(_, Action::LayerOn(2), 1)
+        ));
+        assert!(matches!(parsed[4], KeyAction::TapHold(_, _, 0)));
+        let rendered = render_key_actions(&parsed, &profiles);
+        assert_eq!(parse_key_actions(&rendered, &profiles).unwrap(), parsed);
     }
 
     #[test]
@@ -2343,7 +2932,7 @@ Density = 6
         let snapshot = Snapshot {
             behaviors: BehaviorSnapshot::default(),
             default_layer: 0,
-            layers: vec![vec![0; LAYER_SIZE]],
+            layers: vec![vec![KeyAction::No; LAYER_SIZE]],
             lighting: Some(lighting_snapshot(
                 Some(effects_with(&[("Density", 6), ("Trail Length", 128)])),
                 Some(vec![param_set(
@@ -2364,7 +2953,7 @@ Density = 6
         let snapshot = Snapshot {
             behaviors: BehaviorSnapshot::default(),
             default_layer: 0,
-            layers: vec![vec![0; LAYER_SIZE]],
+            layers: vec![vec![KeyAction::No; LAYER_SIZE]],
             lighting: Some(lighting_snapshot(
                 Some(effects_with(&[("Density", 6)])),
                 None,

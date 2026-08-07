@@ -6,12 +6,14 @@
 //! each of these a named TypeScript declaration.
 
 use rynk::rmk_types::action::KeyAction;
+use rynk::rmk_types::auto_mouse::AutoMouseLayerConfig;
 use rynk::rmk_types::combo::Combo;
 use rynk::rmk_types::fork::Fork;
-use rynk::rmk_types::morse::Morse;
+use rynk::rmk_types::morse::{Morse, MorseProfile};
 use rynk::rmk_types::protocol::rynk::{
-    LightingBackgroundState, LightingExtendedConditionalSceneCell, LightingExtensionParam,
-    LightingExtensionState, LightingLayerPolicy, LightingOutputMode, LightingSceneCell,
+    BehaviorConfig as WireBehaviorConfig, BehaviorOptions, LightingBackgroundState,
+    LightingExtendedConditionalSceneCell, LightingExtensionParam, LightingExtensionState,
+    LightingLayerPolicy, LightingOutputMode, LightingSceneCell,
 };
 use serde::{Deserialize, Serialize};
 use tsify::Tsify;
@@ -88,6 +90,10 @@ pub struct RuntimeSnapshot {
 #[derive(Clone, Debug, Default, Deserialize, Serialize, Tsify)]
 #[tsify(into_wasm_abi, from_wasm_abi)]
 pub struct BehaviorSnapshot {
+    pub config: Option<WireBehaviorConfig>,
+    pub options: Option<BehaviorOptions>,
+    pub morse_profiles: Option<Vec<MorseProfile>>,
+    pub auto_mouse_layers: Option<Vec<AutoMouseLayerConfig>>,
     pub morses: Option<Vec<Morse>>,
     pub combos: Option<Vec<Combo>>,
     /// Macro space exactly as the firmware stores it: the sequences

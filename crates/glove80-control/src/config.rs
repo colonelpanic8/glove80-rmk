@@ -18,9 +18,9 @@ use glove80_config::{
 use rynk::rmk_types::protocol::rynk::{
     Cmd, LightingError, LightingExtendedConditionalSceneCell, LightingExtensionNameKind,
     LightingExtensionParamsRequest, LightingFeatureFlags, LightingMutableState, RynkError,
-    SetKeymapBulkRequest, SetLightingExtensionLayersRequest, SetLightingExtensionParamRequest,
-    SetLightingExtensionStateRequest, SetLightingLayerPolicyRequest, SetLightingOutputModeRequest,
-    SetLightingStateRequest,
+    SetAutoMouseLayerConfigsRequest, SetKeymapBulkRequest, SetLightingExtensionLayersRequest,
+    SetLightingExtensionParamRequest, SetLightingExtensionStateRequest,
+    SetLightingLayerPolicyRequest, SetLightingOutputModeRequest, SetLightingStateRequest,
 };
 use rynk::{Client, RynkHostError};
 
@@ -237,16 +237,8 @@ async fn read_snapshot(client: &Client) -> Result<Snapshot> {
     };
     let mut layers = actions
         .chunks(LAYER_SIZE)
-        .enumerate()
-        .map(|(layer, actions)| {
-            actions
-                .iter()
-                .copied()
-                .enumerate()
-                .map(|(offset, action)| glove80_config::action_to_code(action, layer, offset))
-                .collect::<Result<Vec<_>>>()
-        })
-        .collect::<Result<Vec<_>>>()?;
+        .map(|actions| actions.to_vec())
+        .collect::<Vec<_>>();
     trim_trailing_transparent_layers(&mut layers);
 
     let lighting_caps = client.get_lighting_capabilities().await?;
@@ -443,7 +435,22 @@ fn params_unsupported(error: &RynkHostError) -> bool {
 const MACRO_CHUNK: usize = rynk::rmk_types::constants::MACRO_DATA_SIZE;
 
 async fn read_behaviors(client: &Client) -> Result<BehaviorSnapshot> {
+    let options = client.get_behavior_options().await.ok();
+    let mut morse_profiles = client.read_all_morse_profiles().await.ok();
+    if let (Some(profiles), Some(options)) = (&mut morse_profiles, options) {
+        while profiles.last() == Some(&options.morse_default_profile) {
+            profiles.pop();
+        }
+    }
     Ok(BehaviorSnapshot {
+        config: client.get_behavior().await.ok(),
+        options,
+        morse_profiles,
+        auto_mouse_layers: client
+            .get_auto_mouse_layer_configs()
+            .await
+            .ok()
+            .map(|state| state.configs),
         morses: client.read_all_morses().await.ok(),
         combos: client.read_all_combos().await.ok(),
         macros: read_macro_space(client).await.ok(),
@@ -497,6 +504,8 @@ async fn read_macro_space(client: &Client) -> Result<Vec<u8>> {
 fn claim_every_behavior_table(snapshot: &mut glove80_config::Snapshot) {
     let behaviors = &mut snapshot.behaviors;
     behaviors.morses.get_or_insert_with(Vec::new);
+    behaviors.morse_profiles.get_or_insert_with(Vec::new);
+    behaviors.auto_mouse_layers.get_or_insert_with(Vec::new);
     behaviors.combos.get_or_insert_with(Vec::new);
     behaviors.forks.get_or_insert_with(Vec::new);
     behaviors.macros.get_or_insert_with(Vec::new);
@@ -518,6 +527,53 @@ async fn apply_behaviors(
     before: &BehaviorSnapshot,
     macro_chunk: u16,
 ) -> Result<()> {
+    if let Some(config) = desired.config {
+        if before.config != Some(config) {
+            client
+                .set_behavior(config)
+                .await
+                .context("could not write global behavior timing")?;
+        }
+    }
+    if let Some(options) = desired.options {
+        if before.options != Some(options) {
+            client
+                .set_behavior_options(options)
+                .await
+                .context("could not write global behavior options")?;
+        }
+    }
+    if let Some(profiles) = &desired.morse_profiles {
+        let mut profiles = profiles.clone();
+        if let Some(default_profile) = desired
+            .options
+            .or(before.options)
+            .map(|options| options.morse_default_profile)
+        {
+            profiles.resize(
+                profiles
+                    .len()
+                    .max(before.morse_profiles.as_deref().unwrap_or_default().len()),
+                default_profile,
+            );
+        }
+        if before.morse_profiles.as_deref() != Some(profiles.as_slice()) {
+            client
+                .write_all_morse_profiles(profiles)
+                .await
+                .context("could not write morse profiles")?;
+        }
+    }
+    if let Some(configs) = &desired.auto_mouse_layers {
+        if before.auto_mouse_layers.as_ref() != Some(configs) {
+            client
+                .set_auto_mouse_layer_configs(SetAutoMouseLayerConfigsRequest {
+                    configs: configs.clone(),
+                })
+                .await
+                .context("could not write auto mouse layers")?;
+        }
+    }
     // The bulk writers write exactly the slots they are given, so a table that
     // shrank would keep its tail. Pad to what the keyboard currently holds and
     // the surplus is overwritten with empty slots.
@@ -621,13 +677,9 @@ async fn write_layer(
     client: &Client,
     capabilities: &rynk::rmk_types::protocol::rynk::DeviceCapabilities,
     layer: u8,
-    wanted: &[u16],
+    wanted: &[rynk::rmk_types::action::KeyAction],
 ) -> Result<()> {
-    let actions: Vec<_> = wanted
-        .iter()
-        .copied()
-        .map(crate::rynk_keycode::from_via_keycode)
-        .collect();
+    let actions = wanted;
 
     if capabilities.bulk_transfer_supported {
         let per_page = usize::from(capabilities.max_bulk_keys).max(1);
@@ -647,7 +699,7 @@ async fn write_layer(
         return Ok(());
     }
 
-    for (offset, action) in actions.into_iter().enumerate() {
+    for (offset, action) in actions.iter().copied().enumerate() {
         let row = (offset / usize::from(COLS)) as u8;
         let col = (offset % usize::from(COLS)) as u8;
         client
@@ -683,14 +735,14 @@ async fn apply_snapshot(client: &Client, desired: &Snapshot, before: &Snapshot) 
     // writes layer by layer rather than handing the whole keymap to
     // `write_all_keymap`.
     for layer in 0..u8::try_from(desired.layers.len()).context("too many configured layers")? {
-        let wanted = desired
-            .layers
-            .get(usize::from(layer))
-            .map_or([0; LAYER_SIZE].as_slice(), |keys| keys.as_slice());
-        let present = before
-            .layers
-            .get(usize::from(layer))
-            .map_or([0; LAYER_SIZE].as_slice(), |keys| keys.as_slice());
+        let wanted = desired.layers.get(usize::from(layer)).map_or(
+            [rynk::rmk_types::action::KeyAction::No; LAYER_SIZE].as_slice(),
+            |keys| keys.as_slice(),
+        );
+        let present = before.layers.get(usize::from(layer)).map_or(
+            [rynk::rmk_types::action::KeyAction::No; LAYER_SIZE].as_slice(),
+            |keys| keys.as_slice(),
+        );
         if wanted == present {
             continue;
         }

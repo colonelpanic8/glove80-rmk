@@ -253,6 +253,7 @@ pub fn import_moergo_layout(text: &str) -> Result<ImportedLayout> {
         combos,
         macros,
         forks,
+        behavior: None,
         lighting: None,
     };
     config.snapshot()?;
@@ -311,7 +312,7 @@ pub fn snapshot_to_moergo_json(
         let mut editor = Vec::with_capacity(MOERGO_TO_MATRIX.len());
         for (editor_index, offset) in MOERGO_TO_MATRIX.iter().copied().enumerate() {
             editor.push(via_to_binding(
-                matrix[offset],
+                crate::action_to_code(matrix[offset], layer_index, offset)?,
                 layer_index,
                 editor_index,
                 offset,
@@ -1277,22 +1278,25 @@ mod tests {
         let snapshot = config.snapshot().unwrap();
         assert_eq!(
             snapshot.layers[0][0],
-            keycodes::parse_keycode("KC_F1").unwrap()
+            crate::rynk_keycode::from_via_keycode(keycodes::parse_keycode("KC_F1").unwrap())
         );
         assert_eq!(
             snapshot.layers[0][1],
-            keycodes::parse_keycode("LSFT(KC_9)").unwrap()
+            crate::rynk_keycode::from_via_keycode(keycodes::parse_keycode("LSFT(KC_9)").unwrap())
         );
         assert_eq!(
             snapshot.layers[0][6],
-            keycodes::parse_keycode("LT(1,KC_ESC)").unwrap()
+            crate::rynk_keycode::from_via_keycode(keycodes::parse_keycode("LT(1,KC_ESC)").unwrap())
         );
         assert_eq!(
             snapshot.layers[0][83],
-            keycodes::parse_keycode("RGB_TOG").unwrap()
+            crate::rynk_keycode::from_via_keycode(keycodes::parse_keycode("RGB_TOG").unwrap())
         );
         for hole in [5, 8, 75, 78] {
-            assert_eq!(snapshot.layers[0][hole], 0);
+            assert_eq!(
+                snapshot.layers[0][hole],
+                rynk::rmk_types::action::KeyAction::No
+            );
         }
     }
 

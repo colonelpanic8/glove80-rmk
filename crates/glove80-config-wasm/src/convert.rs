@@ -49,26 +49,16 @@ pub fn snapshot_from_wire(
     snapshot: &RuntimeSnapshot,
     catalog: &ExtensionCatalog,
 ) -> anyhow::Result<model::Snapshot> {
-    let layers = snapshot
-        .layers
-        .iter()
-        .enumerate()
-        .map(|(layer, actions)| {
-            if actions.len() != model::LAYER_SIZE {
-                anyhow::bail!(
-                    "layer {layer} has {} keys, expected the Glove80's {}",
-                    actions.len(),
-                    model::LAYER_SIZE
-                );
-            }
-            actions
-                .iter()
-                .copied()
-                .enumerate()
-                .map(|(offset, action)| model::action_to_code(action, layer, offset))
-                .collect::<anyhow::Result<Vec<_>>>()
-        })
-        .collect::<anyhow::Result<Vec<_>>>()?;
+    for (layer, actions) in snapshot.layers.iter().enumerate() {
+        if actions.len() != model::LAYER_SIZE {
+            anyhow::bail!(
+                "layer {layer} has {} keys, expected the Glove80's {}",
+                actions.len(),
+                model::LAYER_SIZE
+            );
+        }
+    }
+    let layers = snapshot.layers.clone();
 
     let lighting = snapshot
         .lighting
@@ -81,6 +71,10 @@ pub fn snapshot_from_wire(
         layers,
         lighting,
         behaviors: model::BehaviorSnapshot {
+            config: snapshot.behaviors.config,
+            options: snapshot.behaviors.options,
+            morse_profiles: snapshot.behaviors.morse_profiles.clone(),
+            auto_mouse_layers: snapshot.behaviors.auto_mouse_layers.clone(),
             morses: snapshot.behaviors.morses.clone(),
             combos: snapshot.behaviors.combos.clone(),
             macros: snapshot.behaviors.macros.clone(),
@@ -150,16 +144,7 @@ pub fn snapshot_to_wire(
     snapshot: &model::Snapshot,
     catalog: &ExtensionCatalog,
 ) -> anyhow::Result<RuntimeSnapshot> {
-    let layers = snapshot
-        .layers
-        .iter()
-        .map(|keys| {
-            keys.iter()
-                .copied()
-                .map(model::rynk_keycode::from_via_keycode)
-                .collect()
-        })
-        .collect();
+    let layers = snapshot.layers.clone();
 
     let lighting = snapshot
         .lighting
@@ -172,6 +157,10 @@ pub fn snapshot_to_wire(
         layers,
         lighting,
         behaviors: BehaviorSnapshot {
+            config: snapshot.behaviors.config,
+            options: snapshot.behaviors.options,
+            morse_profiles: snapshot.behaviors.morse_profiles.clone(),
+            auto_mouse_layers: snapshot.behaviors.auto_mouse_layers.clone(),
             morses: snapshot.behaviors.morses.clone(),
             combos: snapshot.behaviors.combos.clone(),
             macros: snapshot.behaviors.macros.clone(),
