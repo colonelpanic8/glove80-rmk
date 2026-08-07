@@ -19,7 +19,7 @@ mod version;
 #[derive(Parser)]
 #[command(about = "Control Glove80 keymaps, lighting, firmware, and bootloaders over Rynk")]
 struct Cli {
-    /// Device to use: a /dev/hidraw* path, older Rynk /dev/ttyACM* path, or BLE address.
+    /// Device to use: a /dev/hidraw* path or BLE address.
     #[arg(long, global = true)]
     device: Option<PathBuf>,
 
