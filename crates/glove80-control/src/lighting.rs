@@ -5,6 +5,7 @@ use std::path::PathBuf;
 
 use anyhow::{bail, Context, Result};
 use clap::{Args, Subcommand, ValueEnum};
+use rynk::rmk_types::protocol::rynk::{LightingReplicaStatus, LightingReplicationHealth};
 
 use crate::transport::Selector;
 
@@ -44,6 +45,21 @@ pub enum LightingCommand {
     Clear,
     /// Read current lighting and split state.
     Read,
+    /// Read the frame most recently presented by one lighting node.
+    Frame {
+        /// Lighting node id (0 is the central/left half, 1 the peripheral/right half).
+        #[arg(default_value_t = 0)]
+        node: u8,
+        /// Emit a machine-readable JSON document.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Diagnose split lighting replication and digest agreement.
+    ReplicaStatus {
+        /// Emit a machine-readable JSON document.
+        #[arg(long)]
+        json: bool,
+    },
     /// Atomically replace the overlay from `KEY COLOR [EFFECT] [option=value]` lines.
     Replace {
         /// File to read; `-` or omission reads stdin.
@@ -134,6 +150,80 @@ pub struct EffectSpec {
 pub struct CellSpec {
     pub key: u8,
     pub effect: EffectSpec,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ReplicaVerdict {
+    InSync,
+    Resyncing,
+    Stale,
+    Diverged,
+    Halted,
+    Unavailable,
+    Unattested,
+}
+
+impl ReplicaVerdict {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::InSync => "IN SYNC",
+            Self::Resyncing => "RESYNCING",
+            Self::Stale => "STALE",
+            Self::Diverged => "DIVERGED",
+            Self::Halted => "HALTED",
+            Self::Unavailable => "UNAVAILABLE",
+            Self::Unattested => "UNATTESTED",
+        }
+    }
+}
+
+pub fn replica_verdict(status: &LightingReplicaStatus, freshness_ms: u32) -> ReplicaVerdict {
+    let Some(machine) = status.replication.as_ref() else {
+        return ReplicaVerdict::Unavailable;
+    };
+    if !machine.link_up || status.peripheral.is_none() {
+        return ReplicaVerdict::Unavailable;
+    }
+    if machine.health == LightingReplicationHealth::Halted {
+        return ReplicaVerdict::Halted;
+    }
+    if machine.awaiting_ack
+        || machine.durable_dirty
+        || machine.context_dirty
+        || machine.health == LightingReplicationHealth::Resynchronizing
+    {
+        return ReplicaVerdict::Resyncing;
+    }
+    if machine.health == LightingReplicationHealth::Diverged {
+        return ReplicaVerdict::Diverged;
+    }
+    let peripheral = status.peripheral.as_ref().expect("checked above");
+    if peripheral.age_ms > freshness_ms || machine.health == LightingReplicationHealth::Stale {
+        return ReplicaVerdict::Stale;
+    }
+    let (Some(expected), Some(observed)) = (
+        machine.expected_digests.as_ref(),
+        peripheral.digests.as_ref(),
+    ) else {
+        return ReplicaVerdict::Unattested;
+    };
+    if expected.revision == observed.revision && expected != observed {
+        return ReplicaVerdict::Diverged;
+    }
+    let context_matches = status.central.effective_layer == peripheral.effective_layer
+        && status.central.default_layer == peripheral.default_layer
+        && status.central.active_bits == peripheral.active_bits
+        && status.central.powered == peripheral.powered
+        && status.central.wake_active == peripheral.wake_active
+        && status.central.effective_output_enabled == peripheral.effective_output_enabled;
+    if expected == observed
+        && peripheral.applied_revision == machine.last_acked_revision
+        && context_matches
+    {
+        ReplicaVerdict::InSync
+    } else {
+        ReplicaVerdict::Stale
+    }
 }
 
 pub use glove80_config::parse_color;
@@ -277,6 +367,10 @@ pub fn run_bootloader(selector: &Selector, peripheral: bool, yes: bool) -> Resul
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rynk::rmk_types::protocol::rynk::{
+        LightingCentralReplicaState, LightingNodeId, LightingPeripheralReplicaState,
+        LightingReplicaDigests, LightingReplicationMachine,
+    };
 
     #[test]
     fn parses_colors_and_ranges() {
@@ -290,5 +384,101 @@ mod tests {
         assert!(build_effect(EffectArg::Solid, (1, 2, 3), Some(10), None, None).is_err());
         assert!(build_effect(EffectArg::Blink, (1, 2, 3), None, None, Some(101)).is_err());
         assert!(build_effect(EffectArg::Breathe, (1, 2, 3), None, None, Some(10)).is_err());
+    }
+
+    fn status(health: LightingReplicationHealth) -> LightingReplicaStatus {
+        let digests = LightingReplicaDigests {
+            schema: 1,
+            revision: 7,
+            settings: 1,
+            overlay: 2,
+            scenes: 3,
+            conditional_scenes: 4,
+        };
+        LightingReplicaStatus {
+            central: LightingCentralReplicaState {
+                revision: 7,
+                presented_revision: Some(7),
+                effective_layer: 2,
+                default_layer: 0,
+                active_bits: 5,
+                powered: true,
+                wake_active: false,
+                effective_output_enabled: true,
+            },
+            replication: Some(LightingReplicationMachine {
+                last_acked_revision: Some(7),
+                awaiting_ack: false,
+                generation: 1,
+                link_up: true,
+                durable_dirty: false,
+                context_dirty: false,
+                health,
+                expected_digests: Some(digests),
+                last_attested_age_ms: Some(10),
+                mismatch_count: 0,
+            }),
+            peripheral: Some(LightingPeripheralReplicaState {
+                node: LightingNodeId(1),
+                applied_revision: Some(7),
+                engine_revision: 9,
+                effective_layer: 2,
+                default_layer: 0,
+                active_bits: 5,
+                powered: true,
+                wake_active: false,
+                effective_output_enabled: true,
+                age_ms: 10,
+                digests: Some(digests),
+            }),
+        }
+    }
+
+    #[test]
+    fn classifies_replica_status_without_presentation_heuristics() {
+        let healthy = status(LightingReplicationHealth::Healthy);
+        assert_eq!(replica_verdict(&healthy, 30_000), ReplicaVerdict::InSync);
+
+        let mut resyncing = healthy.clone();
+        resyncing.replication.as_mut().unwrap().awaiting_ack = true;
+        assert_eq!(
+            replica_verdict(&resyncing, 30_000),
+            ReplicaVerdict::Resyncing
+        );
+
+        let mut unattested = healthy.clone();
+        unattested.peripheral.as_mut().unwrap().digests = None;
+        assert_eq!(
+            replica_verdict(&unattested, 30_000),
+            ReplicaVerdict::Unattested
+        );
+
+        let mut stale = healthy.clone();
+        stale.peripheral.as_mut().unwrap().age_ms = 30_001;
+        assert_eq!(replica_verdict(&stale, 30_000), ReplicaVerdict::Stale);
+
+        let mut divergent = healthy.clone();
+        divergent
+            .peripheral
+            .as_mut()
+            .unwrap()
+            .digests
+            .as_mut()
+            .unwrap()
+            .overlay = 99;
+        assert_eq!(
+            replica_verdict(&divergent, 30_000),
+            ReplicaVerdict::Diverged
+        );
+
+        let halted = status(LightingReplicationHealth::Halted);
+        assert_eq!(replica_verdict(&halted, 30_000), ReplicaVerdict::Halted);
+
+        let mut unavailable = healthy;
+        unavailable.replication.as_mut().unwrap().link_up = false;
+        assert_eq!(
+            replica_verdict(&unavailable, 30_000),
+            ReplicaVerdict::Unavailable
+        );
     }
 }

@@ -11,11 +11,11 @@ use rynk::rmk_types::protocol::rynk::{
     AbortLightingOverlayReplaceRequest, BeginLightingOverlayReplaceRequest,
     ClearLightingOverlayRequest, CommitLightingOverlayReplaceRequest, LightingBackgroundMode,
     LightingEffect, LightingEffectFlags, LightingExtensionNameKind, LightingFeatureFlags,
-    LightingLayerPolicy, LightingLedId, LightingMutableState, LightingOverlayCell, LightingRgb8,
-    LightingSceneCell, LightingState, PutLightingOverlayChunkRequest,
-    SetLightingExtensionParamRequest, SetLightingLayerPolicyRequest, SetLightingOverlayRequest,
-    SetLightingSceneCellRequest, SetLightingStateRequest, UnsetLightingOverlayRequest,
-    UnsetLightingSceneCellRequest,
+    LightingFrameRequest, LightingLayerPolicy, LightingLedId, LightingMutableState, LightingNodeId,
+    LightingOverlayCell, LightingRgb8, LightingSceneCell, LightingState,
+    PutLightingOverlayChunkRequest, SetLightingExtensionParamRequest,
+    SetLightingLayerPolicyRequest, SetLightingOverlayRequest, SetLightingSceneCellRequest,
+    SetLightingStateRequest, UnsetLightingOverlayRequest, UnsetLightingSceneCellRequest,
 };
 use rynk::{Client, RynkDevice};
 use rynk_ble::BleDevice;
@@ -438,6 +438,72 @@ async fn operate_lighting(client: &Client, command: &LightingCommand) -> Result<
                 },
                 render_lighting_state(client.get_lighting_state().await?)
             );
+        }
+        LightingCommand::Frame { node, json } => {
+            let node = LightingNodeId(*node);
+            let mut offset = 0u16;
+            let mut pages = Vec::new();
+            loop {
+                let page = client
+                    .get_lighting_frame(LightingFrameRequest { node, offset })
+                    .await?;
+                let next = page.start.saturating_add(page.cells.len() as u16);
+                let done = next >= page.total_leds || page.cells.is_empty();
+                offset = next;
+                pages.push(page);
+                if done {
+                    break;
+                }
+            }
+            if *json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&serde_json::json!({
+                        "node": node.0,
+                        "pages": pages,
+                    }))?
+                );
+            } else {
+                for page in pages {
+                    println!(
+                        "node {} revision {:?} age {} ms slots {}..{} of {}",
+                        node.0,
+                        page.revision,
+                        page.age_ms,
+                        page.start,
+                        page.start + page.cells.len() as u16,
+                        page.total_leds,
+                    );
+                    for (index, cell) in page.cells.iter().enumerate() {
+                        println!(
+                            "  {:>3}: #{:02x}{:02x}{:02x}",
+                            page.start + index as u16,
+                            cell.r,
+                            cell.g,
+                            cell.b,
+                        );
+                    }
+                }
+            }
+        }
+        LightingCommand::ReplicaStatus { json } => {
+            // The first read coalesces a background status request. One split
+            // round trip later, the second read returns the refreshed cache.
+            let _ = client.get_lighting_replica_status().await?;
+            tokio::time::sleep(Duration::from_millis(150)).await;
+            let status = client.get_lighting_replica_status().await?;
+            let verdict = crate::lighting::replica_verdict(&status, 30_000);
+            if *json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&serde_json::json!({
+                        "verdict": verdict.as_str(),
+                        "status": status,
+                    }))?
+                );
+            } else {
+                println!("verdict: {}\n{status:#?}", verdict.as_str());
+            }
         }
         LightingCommand::Replace { file, ttl } => {
             let spec = match file.as_deref() {
