@@ -106,6 +106,11 @@ mod keyboard_central {
         crate::central_lighting::replication()
     }
 
+    #[register_processor(runnable)]
+    fn remote_frame_bridge() {
+        crate::central_lighting::remote_frame_bridge()
+    }
+
     /// Forward the physical right-half bootloader action.
     #[register_processor(runnable)]
     fn remote_boot_dispatcher() {

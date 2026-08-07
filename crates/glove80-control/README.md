@@ -1,7 +1,7 @@
 # glove80-control
 
-Native Glove80 control CLI using RMK's Rynk protocol over USB HID, USB serial,
-or BLE. It controls current firmware only; the retired Glove80 product protocol
+Native Glove80 control CLI using RMK's Rynk protocol over USB HID or BLE. It
+controls current firmware only; the retired Glove80 product protocol
 is intentionally not supported.
 
 Run from the repository's Nix development shell:
@@ -15,15 +15,15 @@ The top-level commands are:
 
 - `config validate|diff|apply|pull|show`
 - `keymap read|set|default|monitor|find`
-- `lighting ping|caps|set|unset|clear|read|replace|brightness`
+- `lighting ping|caps|set|unset|clear|read|frame|replica-status|replace|brightness`
 - `lighting scene-read|scene-set|scene-unset|scene-policy|params`
 - `version`
 - `bootloader [--peripheral] [--yes]`
 - `maintenance`
 
 Device selection defaults to USB with BLE fallback. Use `--usb` or `--ble` to
-require one transport, and `--device` to select a `/dev/hidraw*`,
-`/dev/ttyACM*`, or BLE address when multiple keyboards are available.
+require one transport, and `--device` to select a `/dev/hidraw*` or BLE address
+when multiple keyboards are available.
 
 `keymap set` accepts `LAYER KEY KEYCODE` triples. A key may be a flat index or
 `row,col`; keycodes use familiar names such as `KC_A`, `MO(2)`, and

@@ -8,19 +8,22 @@
 
 use core::num::NonZeroU32;
 
+use rmk::host::ReplicaDigests;
 use rmk::lighting::compositor::{ExtensionLayerState, ExtensionState};
 use rmk::lighting::standard::{EXTENSION_PARAM_CHUNK, ExtensionReplicaParams};
 use rmk::lighting::{
     ActiveTransport, BackgroundMode, BackgroundState, BatteryCondition, BondedSlotCondition,
     BuiltinEffect, ChargeCondition, ConditionSet, ConnectionCondition, EffectsCondition,
-    IndicatorState, LayerCondition, LayerPolicy, LayerState, LedSlot, LightingContext, OutputMode,
-    OverlayBatch, OverlayCell, Rgb8, RuntimeConditionalSceneCell, RuntimeConditionalSceneTable,
-    SceneTable, SceneTableCell, StandardMutableState, StandardReplicaState,
+    FRAME_CHUNK_SIZE, IndicatorState, LayerCondition, LayerPolicy, LayerState, LedSlot,
+    LightingContext, OutputMode, OverlayBatch, OverlayCell, Rgb8, RuntimeConditionalSceneCell,
+    RuntimeConditionalSceneTable, SceneTable, SceneTableCell, StandardMutableState,
+    StandardReplicaState,
 };
 use rmk::split_app::{SPLIT_APP_MSG_MAX, SplitAppData};
 use rmk::types::battery::{BatteryStatus, ChargeState};
 use rmk::types::ble::BleState;
 use rmk::types::connection::ConnectionStatus;
+use rmk::types::protocol::rynk::LIGHTING_REPLICA_DIGEST_SCHEMA_V1;
 
 use crate::lighting::{BatteryPair, LEDS_PER_HALF, OVERLAY_CAPACITY, SCENE_CAPACITY, TOTAL_LEDS};
 
@@ -58,6 +61,12 @@ const TAG_CONTEXT_UPDATE: u8 = 12;
 /// sent only when that cell carries one. The cell packet is full, so the
 /// condition rides in its own packet inside the same staged transaction.
 const TAG_CONDITIONAL_SCENE_EXT: u8 = 13;
+const TAG_ATTESTATION: u8 = 14;
+const TAG_REPLICA_PROBE: u8 = 15;
+const TAG_STATUS_REQUEST: u8 = 16;
+const TAG_STATUS_REPORT: u8 = 17;
+const TAG_FRAME_CHUNK_REQUEST: u8 = 18;
+const TAG_FRAME_CHUNK: u8 = 19;
 
 const BEGIN_LEN: usize = 26;
 const CONTEXT_LEN: usize = 24;
@@ -74,11 +83,25 @@ const COMMIT_LEN: usize = 9;
 const ACK_LEN: usize = 7;
 const EFFECT_HIT_LEN: usize = 3;
 const CONTEXT_UPDATE_LEN: usize = 24;
+const ATTESTATION_LEN: usize = 24;
+const REPLICA_PROBE_LEN: usize = 3;
+const STATUS_REQUEST_LEN: usize = 3;
+const STATUS_REPORT_LEN: usize = 23;
+const FRAME_CHUNK_REQUEST_LEN: usize = 5;
+const FRAME_CHUNK_CELLS: usize = 4;
+const FRAME_CHUNK_LEN: usize = 25;
 const _: () = assert!(CELL_LEN <= SPLIT_APP_MSG_MAX);
 const _: () = assert!(EXTENSION_LEN <= SPLIT_APP_MSG_MAX);
 const _: () = assert!(EXTENSION_OVERLAY_LEN <= SPLIT_APP_MSG_MAX);
 const _: () = assert!(CONDITIONAL_SCENE_CELL_LEN <= SPLIT_APP_MSG_MAX);
 const _: () = assert!(CONDITIONAL_SCENE_EXT_LEN <= SPLIT_APP_MSG_MAX);
+const _: () = assert!(ATTESTATION_LEN <= SPLIT_APP_MSG_MAX);
+const _: () = assert!(STATUS_REPORT_LEN <= SPLIT_APP_MSG_MAX);
+const _: () = assert!(FRAME_CHUNK_LEN <= SPLIT_APP_MSG_MAX);
+
+pub const fn diagnostic_may_enqueue(free_capacity: usize) -> bool {
+    free_capacity == 2
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Message {
@@ -166,6 +189,37 @@ pub enum Message {
     EffectHit {
         slot: LedSlot,
     },
+    Attestation {
+        generation: u8,
+        digests: ReplicaDigests,
+    },
+    ReplicaProbe {
+        generation: u8,
+    },
+    StatusRequest {
+        request_id: u8,
+    },
+    StatusReport {
+        request_id: u8,
+        applied_revision: Option<u32>,
+        engine_revision: u32,
+        layers: LayerState,
+        powered: bool,
+        wake_active: bool,
+        effective_output_enabled: bool,
+    },
+    FrameChunkRequest {
+        request_id: u8,
+        offset: u16,
+    },
+    FrameChunk {
+        request_id: u8,
+        revision: Option<u32>,
+        total: u16,
+        start: u16,
+        len: u8,
+        cells: [Rgb8; FRAME_CHUNK_CELLS],
+    },
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -174,6 +228,165 @@ pub enum DecodeError {
     Tag,
     Length,
     Value,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AttestationDecision {
+    Matching,
+    Recover,
+    Stale,
+    Halt,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum FrameChunkDecision {
+    Accepted,
+    Complete,
+    Restart,
+    Invalid,
+}
+
+/// Pure contiguous-page validator used by the asynchronous stop-and-wait
+/// transport. A change in revision or total restarts the page instead of
+/// returning a torn assembly.
+pub struct FramePageAssembly {
+    start: u16,
+    revision: Option<u32>,
+    total: u16,
+    initialized: bool,
+    len: usize,
+    cells: [Rgb8; FRAME_CHUNK_SIZE],
+}
+
+impl FramePageAssembly {
+    pub const fn new(start: u16) -> Self {
+        Self {
+            start,
+            revision: None,
+            total: 0,
+            initialized: false,
+            len: 0,
+            cells: [Rgb8::BLACK; FRAME_CHUNK_SIZE],
+        }
+    }
+
+    pub fn accept(&mut self, message: Message) -> FrameChunkDecision {
+        let Message::FrameChunk {
+            revision,
+            total,
+            start,
+            len,
+            cells,
+            ..
+        } = message
+        else {
+            return FrameChunkDecision::Invalid;
+        };
+        let expected_start = self.start.saturating_add(self.len as u16);
+        if start != expected_start || len as usize > cells.len() {
+            return FrameChunkDecision::Invalid;
+        }
+        if self.initialized && (self.total != total || self.revision != revision) {
+            return FrameChunkDecision::Restart;
+        }
+        self.initialized = true;
+        self.total = total;
+        self.revision = revision;
+        let remaining = total.saturating_sub(start) as usize;
+        let wanted = remaining.min(cells.len()).min(FRAME_CHUNK_SIZE - self.len);
+        if len as usize != wanted {
+            return FrameChunkDecision::Invalid;
+        }
+        self.cells[self.len..self.len + wanted].copy_from_slice(&cells[..wanted]);
+        self.len += wanted;
+        if self.len == FRAME_CHUNK_SIZE || start.saturating_add(wanted as u16) >= total {
+            FrameChunkDecision::Complete
+        } else {
+            FrameChunkDecision::Accepted
+        }
+    }
+
+    pub const fn revision(&self) -> Option<u32> {
+        self.revision
+    }
+
+    pub const fn total(&self) -> u16 {
+        self.total
+    }
+
+    pub const fn start(&self) -> u16 {
+        self.start
+    }
+
+    pub const fn len(&self) -> usize {
+        self.len
+    }
+
+    pub const fn cells(&self) -> &[Rgb8; FRAME_CHUNK_SIZE] {
+        &self.cells
+    }
+}
+
+/// Bounded recovery for same-revision digest mismatches.
+///
+/// The first mismatch schedules one full snapshot. A mismatch observed after
+/// that snapshot is acknowledged is terminal; duplicate attestations while a
+/// recovery is already pending do not consume another attempt.
+pub struct AttestationRecovery {
+    target_revision: Option<u32>,
+    mismatch_count: u8,
+    awaiting_post_resync: bool,
+}
+
+impl AttestationRecovery {
+    pub const fn new() -> Self {
+        Self {
+            target_revision: None,
+            mismatch_count: 0,
+            awaiting_post_resync: false,
+        }
+    }
+
+    pub fn reset(&mut self) {
+        *self = Self::new();
+    }
+
+    pub const fn mismatch_count(&self) -> u8 {
+        self.mismatch_count
+    }
+
+    pub fn snapshot_acked(&mut self, revision: u32) {
+        self.awaiting_post_resync = self.target_revision == Some(revision);
+    }
+
+    pub fn observe(
+        &mut self,
+        expected: Option<ReplicaDigests>,
+        observed: ReplicaDigests,
+    ) -> AttestationDecision {
+        if expected == Some(observed) {
+            self.reset();
+            return AttestationDecision::Matching;
+        }
+        if !expected.is_some_and(|expected| expected.revision == observed.revision) {
+            self.reset();
+            return AttestationDecision::Stale;
+        }
+        if self.target_revision != Some(observed.revision) {
+            self.target_revision = Some(observed.revision);
+            self.mismatch_count = 1;
+            self.awaiting_post_resync = false;
+            return AttestationDecision::Recover;
+        }
+        if self.awaiting_post_resync {
+            self.awaiting_post_resync = false;
+            self.mismatch_count = self.mismatch_count.saturating_add(1);
+            if self.mismatch_count >= 2 {
+                return AttestationDecision::Halt;
+            }
+        }
+        AttestationDecision::Recover
+    }
 }
 
 impl Message {
@@ -515,6 +728,79 @@ impl Message {
                 out[1] = TAG_EFFECT_HIT;
                 out[2] = slot.0 as u8;
                 EFFECT_HIT_LEN
+            }
+            Message::Attestation {
+                generation,
+                digests,
+            } => {
+                out[1] = TAG_ATTESTATION;
+                out[2] = generation;
+                out[3] = digests.schema;
+                put_u32(&mut out, 4, digests.revision);
+                put_u32(&mut out, 8, digests.settings);
+                put_u32(&mut out, 12, digests.overlay);
+                put_u32(&mut out, 16, digests.scenes);
+                put_u32(&mut out, 20, digests.conditional_scenes);
+                ATTESTATION_LEN
+            }
+            Message::ReplicaProbe { generation } => {
+                out[1] = TAG_REPLICA_PROBE;
+                out[2] = generation;
+                REPLICA_PROBE_LEN
+            }
+            Message::StatusRequest { request_id } => {
+                out[1] = TAG_STATUS_REQUEST;
+                out[2] = request_id;
+                STATUS_REQUEST_LEN
+            }
+            Message::StatusReport {
+                request_id,
+                applied_revision,
+                engine_revision,
+                layers,
+                powered,
+                wake_active,
+                effective_output_enabled,
+            } => {
+                out[1] = TAG_STATUS_REPORT;
+                out[2] = request_id;
+                out[3] = applied_revision.is_some() as u8;
+                put_u32(&mut out, 4, applied_revision.unwrap_or(0));
+                put_u32(&mut out, 8, engine_revision);
+                out[12] = layers.effective;
+                out[13] = layers.default;
+                put_u64(&mut out, 14, layers.active_bits());
+                out[22] = powered as u8
+                    | (wake_active as u8) << 1
+                    | (effective_output_enabled as u8) << 2;
+                STATUS_REPORT_LEN
+            }
+            Message::FrameChunkRequest { request_id, offset } => {
+                out[1] = TAG_FRAME_CHUNK_REQUEST;
+                out[2] = request_id;
+                put_u16(&mut out, 3, offset);
+                FRAME_CHUNK_REQUEST_LEN
+            }
+            Message::FrameChunk {
+                request_id,
+                revision,
+                total,
+                start,
+                len,
+                cells,
+            } => {
+                out[1] = TAG_FRAME_CHUNK;
+                out[2] = request_id;
+                out[3] = revision.is_some() as u8;
+                put_u32(&mut out, 4, revision.unwrap_or(0));
+                put_u16(&mut out, 8, total);
+                put_u16(&mut out, 10, start);
+                out[12] = len;
+                for (index, cell) in cells.iter().enumerate() {
+                    let at = 13 + index * 3;
+                    out[at..at + 3].copy_from_slice(&[cell.r, cell.g, cell.b]);
+                }
+                FRAME_CHUNK_LEN
             }
         };
         SplitAppData::new(&out[..len]).expect("semantic lighting packet is bounded")
@@ -872,6 +1158,64 @@ impl Message {
                     slot: LedSlot(bytes[2] as u16),
                 })
             }
+            TAG_ATTESTATION if bytes.len() == ATTESTATION_LEN => Ok(Message::Attestation {
+                generation: bytes[2],
+                digests: ReplicaDigests {
+                    schema: bytes[3],
+                    revision: get_u32(bytes, 4),
+                    settings: get_u32(bytes, 8),
+                    overlay: get_u32(bytes, 12),
+                    scenes: get_u32(bytes, 16),
+                    conditional_scenes: get_u32(bytes, 20),
+                },
+            }),
+            TAG_REPLICA_PROBE if bytes.len() == REPLICA_PROBE_LEN => Ok(Message::ReplicaProbe {
+                generation: bytes[2],
+            }),
+            TAG_STATUS_REQUEST if bytes.len() == STATUS_REQUEST_LEN => Ok(Message::StatusRequest {
+                request_id: bytes[2],
+            }),
+            TAG_STATUS_REPORT if bytes.len() == STATUS_REPORT_LEN => {
+                let has_revision = flag(bytes[3])?;
+                if bytes[22] & !0x07 != 0 {
+                    return Err(DecodeError::Value);
+                }
+                Ok(Message::StatusReport {
+                    request_id: bytes[2],
+                    applied_revision: has_revision.then(|| get_u32(bytes, 4)),
+                    engine_revision: get_u32(bytes, 8),
+                    layers: LayerState::new(bytes[12], bytes[13], get_u64(bytes, 14)),
+                    powered: bytes[22] & 1 != 0,
+                    wake_active: bytes[22] & 2 != 0,
+                    effective_output_enabled: bytes[22] & 4 != 0,
+                })
+            }
+            TAG_FRAME_CHUNK_REQUEST if bytes.len() == FRAME_CHUNK_REQUEST_LEN => {
+                Ok(Message::FrameChunkRequest {
+                    request_id: bytes[2],
+                    offset: get_u16(bytes, 3),
+                })
+            }
+            TAG_FRAME_CHUNK if bytes.len() == FRAME_CHUNK_LEN => {
+                let has_revision = flag(bytes[3])?;
+                let len = bytes[12];
+                if len as usize > FRAME_CHUNK_CELLS {
+                    return Err(DecodeError::Value);
+                }
+                let mut cells = [Rgb8::BLACK; FRAME_CHUNK_CELLS];
+                for (index, cell) in cells.iter_mut().enumerate() {
+                    let at = 13 + index * 3;
+                    *cell = Rgb8::new(bytes[at], bytes[at + 1], bytes[at + 2]);
+                }
+                Ok(Message::FrameChunk {
+                    request_id: bytes[2],
+                    revision: has_revision.then(|| get_u32(bytes, 4)),
+                    total: get_u16(bytes, 8),
+                    start: get_u16(bytes, 10),
+                    len,
+                    cells,
+                })
+            }
             TAG_BEGIN
             | TAG_CONTEXT
             | TAG_CELL
@@ -884,7 +1228,13 @@ impl Message {
             | TAG_CONDITIONAL_SCENE_CELL
             | TAG_CONDITIONAL_SCENE_EXT
             | TAG_EFFECT_HIT
-            | TAG_CONTEXT_UPDATE => Err(DecodeError::Length),
+            | TAG_CONTEXT_UPDATE
+            | TAG_ATTESTATION
+            | TAG_REPLICA_PROBE
+            | TAG_STATUS_REQUEST
+            | TAG_STATUS_REPORT
+            | TAG_FRAME_CHUNK_REQUEST
+            | TAG_FRAME_CHUNK => Err(DecodeError::Length),
             _ => Err(DecodeError::Tag),
         }
     }
@@ -907,6 +1257,247 @@ pub fn try_queue_effect_hit(slot: LedSlot) -> bool {
         && rmk::split_app::SPLIT_APP_TX
             .try_send(Message::EffectHit { slot }.encode())
             .is_ok()
+}
+
+struct Fnv32(u32);
+
+impl Fnv32 {
+    const OFFSET: u32 = 0x811c_9dc5;
+    const PRIME: u32 = 0x0100_0193;
+
+    fn domain(domain: u8) -> Self {
+        let mut hash = Self(Self::OFFSET);
+        hash.byte(LIGHTING_REPLICA_DIGEST_SCHEMA_V1);
+        hash.byte(domain);
+        hash
+    }
+
+    fn byte(&mut self, value: u8) {
+        self.0 ^= value as u32;
+        self.0 = self.0.wrapping_mul(Self::PRIME);
+    }
+
+    fn bytes(&mut self, values: &[u8]) {
+        for value in values {
+            self.byte(*value);
+        }
+    }
+
+    fn u16(&mut self, value: u16) {
+        self.bytes(&value.to_le_bytes());
+    }
+
+    fn u32(&mut self, value: u32) {
+        self.bytes(&value.to_le_bytes());
+    }
+}
+
+fn hash_effect(hash: &mut Fnv32, effect: BuiltinEffect) {
+    let (kind, color, period_ms, phase_ms, auxiliary) = match effect {
+        BuiltinEffect::Solid { color } => (0, color, 0, 0, 0),
+        BuiltinEffect::Blink {
+            color,
+            period_ms,
+            phase_ms,
+            duty,
+        } => (1, color, period_ms, phase_ms, duty as u16),
+        BuiltinEffect::Breathe {
+            color,
+            period_ms,
+            phase_ms,
+            step_ms,
+        } => (2, color, period_ms, phase_ms, step_ms),
+    };
+    hash.byte(kind);
+    hash.bytes(&[color.r, color.g, color.b]);
+    hash.u32(period_ms);
+    hash.u32(phase_ms);
+    hash.u16(auxiliary);
+}
+
+fn hash_params(hash: &mut Fnv32, params: Option<ExtensionReplicaParams>) {
+    hash.byte(params.is_some() as u8);
+    if let Some(params) = params {
+        hash.byte(params.effect);
+        hash.byte(params.values().len() as u8);
+        hash.bytes(params.values());
+    }
+}
+
+fn hash_conditions(hash: &mut Fnv32, conditions: ConditionSet) {
+    hash.byte(conditions.layer.is_some() as u8);
+    if let Some(layer) = conditions.layer {
+        hash.bytes(&[layer.layer, layer.active as u8]);
+    }
+    hash.byte(conditions.battery.is_some() as u8);
+    if let Some(battery) = conditions.battery {
+        hash.bytes(&[
+            battery.node,
+            battery.min_level.is_some() as u8,
+            battery.min_level.unwrap_or(0),
+            battery.max_level.is_some() as u8,
+            battery.max_level.unwrap_or(0),
+            match battery.charge {
+                ChargeCondition::Any => 0,
+                ChargeCondition::Charging => 1,
+                ChargeCondition::Discharging => 2,
+                ChargeCondition::Unknown => 3,
+            },
+        ]);
+    }
+    hash.byte(conditions.connection.is_some() as u8);
+    if let Some(connection) = conditions.connection {
+        hash.byte(connection.transport.is_some() as u8);
+        if let Some(transport) = connection.transport {
+            hash.byte(match transport {
+                ActiveTransport::Usb => 0,
+                ActiveTransport::Ble => 1,
+                ActiveTransport::NoneActive => 2,
+            });
+        }
+        hash.byte(connection.profile.is_some() as u8);
+        hash.byte(connection.profile.unwrap_or(0));
+        hash.byte(connection.ble_state.is_some() as u8);
+        if let Some(state) = connection.ble_state {
+            hash.byte(match state {
+                BleState::Advertising => 0,
+                BleState::Connected => 1,
+                BleState::Inactive => 2,
+            });
+        }
+        hash.byte(connection.bonded.is_some() as u8);
+        if let Some(bonded) = connection.bonded {
+            hash.bytes(&[bonded.slot, bonded.bonded as u8]);
+        }
+        hash.byte(connection.usb_connected.is_some() as u8);
+        hash.byte(connection.usb_connected.unwrap_or(false) as u8);
+    }
+    hash.byte(conditions.output_mode.is_some() as u8);
+    if let Some(mode) = conditions.output_mode {
+        hash.byte(match mode {
+            OutputMode::AlwaysOn => 0,
+            OutputMode::AlwaysOff => 1,
+            OutputMode::PoweredOnly => 2,
+        });
+    }
+    hash.byte(conditions.effects.is_some() as u8);
+    if let Some(effects) = conditions.effects {
+        hash.byte(effects.enabled as u8);
+    }
+}
+
+/// Canonical FNV-1a-32 digests of the durable right-half projection.
+/// Overlay TTL lifetime, context, clocks, and transport generation are fast
+/// state and deliberately excluded.
+pub fn replica_digests(
+    snapshot: &StandardReplicaState<OVERLAY_CAPACITY, SCENE_CAPACITY>,
+) -> ReplicaDigests {
+    let mut settings = Fnv32::domain(1);
+    settings.bytes(&[
+        snapshot.mutable.output_enabled as u8,
+        snapshot.mutable.output_brightness,
+        snapshot.mutable.background.enabled as u8,
+        snapshot.mutable.background.hue,
+        snapshot.mutable.background.saturation,
+        snapshot.mutable.background.value,
+        snapshot.mutable.background.speed,
+        match snapshot.mutable.background.mode {
+            BackgroundMode::Solid => 0,
+            BackgroundMode::Breathe => 1,
+        },
+        match snapshot.output_mode {
+            OutputMode::AlwaysOn => 0,
+            OutputMode::AlwaysOff => 1,
+            OutputMode::PoweredOnly => 2,
+        },
+        match snapshot.scenes.policy() {
+            LayerPolicy::EffectiveOnly => 0,
+            LayerPolicy::ActiveStack => 1,
+        },
+    ]);
+    settings.byte(snapshot.extension.is_some() as u8);
+    if let Some(extension) = snapshot.extension {
+        settings.bytes(&[
+            extension.effect,
+            extension.palette,
+            extension.value,
+            extension.speed,
+        ]);
+    }
+    settings.byte(snapshot.extension_layers.is_some() as u8);
+    if let Some(layers) = snapshot.extension_layers {
+        settings.byte(layers.overlay.is_some() as u8);
+        settings.byte(layers.overlay.unwrap_or(0));
+    }
+    hash_params(&mut settings, snapshot.extension_params);
+    hash_params(&mut settings, snapshot.extension_overlay_params);
+
+    let overlay_cells = snapshot
+        .overlay
+        .as_slice()
+        .iter()
+        .filter(|cell| cell.slot.index() >= LEDS_PER_HALF)
+        .count();
+    let mut overlay = Fnv32::domain(2);
+    overlay.u16(overlay_cells as u16);
+    for slot in LEDS_PER_HALF..TOTAL_LEDS {
+        if let Some(cell) = snapshot
+            .overlay
+            .as_slice()
+            .iter()
+            .find(|cell| cell.slot.index() == slot)
+        {
+            overlay.u16(cell.slot.0);
+            hash_effect(&mut overlay, cell.effect);
+        }
+    }
+
+    let scene_cells = snapshot
+        .scenes
+        .iter()
+        .filter(|cell| cell.slot.index() >= LEDS_PER_HALF)
+        .count();
+    let mut scenes = Fnv32::domain(3);
+    scenes.u16(scene_cells as u16);
+    for layer in 0..LayerState::CAPACITY {
+        for slot in LEDS_PER_HALF..TOTAL_LEDS {
+            if let Some(cell) = snapshot
+                .scenes
+                .iter()
+                .find(|cell| cell.layer == layer && cell.slot.index() == slot)
+            {
+                scenes.bytes(&[cell.layer]);
+                scenes.u16(cell.slot.0);
+                hash_effect(&mut scenes, cell.effect);
+            }
+        }
+    }
+
+    let conditional_cells = snapshot
+        .runtime_conditional_scenes
+        .iter()
+        .filter(|cell| cell.slot.index() >= LEDS_PER_HALF)
+        .count();
+    let mut conditional_scenes = Fnv32::domain(4);
+    conditional_scenes.u16(conditional_cells as u16);
+    for cell in snapshot
+        .runtime_conditional_scenes
+        .iter()
+        .filter(|cell| cell.slot.index() >= LEDS_PER_HALF)
+    {
+        conditional_scenes.u16(cell.slot.0);
+        hash_conditions(&mut conditional_scenes, cell.conditions);
+        hash_effect(&mut conditional_scenes, cell.effect);
+    }
+
+    ReplicaDigests {
+        schema: LIGHTING_REPLICA_DIGEST_SCHEMA_V1,
+        revision: snapshot.revision,
+        settings: settings.0,
+        overlay: overlay.0,
+        scenes: scenes.0,
+        conditional_scenes: conditional_scenes.0,
+    }
 }
 
 /// Right-half packet counts for one snapshot transaction.
@@ -1340,6 +1931,12 @@ impl SnapshotStage {
             }
             Message::Ack { .. }
             | Message::EffectHit { .. }
+            | Message::Attestation { .. }
+            | Message::ReplicaProbe { .. }
+            | Message::StatusRequest { .. }
+            | Message::StatusReport { .. }
+            | Message::FrameChunkRequest { .. }
+            | Message::FrameChunk { .. }
             | Message::ContextUpdate { .. }
             | Message::Begin { .. } => None,
         }

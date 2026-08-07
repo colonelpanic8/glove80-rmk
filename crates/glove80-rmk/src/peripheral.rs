@@ -26,6 +26,11 @@ mod keyboard_peripheral {
         crate::lighting::peripheral_replication()
     }
 
+    #[register_processor(runnable)]
+    fn lighting_replication_worker() {
+        crate::lighting::peripheral_lighting_worker()
+    }
+
     /// Re-render when this half's own USB/VBUS power changes, and report the
     /// VBUS-derived charge state.
     #[register_processor(runnable)]
