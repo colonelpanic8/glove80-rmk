@@ -1,0 +1,10 @@
+[package]
+name = "split-lighting-tests"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[dependencies]
+rmk = { path = "../../dependencies/rmk/rmk", default-features = false, features = ["lighting", "rynk", "split", "std", "storage"] }
