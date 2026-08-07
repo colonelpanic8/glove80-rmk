@@ -219,6 +219,7 @@ num_sectors = 8
 
 [ble]
 enabled = true
+name = "Glove80 {slot}"
 
 [host]
 vial_enabled = false

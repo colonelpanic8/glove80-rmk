@@ -247,6 +247,7 @@ pub fn import_moergo_layout(text: &str) -> Result<ImportedLayout> {
         .collect();
 
     let config = RuntimeConfig {
+        bluetooth_name: None,
         default_layer: 0,
         layers: converted,
         morses,

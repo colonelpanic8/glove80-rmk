@@ -21,7 +21,7 @@ use rynk::{Client, RynkDevice, RynkHostError};
 use rynk_ble::BleDevice;
 
 use crate::config::ConfigCommand;
-use crate::connection::ConnectionCommand;
+use crate::connection::{ConnectionCommand, NameCommand};
 use crate::keymap::{self, KeymapCommand};
 use crate::lighting::{EffectArg, EffectSpec, LayerPolicyArg, LightingCommand};
 use crate::rynk_hid::HidDevice;
@@ -127,7 +127,11 @@ async fn run_connection_device<D: RynkDevice>(
 async fn operate_connection(client: &Client, command: &ConnectionCommand) -> Result<()> {
     if matches!(
         command,
-        ConnectionCommand::Switch { .. } | ConnectionCommand::Clear { .. }
+        ConnectionCommand::Switch { .. }
+            | ConnectionCommand::Clear { .. }
+            | ConnectionCommand::Name {
+                command: NameCommand::Set { .. }
+            }
     ) {
         require_maintenance_mode(client).await?;
     }
@@ -147,6 +151,28 @@ async fn operate_connection(client: &Client, command: &ConnectionCommand) -> Res
         ConnectionCommand::Clear { slot } => {
             client.clear_ble_profile(*slot).await?;
             println!("cleared the bond in slot {slot}");
+        }
+        ConnectionCommand::Name {
+            command: NameCommand::Get,
+        } => {
+            println!("{}", client.get_ble_name().await?.template);
+        }
+        ConnectionCommand::Name {
+            command: NameCommand::Set { template },
+        } => {
+            let name = rynk::rmk_types::protocol::rynk::BleName {
+                template: heapless::String::try_from(template.as_str()).map_err(|_| {
+                    anyhow!(
+                        "BLE names are limited to {} UTF-8 bytes",
+                        rynk::rmk_types::protocol::rynk::BLE_NAME_MAX_LEN
+                    )
+                })?,
+            };
+            if name.template.is_empty() {
+                return Err(anyhow!("BLE name must not be empty"));
+            }
+            client.set_ble_name(&name).await?;
+            println!("{}", client.get_ble_name().await?.template);
         }
     }
     Ok(())

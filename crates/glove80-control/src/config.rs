@@ -16,7 +16,7 @@ use glove80_config::{
     LAYER_SIZE, ROWS,
 };
 use rynk::rmk_types::protocol::rynk::{
-    Cmd, LightingError, LightingExtendedConditionalSceneCell, LightingExtensionNameKind,
+    BleName, Cmd, LightingError, LightingExtendedConditionalSceneCell, LightingExtensionNameKind,
     LightingExtensionParamsRequest, LightingFeatureFlags, LightingMutableState, RynkError,
     SetAutoMouseLayerConfigsRequest, SetKeymapBulkRequest, SetLightingExtensionLayersRequest,
     SetLightingExtensionParamRequest, SetLightingExtensionStateRequest,
@@ -328,6 +328,11 @@ async fn read_snapshot(client: &Client) -> Result<Snapshot> {
         (None, None)
     };
     Ok(Snapshot {
+        bluetooth_name: client
+            .get_ble_name()
+            .await
+            .ok()
+            .map(|name| name.template.as_str().to_owned()),
         default_layer: client.get_default_layer().await?,
         layers,
         behaviors: read_behaviors(client).await?,
@@ -719,6 +724,17 @@ async fn apply_snapshot(client: &Client, desired: &Snapshot, before: &Snapshot) 
             desired.layers.len(),
             capabilities.num_layers
         );
+    }
+    if let Some(name) = &desired.bluetooth_name {
+        if before.bluetooth_name.as_ref() != Some(name) {
+            client
+                .set_ble_name(&BleName {
+                    template: heapless::String::try_from(name.as_str())
+                        .context("bluetooth_name exceeds the firmware limit")?,
+                })
+                .await
+                .context("could not write bluetooth name")?;
+        }
     }
     // Before the keymap: a cell holding `TD(n)` or `TriggerMacro(n)` addresses
     // a table slot by index, so the tables have to be in place before any key

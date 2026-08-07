@@ -14,6 +14,7 @@ cargo run -p glove80-control -- --usb version
 The top-level commands are:
 
 - `config validate|diff|apply|pull|show`
+- `connection status|switch|clear|name`
 - `keymap read|set|default|monitor|find`
 - `lighting ping|caps|set|unset|clear|read|frame|replica-status|replace|brightness`
 - `lighting scene-read|scene-set|scene-unset|scene-policy|params`
@@ -57,6 +58,10 @@ The `config` commands provide a bidirectional TOML snapshot of managed runtime
 state. `config diff FILE` compares the file with a live keyboard;
 `config apply FILE` writes only differences and verifies readback; `config
 pull FILE` writes the keyboard state to disk; and `config show` prints it.
+Set `bluetooth_name = "Glove80 {slot}"` at the top level to give each active
+BLE profile a distinct one-based advertising name. The same persistent value
+can be inspected or changed directly with `connection name get` and
+`connection name set TEMPLATE`; names are limited to 16 UTF-8 bytes.
 Lighting extensions remain generic: effect and palette names come from Rynk's
 extension descriptor, regardless of the firmware-side effect provider. Effects
 may also advertise tunable parameters, which the file addresses by name:

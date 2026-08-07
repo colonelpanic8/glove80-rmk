@@ -67,6 +67,7 @@ pub fn snapshot_from_wire(
         .transpose()?;
 
     Ok(model::Snapshot {
+        bluetooth_name: snapshot.bluetooth_name.clone(),
         default_layer: snapshot.default_layer,
         layers,
         lighting,
@@ -153,6 +154,7 @@ pub fn snapshot_to_wire(
         .transpose()?;
 
     Ok(RuntimeSnapshot {
+        bluetooth_name: snapshot.bluetooth_name.clone(),
         default_layer: snapshot.default_layer,
         layers,
         lighting,
