@@ -165,8 +165,9 @@ enabled = true
 vial_enabled = false
 rynk_enabled = true
 insecure = false
-unlock_keys = [[0, 0], [0, 13]]
-bootloader_requires_unlock = false
+# Keep unattended configuration and firmware deployment available. Go60 does
+# not yet bind a physical maintenance-mode toggle.
+maintenance_lock_default = false
 
 [split]
 # TODO(go60): dynamically choose BLE or half-duplex UARTE0 from TRRS detect.
