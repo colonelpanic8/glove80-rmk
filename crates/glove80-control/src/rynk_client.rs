@@ -13,11 +13,11 @@ use rynk::rmk_types::protocol::rynk::{
     LightingEffect, LightingEffectFlags, LightingExtensionNameKind, LightingFeatureFlags,
     LightingFrameRequest, LightingLayerPolicy, LightingLedId, LightingMutableState, LightingNodeId,
     LightingOverlayCell, LightingRgb8, LightingSceneCell, LightingState,
-    PutLightingOverlayChunkRequest, SetLightingExtensionParamRequest,
+    PutLightingOverlayChunkRequest, RynkError, SetLightingExtensionParamRequest,
     SetLightingLayerPolicyRequest, SetLightingOverlayRequest, SetLightingSceneCellRequest,
     SetLightingStateRequest, UnsetLightingOverlayRequest, UnsetLightingSceneCellRequest,
 };
-use rynk::{Client, RynkDevice};
+use rynk::{Client, RynkDevice, RynkHostError};
 use rynk_ble::BleDevice;
 
 use crate::config::ConfigCommand;
@@ -221,13 +221,24 @@ async fn run_bootloader_device<D: RynkDevice>(device: D, peripheral: bool) -> Re
 }
 
 async fn request_bootloader_jump(client: &Client, peripheral: bool) -> Result<()> {
-    require_maintenance_mode(client).await?;
-    if peripheral {
+    let result = if peripheral {
         client.peripheral_bootloader_jump(0).await
     } else {
         client.bootloader_jump().await
+    };
+    match result {
+        Ok(()) => Ok(()),
+        Err(RynkHostError::Rejected(RynkError::Locked)) => {
+            require_maintenance_mode(client).await?;
+            if peripheral {
+                client.peripheral_bootloader_jump(0).await?;
+            } else {
+                client.bootloader_jump().await?;
+            }
+            Ok(())
+        }
+        Err(error) => Err(error.into()),
     }
-    .map_err(Into::into)
 }
 
 async fn jump_peripheral(client: &Client) -> Result<()> {
