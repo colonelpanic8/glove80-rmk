@@ -11,13 +11,14 @@ use embassy_nrf::{Peri, bind_interrupts, peripherals};
 use embassy_sync::blocking_mutex::Mutex as BlockingMutex;
 use embassy_time::{Duration, Timer};
 use rmk::core_traits::Runnable;
-use rmk::event::{KeyboardEvent, KeyboardEventPos};
-use rmk::lighting::topology::MatrixPosition;
+use rmk::event::{KeyboardEvent, KeyboardEventPos, MaintenanceModeEvent};
+use rmk::lighting::compositor::{Contribution, LightingSource, RenderInput};
+use rmk::lighting::topology::{LedSlot, MatrixPosition};
 use rmk::lighting::{
     BatteryStatusProvider, BuiltinEffect, ConditionalScenes, IndicatorState, LayerState,
-    LightingContext, LightingMailbox, LightingOutput, LightingProcessor, LightingService,
-    LogicalFrame, Rgb8, SnapshotProvider, StandardCommand, StandardError, StandardLightingEngine,
-    StandardReplicaSlot, StandardReply,
+    LightingContext, LightingEffect, LightingMailbox, LightingOutput, LightingProcessor,
+    LightingService, LogicalFrame, Rgb8, SnapshotProvider, StandardCommand, StandardError,
+    StandardLightingEngine, StandardReplicaSlot, StandardReply,
 };
 use rmk::storage::{LightingExtensionOverlayRecord, LightingExtensionRecord};
 use rmk::types::battery::BatteryStatus;
@@ -74,10 +75,68 @@ pub const COMMAND_CAPACITY: usize = 4;
 /// Sixteen covers sustained fast typing on one half.
 pub const REACTIVE_HITS: usize = 16;
 
+const MAGIC_LAYER: u8 = 2;
+const MAINTENANCE_LED: LedSlot = LedSlot(12);
+const MAINTENANCE_ENABLED: Rgb8 = Rgb8::new(0, 128, 0);
+const MAINTENANCE_DISABLED: Rgb8 = Rgb8::new(128, 0, 0);
+
+pub struct BoardStatus {
+    compiled: ConditionalScenes<'static, BuiltinEffect, BoardBatteryProvider>,
+}
+
+impl BoardStatus {
+    pub const fn new(
+        compiled: ConditionalScenes<'static, BuiltinEffect, BoardBatteryProvider>,
+    ) -> Self {
+        Self { compiled }
+    }
+
+    fn maintenance_visible(input: &RenderInput<'_, LightingContext>) -> bool {
+        input.context.layers.is_active(MAGIC_LAYER)
+    }
+}
+
+impl LightingSource<Rgb8, LightingContext> for BoardStatus {
+    fn len(&self, input: &RenderInput<'_, LightingContext>) -> usize {
+        self.compiled.len(input) + usize::from(Self::maintenance_visible(input))
+    }
+
+    fn slot(&self, index: usize, input: &RenderInput<'_, LightingContext>) -> LedSlot {
+        let compiled_len = self.compiled.len(input);
+        if index < compiled_len {
+            self.compiled.slot(index, input)
+        } else if index == compiled_len && Self::maintenance_visible(input) {
+            MAINTENANCE_LED
+        } else {
+            panic!("LightingSource index must be below len")
+        }
+    }
+
+    fn contribution(
+        &mut self,
+        index: usize,
+        input: &RenderInput<'_, LightingContext>,
+    ) -> Contribution<Rgb8> {
+        let compiled_len = self.compiled.len(input);
+        if index < compiled_len {
+            self.compiled.contribution(index, input)
+        } else if index == compiled_len && Self::maintenance_visible(input) {
+            let color = if rmk::state::maintenance_mode_enabled() {
+                MAINTENANCE_ENABLED
+            } else {
+                MAINTENANCE_DISABLED
+            };
+            Contribution::Opaque(BuiltinEffect::solid(color).sample(input.now_ms))
+        } else {
+            panic!("LightingSource index must be below len")
+        }
+    }
+}
+
 pub type Engine = StandardLightingEngine<
     'static,
     PaletteFxSource<TopologyLayout<TOTAL_LEDS>, TOTAL_LEDS, REACTIVE_HITS>,
-    ConditionalScenes<'static, BuiltinEffect, BoardBatteryProvider>,
+    BoardStatus,
     TOTAL_LEDS,
     OVERLAY_CAPACITY,
     SCENE_CAPACITY,
@@ -394,10 +453,22 @@ pub fn engine(
         crate::LIGHTING_BACKGROUND,
         crate::LIGHTING_LAYER_SCENES,
         palettefx,
-        ConditionalScenes::new(&crate::LIGHTING_CONDITIONAL_SCENE_CELLS, &BOARD_BATTERIES),
+        BoardStatus::new(ConditionalScenes::new(
+            &crate::LIGHTING_CONDITIONAL_SCENE_CELLS,
+            &BOARD_BATTERIES,
+        )),
     )
     .with_controls(crate::LIGHTING_CONTROLS)
     .with_battery_status_provider(&BOARD_BATTERIES)
+}
+
+#[rmk::macros::processor(subscribe = [MaintenanceModeEvent])]
+pub struct MaintenanceLightingState;
+
+impl MaintenanceLightingState {
+    async fn on_maintenance_mode_event(&mut self, _event: MaintenanceModeEvent) {
+        CORE_MAILBOX.snapshot_changed();
+    }
 }
 
 /// Feed pressed keys to the typing-reactive PaletteFx effects. Key

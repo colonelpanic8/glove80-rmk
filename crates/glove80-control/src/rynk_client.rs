@@ -12,12 +12,12 @@ use rynk::rmk_types::protocol::rynk::{
     ClearLightingOverlayRequest, CommitLightingOverlayReplaceRequest, LightingBackgroundMode,
     LightingEffect, LightingEffectFlags, LightingExtensionNameKind, LightingFeatureFlags,
     LightingLayerPolicy, LightingLedId, LightingMutableState, LightingOverlayCell, LightingRgb8,
-    LightingSceneCell, LightingState, PutLightingOverlayChunkRequest, RynkError,
+    LightingSceneCell, LightingState, PutLightingOverlayChunkRequest,
     SetLightingExtensionParamRequest, SetLightingLayerPolicyRequest, SetLightingOverlayRequest,
     SetLightingSceneCellRequest, SetLightingStateRequest, UnsetLightingOverlayRequest,
     UnsetLightingSceneCellRequest,
 };
-use rynk::{Client, RynkDevice, RynkHostError};
+use rynk::{Client, RynkDevice};
 use rynk_ble::BleDevice;
 use rynk_serial::SerialDevice;
 
@@ -32,7 +32,6 @@ const GLOVE80_ROWS: u8 = 6;
 const GLOVE80_COLS: u8 = 14;
 const GLOVE80_HOLES: [u8; 4] = [5, 8, 75, 78];
 const RYNK_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
-const RYNK_UNLOCK_TIMEOUT: Duration = Duration::from_secs(15);
 const RYNK_BOOTLOADER_TIMEOUT: Duration = Duration::from_secs(3);
 // A peripheral command sits behind any already-queued split lighting frames;
 // allow the BLE link time to drain them before declaring failure.
@@ -93,6 +92,18 @@ pub fn run_version(selector: &Selector) -> Result<()> {
             Device::Hid(device) => run_version_device(device).await,
             Device::Serial(device) => run_version_device(device).await,
             Device::Ble(device) => run_version_device(device).await,
+        }
+    })
+}
+
+pub fn run_maintenance(selector: &Selector) -> Result<()> {
+    let runtime =
+        tokio::runtime::Runtime::new().context("could not create the Rynk async runtime")?;
+    runtime.block_on(async {
+        match select_device(selector).await? {
+            Device::Hid(device) => run_maintenance_device(device).await,
+            Device::Serial(device) => run_maintenance_device(device).await,
+            Device::Ble(device) => run_maintenance_device(device).await,
         }
     })
 }
@@ -196,11 +207,8 @@ async fn run_bootloader_device<D: RynkDevice>(device: D, peripheral: bool) -> Re
     } else {
         RYNK_BOOTLOADER_TIMEOUT
     };
-    let outcome = tokio::time::timeout(
-        RYNK_UNLOCK_TIMEOUT + bootloader_timeout,
-        select(driver.run(&client), request),
-    )
-    .await;
+    let outcome =
+        tokio::time::timeout(bootloader_timeout, select(driver.run(&client), request)).await;
     match outcome {
         // A disconnect after the frame was queued is the device reset we need
         // to observe. Merely filling the host queue is not success.
@@ -211,78 +219,18 @@ async fn run_bootloader_device<D: RynkDevice>(device: D, peripheral: bool) -> Re
             "the bootloader request was sent, but the keyboard did not disconnect within {} seconds",
             bootloader_timeout.as_secs()
         ),
-        Err(_) => bail!(
-            "timed out waiting {} seconds for the physical-presence unlock",
-            RYNK_UNLOCK_TIMEOUT.as_secs()
-        ),
+        Err(_) => bail!("the bootloader request timed out"),
     }
 }
 
-/// Try bootloader entry directly first. Deployments may explicitly allow it;
-/// older or locked-down firmware returns `Locked`, in which case retain the
-/// physical-presence fallback instead of imposing it unconditionally.
 async fn request_bootloader_jump(client: &Client, peripheral: bool) -> Result<()> {
-    let result = if peripheral {
+    require_maintenance_mode(client).await?;
+    if peripheral {
         client.peripheral_bootloader_jump(0).await
     } else {
         client.bootloader_jump().await
-    };
-    match result {
-        Ok(()) => Ok(()),
-        Err(RynkHostError::Rejected(RynkError::Locked)) => {
-            unlock_session(client).await?;
-            if peripheral {
-                client.peripheral_bootloader_jump(0).await?;
-            } else {
-                client.bootloader_jump().await?;
-            }
-            Ok(())
-        }
-        Err(error) => Err(error.into()),
     }
-}
-
-async fn unlock_session(client: &Client) -> Result<()> {
-    unlock_session_with_timeout(client, RYNK_UNLOCK_TIMEOUT).await
-}
-
-async fn unlock_session_with_timeout(client: &Client, timeout: Duration) -> Result<()> {
-    let status = client.get_lock_status().await?;
-    if status.locked {
-        if status.key_positions.is_empty() {
-            bail!("the keyboard permanently locks remote bootloader entry");
-        }
-        println!(
-            "hold the keyboard's Rynk unlock keys for physical presence: {}",
-            format_unlock_keys(&status.key_positions)
-        );
-        let started = tokio::time::Instant::now();
-        let mut last_remaining = None;
-        loop {
-            let status = client.unlock_poll().await?;
-            if last_remaining != Some(status.remaining_keys) {
-                println!(
-                    "unlock progress: {} of {} challenge key(s) still needed",
-                    status.remaining_keys,
-                    status.key_positions.len()
-                );
-                last_remaining = Some(status.remaining_keys);
-            }
-            if !status.locked {
-                println!("physical-presence unlock accepted");
-                break;
-            }
-            if started.elapsed() >= timeout {
-                bail!(
-                    "timed out waiting {} seconds for the physical-presence unlock",
-                    timeout.as_secs()
-                );
-            }
-            tokio::time::sleep(Duration::from_millis(100)).await;
-        }
-    }
-
-    Ok(())
+    .map_err(Into::into)
 }
 
 async fn jump_peripheral(client: &Client) -> Result<()> {
@@ -306,17 +254,6 @@ async fn jump_peripheral(client: &Client) -> Result<()> {
     }
 }
 
-fn format_unlock_keys(keys: &[(u8, u8)]) -> String {
-    if keys == [(0, 0), (0, 13)] {
-        return "F1 + F10 (the far-left and far-right keys of the top row; matrix (0,0) + (0,13))"
-            .to_owned();
-    }
-    keys.iter()
-        .map(|(row, col)| format!("(row {row}, col {col})"))
-        .collect::<Vec<_>>()
-        .join(" + ")
-}
-
 async fn run_version_device<D: RynkDevice>(device: D) -> Result<()> {
     let label = device.label();
     let (client, mut driver) = connect_device(device, &label).await?;
@@ -324,6 +261,31 @@ async fn run_version_device<D: RynkDevice>(device: D) -> Result<()> {
         Either::First(error) => Err(anyhow!("Rynk connection to {label} ended: {error}")),
         Either::Second(result) => result,
     }
+}
+
+async fn run_maintenance_device<D: RynkDevice>(device: D) -> Result<()> {
+    let label = device.label();
+    let (client, mut driver) = connect_device(device, &label).await?;
+    match select(driver.run(&client), read_maintenance(&client)).await {
+        Either::First(error) => Err(anyhow!("Rynk connection to {label} ended: {error}")),
+        Either::Second(result) => result,
+    }
+}
+
+async fn read_maintenance(client: &Client) -> Result<()> {
+    let mode = client.get_maintenance_mode().await?;
+    let live = if mode.enabled { "on" } else { "off" };
+    let default = if mode.default_enabled { "on" } else { "off" };
+    println!("maintenance mode: {live} (compiled default: {default})");
+    println!("toggle it with Magic+R; that key glows green when on and red when off");
+    Ok(())
+}
+
+async fn require_maintenance_mode(client: &Client) -> Result<()> {
+    if !client.get_maintenance_mode().await?.enabled {
+        bail!("maintenance mode is off; hold Magic and tap R, then confirm that R glows green");
+    }
+    Ok(())
 }
 
 async fn read_version(client: &Client) -> Result<()> {
@@ -955,7 +917,7 @@ async fn operate(client: &Client, command: &KeymapCommand) -> Result<()> {
             println!("default layer: {stored}");
         }
         KeymapCommand::Monitor { seconds } => {
-            unlock_session_with_timeout(client, Duration::from_secs(60)).await?;
+            require_maintenance_mode(client).await?;
             let duration = Duration::from_secs(*seconds);
             let started = tokio::time::Instant::now();
             let mut previous = None;
@@ -1130,18 +1092,5 @@ fn one_device<T>(mut devices: Vec<T>, kind: &str) -> Result<T> {
         0 => bail!("no {kind} device found"),
         1 => Ok(devices.pop().expect("length checked")),
         count => bail!("found {count} {kind} devices; pass --device to select one"),
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn unlock_challenge_is_rendered_as_physical_matrix_positions() {
-        assert_eq!(
-            format_unlock_keys(&[(0, 0), (0, 13)]),
-            "F1 + F10 (the far-left and far-right keys of the top row; matrix (0,0) + (0,13))"
-        );
     }
 }

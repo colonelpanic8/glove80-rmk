@@ -19,6 +19,7 @@ The top-level commands are:
 - `lighting scene-read|scene-set|scene-unset|scene-policy|params`
 - `version`
 - `bootloader [--peripheral] [--yes]`
+- `maintenance`
 
 Device selection defaults to USB with BLE fallback. Use `--usb` or `--ble` to
 require one transport, and `--device` to select a `/dev/hidraw*`,
@@ -46,8 +47,10 @@ cargo run -p glove80-control -- lighting scene-policy active-stack
 cargo run -p glove80-control -- lighting scene-read
 ```
 
-Both bootloader commands may require the keyboard's configured physical
-presence chord. The CLI displays the requested keys and waits for the unlock.
+All remote mutations, matrix monitoring, storage reset, and bootloader entry
+require maintenance mode. Hold Magic and tap R to toggle it: R glows green
+while unattended host automation is allowed and red while it is denied. Use
+`glove80-control maintenance` to read both the live and compiled-default state.
 
 The `config` commands provide a bidirectional TOML snapshot of managed runtime
 state. `config diff FILE` compares the file with a live keyboard;

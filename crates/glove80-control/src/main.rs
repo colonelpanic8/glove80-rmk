@@ -62,6 +62,8 @@ enum Command {
         #[command(subcommand)]
         command: keymap::KeymapCommand,
     },
+    /// Show whether host maintenance operations are currently allowed.
+    Maintenance,
     /// Show the CLI, firmware, RMK, and Rynk versions.
     Version,
 }
@@ -89,6 +91,7 @@ fn run(cli: Cli) -> Result<()> {
         Command::Connection { command } => connection::run(&selector(&cli), command),
         Command::Lighting { command } => lighting::run(&selector(&cli), command),
         Command::Keymap { command } => keymap::run(&selector(&cli), command),
+        Command::Maintenance => rynk_client::run_maintenance(&selector(&cli)),
         Command::Version => version::run(&selector(&cli)),
         Command::Bootloader { options } => {
             lighting::run_bootloader(&selector(&cli), options.peripheral, options.yes)

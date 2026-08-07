@@ -125,6 +125,12 @@ mod keyboard_central {
         crate::central_lighting::BatteryLightingState
     }
 
+    /// Refresh the Magic+R status LED immediately after its gate changes.
+    #[register_processor(event)]
+    fn maintenance_lighting_state() {
+        crate::lighting::MaintenanceLightingState
+    }
+
     /// Report this half's VBUS-derived charge state; without it no charge
     /// state is ever produced and `charge`-gated lighting rules never fire.
     #[register_processor(runnable)]

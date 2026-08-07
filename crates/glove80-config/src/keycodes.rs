@@ -24,7 +24,7 @@
 //! - `0x7820..=0x7835` RGB effects — `UG_TOGG`, `UG_NEXT`, `UG_PREV`,
 //!   `UG_OMODE` (cycle the standard-lighting output mode),
 //!   hue/saturation/value/speed controls, and fixed RGB modes
-//! - `0x7C00..` QMK magic keys the firmware supports (`QK_BOOT`, `CW_TOGG`,
+//! - `0x7C00..` QMK magic keys the firmware supports (`QK_BOOT`, `MAINT_TOG`, `CW_TOGG`,
 //!   space cadet, …)
 //! - `0x7E00..=0x7E1F` user/custom keys — `USER(n)`
 //!
@@ -317,6 +317,7 @@ const EXTRA: &[(u16, &str, &[&str])] = &[
     (0x7C00, "QK_BOOT", &["QK_BOOTLOADER", "RESET"]),
     (0x7C01, "QK_RBT", &["QK_REBOOT"]),
     (0x7C03, "EE_CLR", &["QK_CLEAR_EEPROM"]),
+    (0x7C04, "MAINT_TOG", &["MAINTENANCE_MODE_TOGGLE"]),
     (0x7C16, "QK_GESC", &["QK_GRAVE_ESCAPE", "GRAVE_ESC"]),
     (0x7C18, "SC_LCPO", &["KC_LCPO"]),
     (0x7C19, "SC_RCPC", &["KC_RCPC"]),
@@ -749,6 +750,7 @@ mod tests {
         assert_eq!(format_keycode(0x7705), "MACRO(5)");
         assert_eq!(format_keycode(0x7E10), "USER(16)");
         assert_eq!(format_keycode(0x7C00), "QK_BOOT");
+        assert_eq!(format_keycode(0x7C04), "MAINT_TOG");
         assert_eq!(format_keycode(0x7C73), "CW_TOGG");
         assert_eq!(format_keycode(0x7803), "BL_DOWN");
         assert_eq!(format_keycode(0x7804), "BL_UP");
@@ -770,6 +772,7 @@ mod tests {
         assert_eq!(parse_keycode("0X1104").unwrap(), 0x1104);
         assert_eq!(parse_keycode("4").unwrap(), 4);
         assert_eq!(parse_keycode("QK_BOOT").unwrap(), 0x7C00);
+        assert_eq!(parse_keycode("MAINT_TOG").unwrap(), 0x7C04);
         assert_eq!(parse_keycode("BL_DOWN").unwrap(), 0x7803);
         assert_eq!(parse_keycode("QK_BACKLIGHT_UP").unwrap(), 0x7804);
         assert_eq!(parse_keycode("RGB_TOG").unwrap(), 0x7820);
@@ -838,7 +841,7 @@ mod tests {
             0x0000u16, 0x0001, 0x0004, 0x00E7, 0x00AE, 0x0104, 0x1104, 0x0704, 0x0F04, 0x0304,
             0x2204, 0x3228, 0x2704, 0x2F04, 0x2604, 0x4304, 0x5022, 0x5201, 0x5223, 0x5243, 0x5262,
             0x5283, 0x52A2, 0x52B1, 0x52E3, 0x5705, 0x700D, 0x7705, 0x7803, 0x7804, 0x7820, 0x7821,
-            0x7827, 0x7828, 0x7834, 0x7C00, 0x7C73, 0x7E10,
+            0x7827, 0x7828, 0x7834, 0x7C00, 0x7C04, 0x7C73, 0x7E10,
             // Unknown codes round-trip through their hex rendering.
             0x0083, 0x6FFF,
         ] {

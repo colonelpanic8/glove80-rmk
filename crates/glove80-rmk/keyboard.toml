@@ -126,7 +126,7 @@ name = "Magic"
 keys = """
 No No No No No No No No No No
 No No No No No No No No No No No No
-No No No No No No No No No No No No
+No No No No MaintenanceModeToggle No No No No No No No
 Bootloader OutputModeCycle BacklightDown BacklightUp No No No No No No No User12
 Reboot No RgbTog RgbModeForward RgbHui No OutputUsb No No No No No No No No No No Reboot
 No No No No No User0 User1 User2 No No No No No No No TO(3)
@@ -177,6 +177,12 @@ channel_size = 2
 pubs = 1
 subs = 2
 
+# Changing the maintenance gate invalidates the Magic-layer status LED.
+[event.maintenance_mode]
+channel_size = 1
+pubs = 1
+subs = 1
+
 # Indicator state is part of the renderer snapshot, so the central replica
 # task needs one slot beyond the existing lighting/Rynk/split consumers.
 [event.led_indicator]
@@ -217,12 +223,9 @@ enabled = true
 [host]
 vial_enabled = false
 rynk_enabled = true
-# Storage reset and matrix-state reads require deliberate physical presence.
-# Firmware deployment is intentionally host-driven on this keyboard, so both
-# halves may enter their UF2 bootloaders programmatically without a key chord.
-insecure = false
-unlock_keys = [[0, 0], [0, 13]]
-bootloader_requires_unlock = false
+# Magic+R toggles host maintenance access. Off denies every remote mutation,
+# bootloader jump, storage reset, and raw matrix-state read.
+maintenance_mode_default = false
 
 [split]
 connection = "ble"
