@@ -185,6 +185,7 @@ pub async fn operate(client: &Client, command: &ConfigCommand) -> Result<()> {
                 println!("dry run: no changes written");
                 return Ok(());
             }
+            crate::rynk_client::require_maintenance_mode(client).await?;
             apply_snapshot(client, &desired, &before).await?;
             let after = read_snapshot(client).await?;
             let remaining = differences(&desired, &after);

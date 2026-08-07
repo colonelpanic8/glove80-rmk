@@ -19,7 +19,6 @@ use rynk::rmk_types::protocol::rynk::{
 };
 use rynk::{Client, RynkDevice};
 use rynk_ble::BleDevice;
-use rynk_serial::SerialDevice;
 
 use crate::config::ConfigCommand;
 use crate::connection::ConnectionCommand;
@@ -39,7 +38,6 @@ const RYNK_PERIPHERAL_BOOTLOADER_TIMEOUT: Duration = Duration::from_secs(15);
 
 enum Device {
     Hid(HidDevice),
-    Serial(SerialDevice),
     Ble(BleDevice),
 }
 
@@ -49,7 +47,6 @@ pub fn run_keymap(selector: &Selector, command: &KeymapCommand) -> Result<()> {
     runtime.block_on(async {
         match select_device(selector).await? {
             Device::Hid(device) => run_device(device, command).await,
-            Device::Serial(device) => run_device(device, command).await,
             Device::Ble(device) => run_device(device, command).await,
         }
     })
@@ -61,7 +58,6 @@ pub fn run_config(selector: &Selector, command: &ConfigCommand) -> Result<()> {
     runtime.block_on(async {
         match select_device(selector).await? {
             Device::Hid(device) => run_config_device(device, command).await,
-            Device::Serial(device) => run_config_device(device, command).await,
             Device::Ble(device) => run_config_device(device, command).await,
         }
     })
@@ -76,7 +72,6 @@ pub fn run_lighting(selector: &Selector, command: &LightingCommand) -> Result<()
     runtime.block_on(async {
         match select_device(selector).await? {
             Device::Hid(device) => run_lighting_device(device, command).await,
-            Device::Serial(device) => run_lighting_device(device, command).await,
             Device::Ble(device) => run_lighting_device(device, command).await,
         }
     })
@@ -90,7 +85,6 @@ pub fn run_version(selector: &Selector) -> Result<()> {
     runtime.block_on(async {
         match select_device(selector).await? {
             Device::Hid(device) => run_version_device(device).await,
-            Device::Serial(device) => run_version_device(device).await,
             Device::Ble(device) => run_version_device(device).await,
         }
     })
@@ -102,7 +96,6 @@ pub fn run_maintenance(selector: &Selector) -> Result<()> {
     runtime.block_on(async {
         match select_device(selector).await? {
             Device::Hid(device) => run_maintenance_device(device).await,
-            Device::Serial(device) => run_maintenance_device(device).await,
             Device::Ble(device) => run_maintenance_device(device).await,
         }
     })
@@ -114,7 +107,6 @@ pub fn run_connection(selector: &Selector, command: &ConnectionCommand) -> Resul
     runtime.block_on(async {
         match select_device(selector).await? {
             Device::Hid(device) => run_connection_device(device, command).await,
-            Device::Serial(device) => run_connection_device(device, command).await,
             Device::Ble(device) => run_connection_device(device, command).await,
         }
     })
@@ -133,6 +125,12 @@ async fn run_connection_device<D: RynkDevice>(
 }
 
 async fn operate_connection(client: &Client, command: &ConnectionCommand) -> Result<()> {
+    if matches!(
+        command,
+        ConnectionCommand::Switch { .. } | ConnectionCommand::Clear { .. }
+    ) {
+        require_maintenance_mode(client).await?;
+    }
     match command {
         ConnectionCommand::Status => {
             let status = client.get_connection_status().await?;
@@ -160,7 +158,6 @@ pub fn run_bootloader(selector: &Selector, peripheral: bool) -> Result<()> {
     runtime.block_on(async {
         match select_device(selector).await? {
             Device::Hid(device) => run_bootloader_device(device, peripheral).await,
-            Device::Serial(device) => run_bootloader_device(device, peripheral).await,
             Device::Ble(device) => run_bootloader_device(device, peripheral).await,
         }
     })
@@ -285,7 +282,7 @@ async fn read_maintenance(client: &Client) -> Result<()> {
     Ok(())
 }
 
-async fn require_maintenance_mode(client: &Client) -> Result<()> {
+pub(crate) async fn require_maintenance_mode(client: &Client) -> Result<()> {
     if !client.get_maintenance_mode().await?.enabled {
         bail!("maintenance lock is engaged; hold Magic and tap R, then confirm that R glows green");
     }
@@ -301,6 +298,24 @@ async fn read_version(client: &Client) -> Result<()> {
 }
 
 async fn operate_lighting(client: &Client, command: &LightingCommand) -> Result<()> {
+    if matches!(
+        command,
+        LightingCommand::Set { .. }
+            | LightingCommand::Unset { .. }
+            | LightingCommand::Clear
+            | LightingCommand::Replace { .. }
+            | LightingCommand::Brightness { value: Some(_) }
+            | LightingCommand::SceneSet { .. }
+            | LightingCommand::SceneUnset { .. }
+            | LightingCommand::Params {
+                effect: Some(_),
+                name: Some(_),
+                value: Some(_),
+            }
+            | LightingCommand::ScenePolicy { policy: Some(_) }
+    ) {
+        require_maintenance_mode(client).await?;
+    }
     match command {
         LightingCommand::Ping { data } => {
             if data.is_some() {
@@ -894,6 +909,13 @@ async fn operate(client: &Client, command: &KeymapCommand) -> Result<()> {
         capabilities.num_layers,
     )?;
 
+    if matches!(
+        command,
+        KeymapCommand::Set { .. } | KeymapCommand::Default { layer: Some(_) }
+    ) {
+        require_maintenance_mode(client).await?;
+    }
+
     match command {
         KeymapCommand::Read { layer, all, raw } => {
             let actions = read_all_actions(client, &capabilities).await?;
@@ -1093,14 +1115,9 @@ fn select_usb(requested: Option<&str>) -> Result<Device> {
         bail!("a BLE address cannot be used with --usb");
     }
     if requested.is_some_and(|path| path.starts_with("/dev/tty")) {
-        return select_serial(requested).map(Device::Serial);
+        bail!("Rynk USB uses a vendor HID interface; pass a /dev/hidraw path");
     }
-    match select_hid(requested) {
-        Ok(device) => Ok(Device::Hid(device)),
-        Err(hid_error) => select_serial(requested)
-            .map(Device::Serial)
-            .with_context(|| format!("Rynk USB HID discovery also failed: {hid_error:#}")),
-    }
+    select_hid(requested).map(Device::Hid)
 }
 
 fn select_hid(requested: Option<&str>) -> Result<HidDevice> {
@@ -1117,20 +1134,6 @@ fn select_hid(requested: Option<&str>) -> Result<HidDevice> {
         }
     }
     one_device(devices, "Rynk USB HID")
-}
-
-fn select_serial(requested: Option<&str>) -> Result<SerialDevice> {
-    if requested.is_some_and(crate::transport::is_ble_address) {
-        bail!("a BLE address cannot be used with --usb");
-    }
-    let devices = SerialDevice::discover().context("Rynk USB discovery failed")?;
-    if let Some(path) = requested {
-        return devices
-            .into_iter()
-            .find(|device| device.path == path)
-            .ok_or_else(|| anyhow!("no discovered Rynk serial device matches {path}"));
-    }
-    one_device(devices, "Rynk USB serial")
 }
 
 async fn select_ble(requested: Option<&str>) -> Result<BleDevice> {

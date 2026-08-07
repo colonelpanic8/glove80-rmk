@@ -1,7 +1,7 @@
 # glove80-control
 
-Native Glove80 control CLI using RMK's Rynk protocol over USB HID, USB serial,
-or BLE. It controls current firmware only; the retired Glove80 product protocol
+Native Glove80 control CLI using RMK's Rynk protocol over USB HID or BLE. It
+controls current firmware only; the retired Glove80 product protocol
 is intentionally not supported.
 
 Run from the repository's Nix development shell:
