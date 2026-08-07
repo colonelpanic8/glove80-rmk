@@ -152,6 +152,28 @@ pub static CORE_MAILBOX: CoreMailbox = LightingMailbox::new();
 pub static REPLICA_SLOT: StandardReplicaSlot<OVERLAY_CAPACITY, SCENE_CAPACITY> =
     StandardReplicaSlot::new();
 
+#[derive(Clone, Copy)]
+struct ApplyRequest {
+    generation: u8,
+    revision: u32,
+    digests: rmk::host::ReplicaDigests,
+}
+
+#[derive(Clone, Copy)]
+enum DiagnosticRequest {
+    Status { request_id: u8 },
+    FrameChunk { request_id: u8, offset: u16 },
+}
+
+static APPLY_REQUESTS: embassy_sync::signal::Signal<rmk::RawMutex, ApplyRequest> =
+    embassy_sync::signal::Signal::new();
+static DIAGNOSTIC_REQUESTS: embassy_sync::channel::Channel<rmk::RawMutex, DiagnosticRequest, 1> =
+    embassy_sync::channel::Channel::new();
+static LAST_APPLIED_REVISION: BlockingMutex<rmk::RawMutex, Cell<Option<u32>>> =
+    BlockingMutex::new(Cell::new(None));
+static LAST_DIGESTS: BlockingMutex<rmk::RawMutex, Cell<Option<rmk::host::ReplicaDigests>>> =
+    BlockingMutex::new(Cell::new(None));
+
 /// Pending key-reactive effect hits for this half's own engine instance. Each
 /// binary drains its local queue on its next rendered frame. Central-half hits
 /// are also mirrored to the peripheral so spatial effects span the seam.
@@ -670,15 +692,140 @@ pub fn init_peripheral(
     LightingProcessor::new(service, output, &CORE_MAILBOX)
 }
 
+fn try_send_diagnostic(message: crate::split_lighting::Message) -> bool {
+    // RMK's peripheral application queue has two slots. Diagnostics and
+    // heartbeats only enter an empty queue, preserving the second slot for a
+    // replication Ack that can arrive while the first packet is pending.
+    crate::split_lighting::diagnostic_may_enqueue(
+        rmk::split_app::SPLIT_APP_PERIPH_TX.free_capacity(),
+    ) && rmk::split_app::SPLIT_APP_PERIPH_TX
+        .try_send(message.encode())
+        .is_ok()
+}
+
+fn try_send_attestation(generation: u8) -> bool {
+    LAST_DIGESTS.lock(Cell::get).is_some_and(|digests| {
+        try_send_diagnostic(crate::split_lighting::Message::Attestation {
+            generation,
+            digests,
+        })
+    })
+}
+
+pub struct PeripheralLightingWorker;
+
+pub const fn peripheral_lighting_worker() -> PeripheralLightingWorker {
+    PeripheralLightingWorker
+}
+
+impl PeripheralLightingWorker {
+    async fn apply(&mut self, request: ApplyRequest) {
+        match CORE_MAILBOX
+            .request(StandardCommand::ApplyReplica(&REPLICA_SLOT))
+            .await
+        {
+            Ok(_) => {
+                LAST_APPLIED_REVISION.lock(|revision| revision.set(Some(request.revision)));
+                LAST_DIGESTS.lock(|digests| digests.set(Some(request.digests)));
+                let ack = crate::split_lighting::Message::Ack {
+                    generation: request.generation,
+                    revision: request.revision,
+                }
+                .encode();
+                if rmk::split_app::SPLIT_APP_PERIPH_TX.try_send(ack).is_err() {
+                    defmt::warn!("lighting: peripheral replica ack queue full");
+                    return;
+                }
+                // The Ack is now the head packet. With no other diagnostics
+                // admitted into a non-empty queue, the remaining slot is safe
+                // for its additive attestation.
+                if let Some(digests) = LAST_DIGESTS.lock(Cell::get) {
+                    let _ = rmk::split_app::SPLIT_APP_PERIPH_TX.try_send(
+                        crate::split_lighting::Message::Attestation {
+                            generation: request.generation,
+                            digests,
+                        }
+                        .encode(),
+                    );
+                }
+            }
+            Err(_) => defmt::warn!("lighting: peripheral rejected replica"),
+        }
+    }
+
+    async fn diagnostic(&mut self, request: DiagnosticRequest) {
+        let message = match request {
+            DiagnosticRequest::Status { request_id } => {
+                match CORE_MAILBOX.request(StandardCommand::ReadState).await {
+                    Ok(StandardReply::State(state)) => {
+                        let layers = state.presented.map_or_else(
+                            || PeripheralState.snapshot().layers,
+                            |presented| presented.context.layers,
+                        );
+                        Some(crate::split_lighting::Message::StatusReport {
+                            request_id,
+                            applied_revision: LAST_APPLIED_REVISION.lock(Cell::get),
+                            engine_revision: state.revision,
+                            layers,
+                            powered: state.powered,
+                            wake_active: state.wake_active,
+                            effective_output_enabled: state.output_enabled,
+                        })
+                    }
+                    _ => None,
+                }
+            }
+            DiagnosticRequest::FrameChunk { request_id, offset } => {
+                match CORE_MAILBOX
+                    .request(StandardCommand::ReadFrame { offset })
+                    .await
+                {
+                    Ok(StandardReply::FramePage(page)) => {
+                        let mut cells = [Rgb8::BLACK; 4];
+                        let len = page.cells().len().min(cells.len());
+                        cells[..len].copy_from_slice(&page.cells()[..len]);
+                        Some(crate::split_lighting::Message::FrameChunk {
+                            request_id,
+                            revision: page.revision,
+                            total: page.total,
+                            start: page.start,
+                            len: len as u8,
+                            cells,
+                        })
+                    }
+                    _ => None,
+                }
+            }
+        };
+        if let Some(message) = message {
+            let _ = try_send_diagnostic(message);
+        }
+    }
+}
+
+impl Runnable for PeripheralLightingWorker {
+    async fn run(&mut self) -> ! {
+        loop {
+            match embassy_futures::select::select(
+                APPLY_REQUESTS.wait(),
+                DIAGNOSTIC_REQUESTS.receive(),
+            )
+            .await
+            {
+                embassy_futures::select::Either::First(request) => self.apply(request).await,
+                embassy_futures::select::Either::Second(request) => self.diagnostic(request).await,
+            }
+        }
+    }
+}
+
 pub struct PeripheralReplication {
     stage: crate::split_lighting::SnapshotStage,
-    last_applied_revision: Option<u32>,
 }
 
 pub const fn peripheral_replication() -> PeripheralReplication {
     PeripheralReplication {
         stage: crate::split_lighting::SnapshotStage::new(),
-        last_applied_revision: None,
     }
 }
 
@@ -697,6 +844,22 @@ impl PeripheralReplication {
             }
             return;
         }
+        match message {
+            crate::split_lighting::Message::ReplicaProbe { generation } => {
+                let _ = try_send_attestation(generation);
+                return;
+            }
+            crate::split_lighting::Message::StatusRequest { request_id } => {
+                let _ = DIAGNOSTIC_REQUESTS.try_send(DiagnosticRequest::Status { request_id });
+                return;
+            }
+            crate::split_lighting::Message::FrameChunkRequest { request_id, offset } => {
+                let _ = DIAGNOSTIC_REQUESTS
+                    .try_send(DiagnosticRequest::FrameChunk { request_id, offset });
+                return;
+            }
+            _ => {}
+        }
         if let crate::split_lighting::Message::ContextUpdate {
             generation,
             revision,
@@ -704,7 +867,7 @@ impl PeripheralReplication {
             batteries,
         } = message
         {
-            if self.last_applied_revision == Some(revision) {
+            if LAST_APPLIED_REVISION.lock(Cell::get) == Some(revision) {
                 set_battery_statuses(batteries);
                 PeripheralState::set(context);
                 CORE_MAILBOX.snapshot_changed();
@@ -722,6 +885,7 @@ impl PeripheralReplication {
         let Some((generation, snapshot, batteries)) = self.stage.apply(message) else {
             return;
         };
+        let digests = crate::split_lighting::replica_digests(&snapshot);
         set_battery_statuses(batteries);
         PeripheralState::set(snapshot.context);
         let revision = snapshot.revision;
@@ -729,23 +893,11 @@ impl PeripheralReplication {
             defmt::warn!("lighting: peripheral replica slot busy");
             return;
         }
-        match CORE_MAILBOX
-            .request(StandardCommand::ApplyReplica(&REPLICA_SLOT))
-            .await
-        {
-            Ok(_) => {
-                self.last_applied_revision = Some(revision);
-                let ack = crate::split_lighting::Message::Ack {
-                    generation,
-                    revision,
-                }
-                .encode();
-                if rmk::split_app::SPLIT_APP_PERIPH_TX.try_send(ack).is_err() {
-                    defmt::warn!("lighting: peripheral replica ack queue full");
-                }
-            }
-            Err(_) => defmt::warn!("lighting: peripheral rejected replica"),
-        }
+        APPLY_REQUESTS.signal(ApplyRequest {
+            generation,
+            revision,
+            digests,
+        });
     }
 }
 
@@ -754,16 +906,17 @@ impl Runnable for PeripheralReplication {
         let mut link = rmk::split_app::SPLIT_APP_LINK
             .receiver()
             .expect("lighting replication owns one split-link receiver");
+        let mut heartbeat_at = embassy_time::Instant::now() + Duration::from_secs(10);
         loop {
-            match embassy_futures::select::select(
+            match embassy_futures::select::select3(
                 link.changed(),
                 rmk::split_app::SPLIT_APP_RX.receive(),
+                Timer::at(heartbeat_at),
             )
             .await
             {
-                embassy_futures::select::Either::First(up) => {
+                embassy_futures::select::Either3::First(up) => {
                     self.stage.reset();
-                    self.last_applied_revision = None;
                     // Drain the inbox only when the link went down. This half
                     // marks the link up on the first *inbound* message, so on
                     // the up edge the inbox already holds the head of the
@@ -777,7 +930,13 @@ impl Runnable for PeripheralReplication {
                         while rmk::split_app::SPLIT_APP_RX.try_receive().is_ok() {}
                     }
                 }
-                embassy_futures::select::Either::Second(message) => self.process(message).await,
+                embassy_futures::select::Either3::Second(message) => self.process(message).await,
+                embassy_futures::select::Either3::Third(()) => {
+                    heartbeat_at += Duration::from_secs(10);
+                    if rmk::split_app::SPLIT_APP_LINK.try_get() == Some(true) {
+                        let _ = try_send_attestation(0);
+                    }
+                }
             }
         }
     }

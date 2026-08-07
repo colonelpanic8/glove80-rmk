@@ -102,6 +102,11 @@ mod keyboard_central {
     }
 
     #[register_processor(runnable)]
+    fn remote_frame_bridge() {
+        crate::central_lighting::remote_frame_bridge()
+    }
+
+    #[register_processor(runnable)]
     fn remote_boot_dispatcher() {
         crate::central_lighting::RemoteBootDispatcher
     }

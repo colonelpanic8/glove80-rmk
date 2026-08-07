@@ -41,6 +41,11 @@ mod keyboard_peripheral {
     }
 
     #[register_processor(runnable)]
+    fn lighting_replication_worker() {
+        crate::lighting::peripheral_lighting_worker()
+    }
+
+    #[register_processor(runnable)]
     fn lighting_power_monitor() {
         crate::lighting::power_monitor()
     }
