@@ -34,12 +34,12 @@ cols = 14
 # the order the `[[keymap.layer]]` key strings below are read in: four 12-key
 # rows, six fifth-row finger keys, then the two three-key thumb arcs.
 map = """
-(0,0,@outer) (0,1,@outer) (0,2,@ring) (0,3) (0,4,@index) (0,5,@inner) [5] (0,8,@inner) (0,9,@index) (0,10) (0,11,@ring) (0,12,@outer) (0,13,@outer)
-(1,0,@outer) (1,1,@outer) (1,2,@ring) (1,3) (1,4,@index) (1,5,@inner) [5] (1,8,@inner) (1,9,@index) (1,10) (1,11,@ring) (1,12,@outer) (1,13,@outer)
-(2,0,@outer) (2,1,@outer) (2,2,@ring) (2,3) (2,4,@index) (2,5,@inner) [5] (2,8,@inner) (2,9,@index) (2,10) (2,11,@ring) (2,12,@outer) (2,13,@outer)
-(3,0,@outer) (3,1,@outer) (3,2,@ring) (3,3) (3,4,@index) (3,5,@inner) [5] (3,8,@inner) (3,9,@index) (3,10) (3,11,@ring) (3,12,@outer) (3,13,@outer)
-[2] (4,2,@ring) (4,3) (4,4,@index) [7] (4,9,@index) (4,10) (4,11,@ring)
-[4] [r=15@(4.5,9)] (0,6,@thumb_1) [r=30@(4.5,9)] (1,6,@thumb_2) [r=45@(4.5,9)] (2,6,@thumb_3) [5] [r=-45@(12.5,9)] (2,7,@thumb_1) [r=-30@(12.5,9)] (1,7,@thumb_2) [r=-15@(12.5,9)] (0,7,@thumb_3)
+(0,0,L,@outer) (0,1,L,@outer) (0,2,L,@ring) (0,3,L) (0,4,L,@index) (0,5,L,@inner) [5] (0,8,R,@inner) (0,9,R,@index) (0,10,R) (0,11,R,@ring) (0,12,R,@outer) (0,13,R,@outer)
+(1,0,L,@outer) (1,1,L,@outer) (1,2,L,@ring) (1,3,L) (1,4,L,@index) (1,5,L,@inner) [5] (1,8,R,@inner) (1,9,R,@index) (1,10,R) (1,11,R,@ring) (1,12,R,@outer) (1,13,R,@outer)
+(2,0,L,@outer) (2,1,L,@outer) (2,2,L,@ring) (2,3,L) (2,4,L,@index) (2,5,L,@inner) [5] (2,8,R,@inner) (2,9,R,@index) (2,10,R) (2,11,R,@ring) (2,12,R,@outer) (2,13,R,@outer)
+(3,0,L,@outer) (3,1,L,@outer) (3,2,L,@ring) (3,3,L) (3,4,L,@index) (3,5,L,@inner) [5] (3,8,R,@inner) (3,9,R,@index) (3,10,R) (3,11,R,@ring) (3,12,R,@outer) (3,13,R,@outer)
+[2] (4,2,L,@ring) (4,3,L) (4,4,L,@index) [7] (4,9,R,@index) (4,10,R) (4,11,R,@ring)
+[4] [r=15@(4.5,9)] (0,6,L,@thumb_1) [r=30@(4.5,9)] (1,6,L,@thumb_2) [r=45@(4.5,9)] (2,6,L,@thumb_3) [5] [r=-45@(12.5,9)] (2,7,R,@thumb_1) [r=-30@(12.5,9)] (1,7,R,@thumb_2) [r=-15@(12.5,9)] (0,7,R,@thumb_3)
 """
 
 # The map walk is a left-to-right cursor on a flat grid, so anything off that
