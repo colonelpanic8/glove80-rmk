@@ -11,7 +11,7 @@ use embassy_nrf::{Peri, bind_interrupts, peripherals};
 use embassy_sync::blocking_mutex::Mutex as BlockingMutex;
 use embassy_time::{Duration, Timer};
 use rmk::core_traits::Runnable;
-use rmk::event::{KeyboardEvent, KeyboardEventPos, MaintenanceModeEvent};
+use rmk::event::{KeyboardEvent, KeyboardEventPos, LayerChangeEvent, MaintenanceModeEvent};
 use rmk::lighting::compositor::{Contribution, LightingSource, RenderInput};
 use rmk::lighting::topology::{LedSlot, MatrixPosition};
 use rmk::lighting::{
@@ -596,6 +596,46 @@ impl PeripheralState {
     fn set(context: LightingContext) {
         PERIPHERAL_CONTEXT.lock(|current| current.set(context));
     }
+
+    fn apply_replicated(context: crate::split_lighting::ReplicatedContext) {
+        PERIPHERAL_CONTEXT.lock(|current| {
+            let mut merged = current.get();
+            context.apply_to(&mut merged);
+            current.set(merged);
+        });
+    }
+
+    fn merge_ephemeral(context: &mut LightingContext) {
+        context.layers = PERIPHERAL_CONTEXT.lock(Cell::get).layers;
+        context.connection = rmk::state::current_connection_status();
+    }
+
+    /// Apply RMK's native high-priority effective-layer edge immediately.
+    /// The local bitmap is conservatively adjusted without semantic sync.
+    fn set_effective_layer(layer: u8) {
+        PERIPHERAL_CONTEXT.lock(|current| {
+            let mut context = current.get();
+            let previous = context.layers;
+            let mut active = previous.active_bits();
+            if previous.effective != previous.default && previous.effective != layer {
+                active &= !(1_u64 << previous.effective);
+            }
+            active |= (1_u64 << previous.default) | (1_u64 << layer);
+            context.layers = LayerState::new(layer, previous.default, active);
+            current.set(context);
+        });
+    }
+}
+
+/// Bridge RMK's native priority layer edge directly into the renderer.
+#[rmk::macros::processor(subscribe = [LayerChangeEvent])]
+pub struct FastPeripheralLayerLighting;
+
+impl FastPeripheralLayerLighting {
+    async fn on_layer_change_event(&mut self, event: LayerChangeEvent) {
+        PeripheralState::set_effective_layer(event.0);
+        CORE_MAILBOX.snapshot_changed();
+    }
 }
 
 impl SnapshotProvider for PeripheralState {
@@ -869,7 +909,7 @@ impl PeripheralReplication {
         {
             if LAST_APPLIED_REVISION.lock(Cell::get) == Some(revision) {
                 set_battery_statuses(batteries);
-                PeripheralState::set(context);
+                PeripheralState::apply_replicated(context);
                 CORE_MAILBOX.snapshot_changed();
                 let ack = crate::split_lighting::Message::Ack {
                     generation,
@@ -882,9 +922,10 @@ impl PeripheralReplication {
             }
             return;
         }
-        let Some((generation, snapshot, batteries)) = self.stage.apply(message) else {
+        let Some((generation, mut snapshot, batteries)) = self.stage.apply(message) else {
             return;
         };
+        PeripheralState::merge_ephemeral(&mut snapshot.context);
         let digests = crate::split_lighting::replica_digests(&snapshot);
         set_battery_statuses(batteries);
         PeripheralState::set(snapshot.context);

@@ -20,6 +20,13 @@ mod keyboard_peripheral {
         crate::lighting::init_peripheral(p.SPI3, p.P0_13, p.P0_19, p.PWM0, p.P0_16)
     }
 
+    /// Render the native priority layer edge without waiting for bulk
+    /// application traffic.
+    #[register_processor(event)]
+    fn fast_layer_lighting() {
+        crate::lighting::FastPeripheralLayerLighting
+    }
+
     /// Stage and atomically apply semantic snapshots from the central.
     #[register_processor(runnable)]
     fn lighting_replication() {

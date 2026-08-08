@@ -16,6 +16,31 @@ switching is implemented. Build and validate its independent UF2 bundle with
 `just go60-firmware`; the official family IDs are `0x9809B007` (left) and
 `0x980AB007` (right).
 
+## Embedded startup latency budget
+
+Treat central startup as a latency-sensitive path with a hard practical
+budget. A firmware that is logically correct after initialization can still
+watchdog-loop if larger futures, objects, extra processors, state walks, or
+eager split convergence make initialization take too long. Do not diagnose a
+boot loop as RAM exhaustion from size alone; first distinguish memory pressure
+from added initialization work and timing.
+
+- Keep constructors and registered-processor initialization bounded and
+  minimal. Avoid full-state scans, bulk encoding, queue draining, blocking
+  waits, and eager cross-half synchronization before the normal split and USB
+  loops are alive.
+- Prefer a valid conservative initial snapshot followed by asynchronous or
+  event-driven convergence. Ephemeral state may briefly use defaults after
+  boot; it must not delay startup merely to provide immediate full
+  consistency.
+- Put durable replica recovery and reconnect convergence in ordinary runtime
+  tasks with coalescing/retry semantics. Keep latency-sensitive edges, such as
+  layer activity, on their own small best-effort path once transport is ready.
+- Hardware-qualify changes that enlarge startup futures or add initialization
+  work even when host tests and firmware size checks pass. Canary the central
+  with a known-good automatic recovery image and verify stable enumeration
+  before flashing the peripheral.
+
 ## Nested RMK repository
 
 `dependencies/rmk` is an independent Git repository, not ordinary vendored

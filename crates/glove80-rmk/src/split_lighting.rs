@@ -22,7 +22,6 @@ use rmk::lighting::{
 use rmk::split_app::{SPLIT_APP_MSG_MAX, SplitAppData};
 use rmk::types::battery::{BatteryStatus, ChargeState};
 use rmk::types::ble::BleState;
-use rmk::types::connection::ConnectionStatus;
 use rmk::types::protocol::rynk::LIGHTING_REPLICA_DIGEST_SCHEMA_V1;
 
 use crate::lighting::{BatteryPair, LEDS_PER_HALF, OVERLAY_CAPACITY, SCENE_CAPACITY, TOTAL_LEDS};
@@ -99,6 +98,34 @@ const _: () = assert!(ATTESTATION_LEN <= SPLIT_APP_MSG_MAX);
 const _: () = assert!(STATUS_REPORT_LEN <= SPLIT_APP_MSG_MAX);
 const _: () = assert!(FRAME_CHUNK_LEN <= SPLIT_APP_MSG_MAX);
 
+/// The slowly changing lighting inputs that belong in semantic replication.
+/// Layer activity is intentionally absent: RMK's existing dedicated native
+/// message carries the effective-layer edge directly to the peripheral.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ReplicatedContext {
+    pub indicators: IndicatorState,
+    pub powered: bool,
+    pub bonded_slots: u8,
+}
+
+impl From<LightingContext> for ReplicatedContext {
+    fn from(context: LightingContext) -> Self {
+        Self {
+            indicators: context.indicators,
+            powered: context.powered,
+            bonded_slots: context.bonded_slots,
+        }
+    }
+}
+
+impl ReplicatedContext {
+    pub fn apply_to(self, context: &mut LightingContext) {
+        context.indicators = self.indicators;
+        context.powered = self.powered;
+        context.bonded_slots = self.bonded_slots;
+    }
+}
+
 pub const fn diagnostic_may_enqueue(free_capacity: usize) -> bool {
     free_capacity == 2
 }
@@ -118,13 +145,13 @@ pub enum Message {
     Context {
         generation: u8,
         revision: u32,
-        context: LightingContext,
+        context: ReplicatedContext,
         batteries: BatteryPair,
     },
     ContextUpdate {
         generation: u8,
         revision: u32,
-        context: LightingContext,
+        context: ReplicatedContext,
         batteries: BatteryPair,
     },
     /// Extension-source selection and the active effect's tuning at snapshot
@@ -443,9 +470,9 @@ impl Message {
                 out[1] = TAG_CONTEXT;
                 out[2] = generation;
                 put_u32(&mut out, 3, revision);
-                out[7] = context.layers.effective;
-                out[8] = context.layers.default;
-                put_u64(&mut out, 9, context.layers.active_bits());
+                // Bytes 7..17 used to carry layer state. Keep them reserved
+                // and zero so version-10 packet lengths and tags remain wire
+                // compatible while layer activity leaves this protocol.
                 out[17] = indicators(context.indicators);
                 put_battery(&mut out, 18, batteries.left);
                 put_battery(&mut out, 20, batteries.right);
@@ -462,9 +489,7 @@ impl Message {
                 out[1] = TAG_CONTEXT_UPDATE;
                 out[2] = generation;
                 put_u32(&mut out, 3, revision);
-                out[7] = context.layers.effective;
-                out[8] = context.layers.default;
-                put_u64(&mut out, 9, context.layers.active_bits());
+                // Reserved former layer-state bytes; see `Context` above.
                 out[17] = indicators(context.indicators);
                 put_battery(&mut out, 18, batteries.left);
                 put_battery(&mut out, 20, batteries.right);
@@ -853,16 +878,12 @@ impl Message {
             TAG_CONTEXT if bytes.len() == CONTEXT_LEN => Ok(Message::Context {
                 generation: bytes[2],
                 revision: get_u32(bytes, 3),
-                context: LightingContext {
-                    layers: LayerState::new(bytes[7], bytes[8], get_u64(bytes, 9)),
+                context: ReplicatedContext {
                     indicators: get_indicators(bytes[17]),
                     powered: flag(bytes[22])?,
                     // Only the central holds bonds, so unlike `connection`
                     // the peripheral cannot read this from its own state.
                     bonded_slots: bytes[23],
-                    // Not carried on the wire: each half reads its own copy of
-                    // the rmk-synced connection status at snapshot time.
-                    connection: ConnectionStatus::new(),
                 },
                 batteries: BatteryPair {
                     left: get_battery(bytes, 18)?,
@@ -872,16 +893,12 @@ impl Message {
             TAG_CONTEXT_UPDATE if bytes.len() == CONTEXT_UPDATE_LEN => Ok(Message::ContextUpdate {
                 generation: bytes[2],
                 revision: get_u32(bytes, 3),
-                context: LightingContext {
-                    layers: LayerState::new(bytes[7], bytes[8], get_u64(bytes, 9)),
+                context: ReplicatedContext {
                     indicators: get_indicators(bytes[17]),
                     powered: flag(bytes[22])?,
                     // Only the central holds bonds, so unlike `connection`
                     // the peripheral cannot read this from its own state.
                     bonded_slots: bytes[23],
-                    // Not carried on the wire: each half reads its own copy of
-                    // the rmk-synced connection status at snapshot time.
-                    connection: ConnectionStatus::new(),
                 },
                 batteries: BatteryPair {
                     left: get_battery(bytes, 18)?,
@@ -1554,7 +1571,7 @@ fn walk_snapshot(
     }) || !sink(Message::Context {
         generation,
         revision: snapshot.revision,
-        context: snapshot.context,
+        context: snapshot.context.into(),
         batteries,
     }) || !sink(Message::Extension {
         generation,
@@ -1757,7 +1774,7 @@ impl SnapshotStage {
                     self.stage = None;
                     return None;
                 }
-                stage.snapshot.context = context;
+                context.apply_to(&mut stage.snapshot.context);
                 stage.batteries = batteries;
                 stage.context_received = true;
                 None

@@ -5,7 +5,7 @@ use core::num::NonZeroU32;
 use rmk::host::ReplicaDigests;
 use rmk::lighting::{
     BackgroundMode, BackgroundState, BuiltinEffect, ConditionSet, LayerCondition, LayerPolicy,
-    LedSlot, LightingContext, OutputMode, OverlayBatch, OverlayCell, Rgb8,
+    LayerState, LedSlot, LightingContext, OutputMode, OverlayBatch, OverlayCell, Rgb8,
     RuntimeConditionalSceneCell, RuntimeConditionalSceneTable, SceneTable, SceneTableCell,
     StandardMutableState, StandardReplicaState,
 };
@@ -73,7 +73,7 @@ fn existing_split_messages_round_trip() {
         Message::Context {
             generation: 7,
             revision: 0x1234_5678,
-            context: LightingContext::default(),
+            context: LightingContext::default().into(),
             batteries: BatteryPair::UNAVAILABLE,
         },
         Message::Ack {
@@ -125,6 +125,24 @@ fn existing_split_messages_round_trip() {
     for message in messages {
         assert_eq!(Message::decode(message.encode()), Ok(message));
     }
+}
+
+#[test]
+fn semantic_context_packets_reserve_but_do_not_carry_layer_state() {
+    let source = LightingContext {
+        layers: LayerState::new(5, 1, 0b10_1010),
+        ..LightingContext::default()
+    };
+    let message = Message::ContextUpdate {
+        generation: 7,
+        revision: 0x1234_5678,
+        context: source.into(),
+        batteries: BatteryPair::UNAVAILABLE,
+    };
+
+    let encoded = message.encode();
+    assert_eq!(&encoded.payload()[7..17], &[0; 10]);
+    assert_eq!(Message::decode(encoded), Ok(message));
 }
 
 #[test]

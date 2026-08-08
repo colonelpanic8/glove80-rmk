@@ -432,7 +432,6 @@ const ACK_TIMEOUT: Duration = Duration::from_millis(500);
 /// How long the central waits before re-offering a transfer the split queue
 /// had no room for.
 const SEND_BACKOFF: Duration = Duration::from_millis(50);
-
 pub const fn replication() -> CentralReplication {
     CentralReplication { generation: 0 }
 }
@@ -480,7 +479,7 @@ impl CentralReplication {
             let message = crate::split_lighting::Message::ContextUpdate {
                 generation: self.generation,
                 revision: snapshot.revision,
-                context: snapshot.context,
+                context: snapshot.context.into(),
                 batteries: crate::lighting::battery_statuses(),
             }
             .encode();
@@ -515,6 +514,9 @@ impl Runnable for CentralReplication {
             .receiver()
             .expect("lighting replication owns one split-link receiver");
         let mut lighting = LightingChangedEvent::subscriber();
+        // Preserve the established central task/future layout without treating
+        // layer activity as replicated context. RMK's native split driver owns
+        // delivery; this arm intentionally performs no synchronization work.
         let mut layers = LayerChangeEvent::subscriber();
         let mut indicators = LedIndicatorEvent::subscriber();
         let mut battery = BatteryStatusEvent::subscriber();
@@ -639,7 +641,8 @@ impl Runnable for CentralReplication {
                         health = ReplicationHealth::Resynchronizing;
                     }
                 }
-                Either4::Third(Either::First(_)) => context_dirty = true,
+                Either4::Third(Either::First(Either::First(_))) => {}
+                Either4::Third(Either::First(Either::Second(_))) => context_dirty = true,
                 Either4::Third(Either::Second(Either::First(event))) => {
                     crate::lighting::set_left_battery(event.0);
                     context_dirty = true;
