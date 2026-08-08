@@ -131,7 +131,7 @@ subs = 4
 [event.lighting_changed]
 channel_size = 2
 pubs = 1
-subs = 2
+subs = 3
 
 [event.led_indicator]
 channel_size = 3

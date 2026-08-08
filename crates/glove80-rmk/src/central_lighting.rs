@@ -9,7 +9,7 @@ use core::cell::Cell;
 use embassy_futures::select::{Either, Either4, select, select4};
 use embassy_nrf::Peri;
 use embassy_nrf::gpio::Pin;
-use embassy_nrf::peripherals::{PWM0, SPI3};
+use embassy_nrf::peripherals::SPI3;
 use embassy_sync::blocking_mutex::Mutex as BlockingMutex;
 use embassy_time::{Duration, Instant, Timer};
 use rmk::core_traits::Runnable;
@@ -224,8 +224,6 @@ pub fn init<'keymap, 'data>(
     spi: Peri<'static, SPI3>,
     data_pin: Peri<'static, impl Pin>,
     chain_power_pin: Peri<'static, impl Pin>,
-    pwm: Peri<'static, PWM0>,
-    status_led_pin: Peri<'static, impl Pin>,
 ) -> LightingProcessor<
     'static,
     KeymapLightingState<'keymap, 'data>,
@@ -247,13 +245,7 @@ pub fn init<'keymap, 'data>(
         persisted_runtime_conditional_scenes,
     );
     let service = LightingService::new(provider, engine, LogicalFrame::new(Rgb8::BLACK));
-    let output = HalfOutput::left(LightingHardware::new(
-        spi,
-        data_pin,
-        chain_power_pin,
-        pwm,
-        status_led_pin,
-    ));
+    let output = HalfOutput::left(LightingHardware::new(spi, data_pin, chain_power_pin));
     LightingProcessor::new(service, output, &CORE_MAILBOX)
 }
 

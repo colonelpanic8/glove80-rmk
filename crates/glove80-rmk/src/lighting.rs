@@ -2,6 +2,7 @@
 
 use core::cell::Cell;
 use core::num::NonZeroU32;
+use core::sync::atomic::{AtomicBool, Ordering};
 
 use embassy_nrf::gpio::{Level, Output, OutputDrive, Pin};
 use embassy_nrf::peripherals::{PWM0, SPI3};
@@ -11,7 +12,10 @@ use embassy_nrf::{Peri, bind_interrupts, peripherals};
 use embassy_sync::blocking_mutex::Mutex as BlockingMutex;
 use embassy_time::{Duration, Timer};
 use rmk::core_traits::Runnable;
-use rmk::event::{KeyboardEvent, KeyboardEventPos, LayerChangeEvent, MaintenanceModeEvent};
+use rmk::event::{
+    EventSubscriber, KeyboardEvent, KeyboardEventPos, LayerChangeEvent, LightingChangedEvent,
+    MaintenanceModeEvent, SleepStateEvent, SubscribableEvent,
+};
 use rmk::lighting::compositor::{Contribution, LightingSource, RenderInput};
 use rmk::lighting::topology::{LedSlot, MatrixPosition};
 use rmk::lighting::{
@@ -149,6 +153,7 @@ pub type CoreMailbox = LightingMailbox<
 >;
 
 pub static CORE_MAILBOX: CoreMailbox = LightingMailbox::new();
+static LIGHTING_OUTPUT_ACTIVE: AtomicBool = AtomicBool::new(false);
 pub static REPLICA_SLOT: StandardReplicaSlot<OVERLAY_CAPACITY, SCENE_CAPACITY> =
     StandardReplicaSlot::new();
 
@@ -249,6 +254,9 @@ const ENCODED_LEN: usize = LEDS_PER_HALF * 24 + RESET_BYTES;
 const CHAIN_POWER_SETTLE: Duration = Duration::from_millis(120);
 const STATUS_PWM_TOP: u16 = 320;
 const STATUS_PWM_DUTY: u16 = 16;
+const POWER_POLL_INTERVAL: Duration = Duration::from_secs(1);
+const SLEEP_POWER_POLL_INTERVAL: Duration = Duration::from_secs(10);
+const ATTESTATION_INTERVAL: Duration = Duration::from_secs(300);
 
 pub(crate) const BOOTLOADER_TAG: u8 = 0xb0;
 
@@ -291,8 +299,8 @@ impl Ws2812Chain {
 
 pub(crate) struct LightingHardware {
     chain: Ws2812Chain,
-    _chain_power: Output<'static>,
-    _status_pwm: SimplePwm<'static>,
+    chain_power: Output<'static>,
+    chain_powered: bool,
 }
 
 impl LightingHardware {
@@ -300,28 +308,36 @@ impl LightingHardware {
         spi: Peri<'static, SPI3>,
         data_pin: Peri<'static, impl Pin>,
         chain_power_pin: Peri<'static, impl Pin>,
-        pwm: Peri<'static, PWM0>,
-        status_led_pin: Peri<'static, impl Pin>,
     ) -> Self {
-        let chain_power = Output::new(chain_power_pin, Level::High, OutputDrive::Standard);
-        let mut pwm_config = SimpleConfig::default();
-        pwm_config.prescaler = Prescaler::Div1;
-        pwm_config.max_duty = STATUS_PWM_TOP;
-        let mut status_pwm = SimplePwm::new_1ch(pwm, status_led_pin, &pwm_config);
-        status_pwm.set_duty(0, DutyCycle::inverted(STATUS_PWM_DUTY));
         Self {
             chain: Ws2812Chain::new(spi, data_pin),
-            _chain_power: chain_power,
-            _status_pwm: status_pwm,
+            chain_power: Output::new(chain_power_pin, Level::Low, OutputDrive::Standard),
+            chain_powered: false,
         }
     }
 
-    pub(crate) async fn initialize(&mut self) {
-        Timer::after(CHAIN_POWER_SETTLE).await;
-    }
-
     pub(crate) async fn write(&mut self, frame: &[Rgb8; LEDS_PER_HALF]) -> Result<(), spim::Error> {
-        self.chain.write(frame).await
+        let visible = frame.iter().any(|pixel| *pixel != Rgb8::BLACK);
+        if !visible {
+            if self.chain_powered {
+                self.chain_power.set_low();
+                self.chain_powered = false;
+            }
+            return Ok(());
+        }
+        if !self.chain_powered {
+            self.chain_power.set_high();
+            self.chain_powered = true;
+            Timer::after(CHAIN_POWER_SETTLE).await;
+        }
+        match self.chain.write(frame).await {
+            Ok(()) => Ok(()),
+            Err(error) => {
+                self.chain_power.set_low();
+                self.chain_powered = false;
+                Err(error)
+            }
+        }
     }
 }
 
@@ -370,7 +386,6 @@ impl LightingOutput<LogicalFrame<Rgb8, TOTAL_LEDS>> for HalfOutput {
     type Error = OutputError;
 
     async fn initialize(&mut self) -> Result<(), Self::Error> {
-        self.hardware.initialize().await;
         Ok(())
     }
 
@@ -493,6 +508,33 @@ impl MaintenanceLightingState {
     }
 }
 
+pub struct LightingOutputActivity;
+
+pub const fn lighting_output_activity() -> LightingOutputActivity {
+    LightingOutputActivity
+}
+
+impl LightingOutputActivity {
+    async fn refresh(&self) {
+        if let Ok(StandardReply::State(state)) =
+            CORE_MAILBOX.request(StandardCommand::ReadState).await
+        {
+            LIGHTING_OUTPUT_ACTIVE.store(state.output_enabled, Ordering::Relaxed);
+        }
+    }
+}
+
+impl Runnable for LightingOutputActivity {
+    async fn run(&mut self) -> ! {
+        let mut changes = LightingChangedEvent::subscriber();
+        self.refresh().await;
+        loop {
+            changes.next_event().await;
+            self.refresh().await;
+        }
+    }
+}
+
 /// Feed pressed keys to the typing-reactive PaletteFx effects. Key
 /// positions arrive in the local event bus's coordinates:
 /// board-wide on the central (the split driver re-publishes peripheral keys
@@ -543,7 +585,7 @@ impl ReactiveKeyHits {
     }
 
     async fn on_keyboard_event(&mut self, event: KeyboardEvent) {
-        if !event.pressed {
+        if !event.pressed || !LIGHTING_OUTPUT_ACTIVE.load(Ordering::Relaxed) {
             return;
         }
         let KeyboardEventPos::Key(pos) = event.pos else {
@@ -672,11 +714,54 @@ fn local_vbus_present() -> bool {
 /// `charge`-gated lighting rule is dead.
 pub struct PowerMonitor {
     powered: bool,
+    sleeping: bool,
+    status_pwm: SimplePwm<'static>,
 }
 
-pub fn power_monitor() -> PowerMonitor {
+pub fn power_monitor(
+    pwm: Peri<'static, PWM0>,
+    status_led_pin: Peri<'static, impl Pin>,
+) -> PowerMonitor {
+    let powered = local_vbus_present();
+    let mut pwm_config = SimpleConfig::default();
+    pwm_config.prescaler = Prescaler::Div1;
+    pwm_config.max_duty = STATUS_PWM_TOP;
+    let mut status_pwm = SimplePwm::new_1ch(pwm, status_led_pin, &pwm_config);
+    status_pwm.set_duty(
+        0,
+        DutyCycle::inverted(if powered { STATUS_PWM_DUTY } else { 0 }),
+    );
     PowerMonitor {
-        powered: local_vbus_present(),
+        powered,
+        sleeping: false,
+        status_pwm,
+    }
+}
+
+impl PowerMonitor {
+    fn update_status_led(&mut self) {
+        let duty = if self.powered && !self.sleeping {
+            STATUS_PWM_DUTY
+        } else {
+            0
+        };
+        self.status_pwm.set_duty(0, DutyCycle::inverted(duty));
+    }
+
+    fn refresh_power(&mut self) {
+        let powered = local_vbus_present();
+        if powered == self.powered {
+            return;
+        }
+        self.powered = powered;
+        self.update_status_led();
+        rmk::event::publish_event(rmk::event::ChargingStateEvent { charging: powered });
+        if matches!(
+            crate::LIGHTING_CONTROLS.powered_only_scope,
+            rmk::lighting::PoweredOnlyScope::Local
+        ) {
+            CORE_MAILBOX.snapshot_changed();
+        }
     }
 }
 
@@ -690,19 +775,22 @@ impl Runnable for PowerMonitor {
         rmk::event::publish_event(rmk::event::ChargingStateEvent {
             charging: self.powered,
         });
+        self.update_status_led();
+        let mut sleep = SleepStateEvent::subscriber();
         loop {
-            Timer::after_millis(100).await;
-            let powered = local_vbus_present();
-            if powered == self.powered {
-                continue;
-            }
-            self.powered = powered;
-            rmk::event::publish_event(rmk::event::ChargingStateEvent { charging: powered });
-            if matches!(
-                crate::LIGHTING_CONTROLS.powered_only_scope,
-                rmk::lighting::PoweredOnlyScope::Local
-            ) {
-                CORE_MAILBOX.snapshot_changed();
+            let interval = if self.sleeping {
+                SLEEP_POWER_POLL_INTERVAL
+            } else {
+                POWER_POLL_INTERVAL
+            };
+            match embassy_futures::select::select(sleep.next_event(), Timer::after(interval)).await
+            {
+                embassy_futures::select::Either::First(event) => {
+                    self.sleeping = event.0;
+                    self.refresh_power();
+                    self.update_status_led();
+                }
+                embassy_futures::select::Either::Second(()) => self.refresh_power(),
             }
         }
     }
@@ -712,8 +800,6 @@ pub fn init_peripheral(
     spi: Peri<'static, SPI3>,
     data_pin: Peri<'static, impl Pin>,
     chain_power_pin: Peri<'static, impl Pin>,
-    pwm: Peri<'static, PWM0>,
-    status_led_pin: Peri<'static, impl Pin>,
 ) -> LightingProcessor<'static, PeripheralState, Engine, HalfOutput, COMMAND_CAPACITY> {
     // The peripheral never persists a selection: it renders whatever the
     // central replicates to it, so it boots on the compiled defaults.
@@ -722,13 +808,7 @@ pub fn init_peripheral(
         engine(None, None),
         LogicalFrame::new(Rgb8::BLACK),
     );
-    let output = HalfOutput::right(LightingHardware::new(
-        spi,
-        data_pin,
-        chain_power_pin,
-        pwm,
-        status_led_pin,
-    ));
+    let output = HalfOutput::right(LightingHardware::new(spi, data_pin, chain_power_pin));
     LightingProcessor::new(service, output, &CORE_MAILBOX)
 }
 
@@ -879,7 +959,10 @@ impl PeripheralReplication {
             return;
         };
         if let crate::split_lighting::Message::EffectHit { slot } = message {
-            if slot.index() < LEDS_PER_HALF && HIT_QUEUE.record(slot.0 as u8) {
+            if LIGHTING_OUTPUT_ACTIVE.load(Ordering::Relaxed)
+                && slot.index() < LEDS_PER_HALF
+                && HIT_QUEUE.record(slot.0 as u8)
+            {
                 CORE_MAILBOX.snapshot_changed();
             }
             return;
@@ -947,7 +1030,7 @@ impl Runnable for PeripheralReplication {
         let mut link = rmk::split_app::SPLIT_APP_LINK
             .receiver()
             .expect("lighting replication owns one split-link receiver");
-        let mut heartbeat_at = embassy_time::Instant::now() + Duration::from_secs(10);
+        let mut heartbeat_at = embassy_time::Instant::now() + ATTESTATION_INTERVAL;
         loop {
             match embassy_futures::select::select3(
                 link.changed(),
@@ -973,7 +1056,7 @@ impl Runnable for PeripheralReplication {
                 }
                 embassy_futures::select::Either3::Second(message) => self.process(message).await,
                 embassy_futures::select::Either3::Third(()) => {
-                    heartbeat_at += Duration::from_secs(10);
+                    heartbeat_at += ATTESTATION_INTERVAL;
                     if rmk::split_app::SPLIT_APP_LINK.try_get() == Some(true) {
                         let _ = try_send_attestation(0);
                     }

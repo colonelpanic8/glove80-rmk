@@ -87,9 +87,12 @@ mod keyboard_central {
             p.SPI3,
             p.P0_27,
             p.P0_31,
-            p.PWM0,
-            p.P1_15,
         )
+    }
+
+    #[register_processor(runnable)]
+    fn lighting_output_activity() {
+        crate::lighting::lighting_output_activity()
     }
 
     /// Type-erased Rynk requests are translated into the standard engine's
@@ -140,7 +143,7 @@ mod keyboard_central {
     /// state is ever produced and `charge`-gated lighting rules never fire.
     #[register_processor(runnable)]
     fn lighting_power_monitor() {
-        crate::lighting::power_monitor()
+        crate::lighting::power_monitor(p.PWM0, p.P1_15)
     }
 
     /// Feed every key press to the local PaletteFx engine and mirror left-half

@@ -17,7 +17,12 @@ mod keyboard_peripheral {
     /// right half's stable slots to its physical chain.
     #[register_processor(runnable)]
     fn lighting_processor() {
-        crate::lighting::init_peripheral(p.SPI3, p.P0_13, p.P0_19, p.PWM0, p.P0_16)
+        crate::lighting::init_peripheral(p.SPI3, p.P0_13, p.P0_19)
+    }
+
+    #[register_processor(runnable)]
+    fn lighting_output_activity() {
+        crate::lighting::lighting_output_activity()
     }
 
     /// Render the native priority layer edge without waiting for bulk
@@ -42,7 +47,7 @@ mod keyboard_peripheral {
     /// VBUS-derived charge state.
     #[register_processor(runnable)]
     fn lighting_power_monitor() {
-        crate::lighting::power_monitor()
+        crate::lighting::power_monitor(p.PWM0, p.P0_16)
     }
 
     /// Feed right-half presses directly to PaletteFx. Left-half presses arrive
