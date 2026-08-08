@@ -528,8 +528,6 @@ impl Runnable for CentralReplication {
         let mut health = ReplicationHealth::Resynchronizing;
         let mut last_attested_at = None;
         let mut recovery = crate::split_lighting::AttestationRecovery::new();
-        let mut probe_pending = false;
-        let mut grace_at = None;
         let mut status_request_id = 0u8;
         // Backoff deadline after the split queue refused a transfer. A
         // deadline the select waits on, never an inline sleep: sleeping here
@@ -543,29 +541,10 @@ impl Runnable for CentralReplication {
             if retry_at.is_some_and(|at| at <= Instant::now()) {
                 retry_at = None;
             }
-            if link_up && probe_pending {
-                let probe = crate::split_lighting::Message::ReplicaProbe {
-                    generation: self.generation,
-                }
-                .encode();
-                if rmk::split_app::SPLIT_APP_TX.try_send(probe).is_ok() {
-                    probe_pending = false;
-                    grace_at = Some(Instant::now() + Duration::from_millis(300));
-                    status_request_id = status_request_id.wrapping_add(1);
-                    let _ = rmk::split_app::SPLIT_APP_TX.try_send(
-                        crate::split_lighting::Message::StatusRequest {
-                            request_id: status_request_id,
-                        }
-                        .encode(),
-                    );
-                }
-            }
             if link_up
                 && awaiting_ack.is_none()
                 && (full_dirty || context_dirty)
                 && retry_at.is_none()
-                && grace_at.is_none()
-                && !probe_pending
                 && health != ReplicationHealth::Halted
             {
                 let pending = if full_dirty {
@@ -609,7 +588,6 @@ impl Runnable for CentralReplication {
             let deadline = [
                 awaiting_ack.as_ref().map(|pending| pending.deadline),
                 retry_at,
-                grace_at,
             ]
             .into_iter()
             .flatten()
@@ -640,10 +618,13 @@ impl Runnable for CentralReplication {
                 Either4::First(up) => {
                     link_up = up;
                     awaiting_ack = None;
+                    // Replicate directly on reconnect. Probing first observes the
+                    // peripheral's necessarily stale pre-sync digest and feeds a
+                    // full-resync loop that can starve the hardware watchdog.
+                    last_acked_revision = None;
+                    full_dirty = up;
                     context_dirty = false;
                     retry_at = None;
-                    grace_at = None;
-                    probe_pending = up;
                     recovery.reset();
                     health = if up {
                         ReplicationHealth::Resynchronizing
@@ -685,36 +666,26 @@ impl Runnable for CentralReplication {
                             }
                             health = ReplicationHealth::Healthy;
                         }
-                        Ok(crate::split_lighting::Message::Attestation {
-                            generation,
-                            digests,
-                        }) => {
+                        Ok(crate::split_lighting::Message::Attestation { digests, .. }) => {
+                            // Attestation is diagnostic only. Normal mutations and
+                            // reconnects already drive bounded snapshot replication;
+                            // a mismatch must not recursively dirty another snapshot.
                             record_attestation(digests);
-                            match recovery.observe(expected_digests, digests) {
+                            last_attested_at = Some(Instant::now());
+                            health = match recovery.observe(expected_digests, digests) {
                                 crate::split_lighting::AttestationDecision::Matching => {
-                                    last_attested_at = Some(Instant::now());
-                                    last_acked_revision = Some(digests.revision);
-                                    health = ReplicationHealth::Healthy;
-                                    if generation == self.generation && !full_dirty {
-                                        grace_at = None;
-                                    }
+                                    ReplicationHealth::Healthy
                                 }
                                 crate::split_lighting::AttestationDecision::Recover => {
-                                    grace_at = None;
-                                    health = ReplicationHealth::Diverged;
-                                    full_dirty = true;
+                                    ReplicationHealth::Diverged
                                 }
                                 crate::split_lighting::AttestationDecision::Stale => {
-                                    grace_at = None;
-                                    health = ReplicationHealth::Stale;
-                                    full_dirty = true;
+                                    ReplicationHealth::Stale
                                 }
                                 crate::split_lighting::AttestationDecision::Halt => {
-                                    grace_at = None;
-                                    health = ReplicationHealth::Halted;
-                                    full_dirty = false;
+                                    ReplicationHealth::Diverged
                                 }
-                            }
+                            };
                         }
                         Ok(crate::split_lighting::Message::StatusReport {
                             applied_revision,
@@ -758,11 +729,6 @@ impl Runnable for CentralReplication {
                         .is_some_and(|pending| pending.deadline <= Instant::now())
                     {
                         awaiting_ack = None;
-                        full_dirty = link_up;
-                        health = ReplicationHealth::Resynchronizing;
-                    }
-                    if grace_at.is_some_and(|deadline| deadline <= Instant::now()) {
-                        grace_at = None;
                         full_dirty = link_up;
                         health = ReplicationHealth::Resynchronizing;
                     }
