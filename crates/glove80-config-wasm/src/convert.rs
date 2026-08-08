@@ -10,7 +10,8 @@ use glove80_config as model;
 use rynk::rmk_types::protocol::rynk::LightingExtensionState;
 
 use crate::types::{
-    BehaviorSnapshot, EffectParamWrite, ExtensionCatalog, LightingSnapshot, RuntimeSnapshot,
+    BehaviorSnapshot, EffectParamWrite, ExtensionCatalog, HoldTriggerPosition, LightingSnapshot,
+    RuntimeSnapshot,
 };
 
 /// The catalog restated as the model's advertised-parameter type. The model
@@ -75,6 +76,18 @@ pub fn snapshot_from_wire(
             config: snapshot.behaviors.config,
             options: snapshot.behaviors.options,
             morse_profiles: snapshot.behaviors.morse_profiles.clone(),
+            hold_trigger_positions: snapshot.behaviors.hold_trigger_positions.as_ref().map(
+                |positions| {
+                    positions
+                        .iter()
+                        .map(|position| model::HoldTriggerPosition {
+                            profile: position.profile,
+                            row: position.row,
+                            col: position.col,
+                        })
+                        .collect()
+                },
+            ),
             auto_mouse_layers: snapshot.behaviors.auto_mouse_layers.clone(),
             morses: snapshot.behaviors.morses.clone(),
             combos: snapshot.behaviors.combos.clone(),
@@ -162,6 +175,18 @@ pub fn snapshot_to_wire(
             config: snapshot.behaviors.config,
             options: snapshot.behaviors.options,
             morse_profiles: snapshot.behaviors.morse_profiles.clone(),
+            hold_trigger_positions: snapshot.behaviors.hold_trigger_positions.as_ref().map(
+                |positions| {
+                    positions
+                        .iter()
+                        .map(|position| HoldTriggerPosition {
+                            profile: position.profile,
+                            row: position.row,
+                            col: position.col,
+                        })
+                        .collect()
+                },
+            ),
             auto_mouse_layers: snapshot.behaviors.auto_mouse_layers.clone(),
             morses: snapshot.behaviors.morses.clone(),
             combos: snapshot.behaviors.combos.clone(),

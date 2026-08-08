@@ -24,6 +24,13 @@ pub const COLS: u8 = 14;
 pub const LAYER_SIZE: usize = ROWS as usize * COLS as usize;
 pub const HOLES: [usize; 4] = [5, 8, 75, 78];
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct HoldTriggerPosition {
+    pub profile: u8,
+    pub row: u8,
+    pub col: u8,
+}
+
 #[derive(Debug)]
 pub struct DiffFound;
 
@@ -132,6 +139,8 @@ pub struct MorseBehaviorConfig {
     pub prior_idle_ms: u16,
     #[serde(default)]
     pub default_profile: MorseProfileConfig,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub hold_trigger_key_positions: Vec<[u8; 2]>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub profiles: BTreeMap<String, MorseProfileConfig>,
 }
@@ -152,6 +161,7 @@ impl Default for MorseBehaviorConfig {
                 gap_timeout_ms: Some(250),
                 ..MorseProfileConfig::default()
             },
+            hold_trigger_key_positions: Vec::new(),
             profiles: BTreeMap::new(),
         }
     }
@@ -176,6 +186,8 @@ pub struct MorseProfileConfig {
     pub retro_tap: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hold_trigger_on_release: Option<bool>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub hold_trigger_key_positions: Vec<[u8; 2]>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mode: Option<String>,
 }
@@ -626,6 +638,7 @@ pub struct BehaviorSnapshot {
     pub config: Option<WireBehaviorConfig>,
     pub options: Option<WireBehaviorOptions>,
     pub morse_profiles: Option<Vec<MorseProfile>>,
+    pub hold_trigger_positions: Option<Vec<HoldTriggerPosition>>,
     pub auto_mouse_layers: Option<Vec<WireAutoMouseLayerConfig>>,
     pub morses: Option<Vec<rynk::rmk_types::morse::Morse>>,
     pub combos: Option<Vec<rynk::rmk_types::combo::Combo>>,
@@ -728,6 +741,20 @@ impl RuntimeConfig {
                     );
                 }
             }
+            for (location, positions) in
+                std::iter::once(("behavior.morse", &behavior.morse.hold_trigger_key_positions))
+                    .chain(behavior.morse.profiles.iter().map(|(name, profile)| {
+                        (name.as_str(), &profile.hold_trigger_key_positions)
+                    }))
+            {
+                for [row, col] in positions {
+                    if *row >= ROWS || *col >= COLS {
+                        bail!(
+                            "{location} hold trigger position [{row}, {col}] is outside the {ROWS}x{COLS} matrix"
+                        );
+                    }
+                }
+            }
         }
         let lighting = self
             .lighting
@@ -753,6 +780,28 @@ impl RuntimeConfig {
                             .collect::<Result<Vec<_>>>()
                     })
                     .transpose()?,
+                hold_trigger_positions: behavior.map(|behavior| {
+                    let mut positions = behavior
+                        .morse
+                        .hold_trigger_key_positions
+                        .iter()
+                        .map(|[row, col]| HoldTriggerPosition {
+                            profile: u8::MAX,
+                            row: *row,
+                            col: *col,
+                        })
+                        .collect::<Vec<_>>();
+                    for (profile, config) in behavior.morse.profiles.values().enumerate() {
+                        positions.extend(config.hold_trigger_key_positions.iter().map(
+                            |[row, col]| HoldTriggerPosition {
+                                profile: profile as u8,
+                                row: *row,
+                                col: *col,
+                            },
+                        ));
+                    }
+                    positions
+                }),
                 auto_mouse_layers: behavior
                     .map(|behavior| {
                         behavior
@@ -954,20 +1003,42 @@ impl BehaviorConfig {
         let config = snapshot.config?;
         let options = snapshot.options?;
         let default_profile = MorseProfileConfig::from_wire(options.morse_default_profile);
-        let mut profiles = BTreeMap::new();
-        for (index, profile) in snapshot
+        let hold_trigger_positions = snapshot
+            .hold_trigger_positions
+            .as_deref()
+            .unwrap_or_default();
+        let profile_count = snapshot
             .morse_profiles
             .as_deref()
             .unwrap_or_default()
-            .iter()
-            .copied()
-            .enumerate()
-        {
+            .len()
+            .max(
+                hold_trigger_positions
+                    .iter()
+                    .filter(|position| position.profile != u8::MAX)
+                    .map(|position| usize::from(position.profile) + 1)
+                    .max()
+                    .unwrap_or_default(),
+            );
+        let mut profiles = BTreeMap::new();
+        for index in 0..profile_count {
+            let profile = snapshot
+                .morse_profiles
+                .as_deref()
+                .and_then(|profiles| profiles.get(index))
+                .copied()
+                .unwrap_or(options.morse_default_profile);
             let name = labels
                 .and_then(|behavior| behavior.morse.profiles.keys().nth(index))
                 .cloned()
                 .unwrap_or_else(|| format!("profile_{index:03}"));
-            profiles.insert(name, MorseProfileConfig::from_wire(profile));
+            let mut config = MorseProfileConfig::from_wire(profile);
+            config.hold_trigger_key_positions = hold_trigger_positions
+                .iter()
+                .filter(|position| usize::from(position.profile) == index)
+                .map(|position| [position.row, position.col])
+                .collect();
+            profiles.insert(name, config);
         }
         Some(Self {
             combo_timeout_ms: config.combo_timeout_ms,
@@ -982,6 +1053,11 @@ impl BehaviorConfig {
                 enable_flow_tap: options.morse_enable_flow_tap,
                 prior_idle_ms: options.morse_prior_idle_ms,
                 default_profile,
+                hold_trigger_key_positions: hold_trigger_positions
+                    .iter()
+                    .filter(|position| position.profile == u8::MAX)
+                    .map(|position| [position.row, position.col])
+                    .collect(),
                 profiles,
             },
             auto_mouse_layers: snapshot
@@ -1027,6 +1103,7 @@ impl MorseProfileConfig {
             unilateral_tap: profile.unilateral_tap(),
             retro_tap: profile.retro_tap(),
             hold_trigger_on_release: profile.hold_trigger_on_release(),
+            hold_trigger_key_positions: Vec::new(),
             mode: profile.mode().map(|mode| match mode {
                 MorseMode::Normal => "normal".to_owned(),
                 MorseMode::PermissiveHold => "permissive-hold".to_owned(),
@@ -1589,6 +1666,12 @@ pub fn differences(desired: &Snapshot, live: &Snapshot) -> Vec<String> {
             "morse profiles",
             desired.behaviors.morse_profiles.is_some()
                 && desired.behaviors.morse_profiles != live.behaviors.morse_profiles,
+        ),
+        (
+            "morse hold trigger positions",
+            desired.behaviors.hold_trigger_positions.is_some()
+                && desired.behaviors.hold_trigger_positions
+                    != live.behaviors.hold_trigger_positions,
         ),
         (
             "auto mouse layers",
@@ -2599,6 +2682,56 @@ mod tests {
         assert!(matches!(parsed[4], KeyAction::TapHold(_, _, 0)));
         let rendered = render_key_actions(&parsed, &profiles);
         assert_eq!(parse_key_actions(&rendered, &profiles).unwrap(), parsed);
+    }
+
+    #[test]
+    fn hold_trigger_positions_round_trip_with_profile_names() {
+        let mut config = minimal_runtime_config(None);
+        let mut behavior = BehaviorConfig::default();
+        behavior.morse.hold_trigger_key_positions = vec![[2, 8], [3, 9]];
+        behavior.morse.profiles.insert(
+            "hrm_left".to_owned(),
+            MorseProfileConfig {
+                hold_trigger_key_positions: vec![[2, 1], [3, 2]],
+                ..MorseProfileConfig::default()
+            },
+        );
+        config.behavior = Some(behavior);
+
+        let snapshot = config.snapshot().unwrap();
+        assert_eq!(
+            snapshot.behaviors.hold_trigger_positions,
+            Some(vec![
+                HoldTriggerPosition {
+                    profile: u8::MAX,
+                    row: 2,
+                    col: 8,
+                },
+                HoldTriggerPosition {
+                    profile: u8::MAX,
+                    row: 3,
+                    col: 9,
+                },
+                HoldTriggerPosition {
+                    profile: 0,
+                    row: 2,
+                    col: 1,
+                },
+                HoldTriggerPosition {
+                    profile: 0,
+                    row: 3,
+                    col: 2,
+                },
+            ]),
+        );
+
+        let rebuilt = RuntimeConfig::from_snapshot(&snapshot, Some(&config));
+        let morse = &rebuilt.behavior.unwrap().morse;
+        assert_eq!(morse.hold_trigger_key_positions, vec![[2, 8], [3, 9]]);
+        assert_eq!(
+            morse.profiles["hrm_left"].hold_trigger_key_positions,
+            vec![[2, 1], [3, 2]]
+        );
     }
 
     #[test]
