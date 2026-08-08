@@ -96,6 +96,7 @@ pub struct BehaviorSnapshot {
     pub config: Option<WireBehaviorConfig>,
     pub options: Option<BehaviorOptions>,
     pub morse_profiles: Option<Vec<MorseProfile>>,
+    pub hold_trigger_positions: Option<Vec<HoldTriggerPosition>>,
     pub auto_mouse_layers: Option<Vec<AutoMouseLayerConfig>>,
     pub morses: Option<Vec<Morse>>,
     pub combos: Option<Vec<Combo>>,
@@ -106,6 +107,14 @@ pub struct BehaviorSnapshot {
     /// Forks: one key's output swapped while a modifier is held. Not addressed
     /// by index from a keymap cell — a fork matches the action it replaces.
     pub forks: Option<Vec<Fork>>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi)]
+pub struct HoldTriggerPosition {
+    pub profile: u8,
+    pub row: u8,
+    pub col: u8,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, Tsify)]

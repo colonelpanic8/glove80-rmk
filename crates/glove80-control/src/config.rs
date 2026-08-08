@@ -21,6 +21,7 @@ use rynk::rmk_types::protocol::rynk::{
     SetAutoMouseLayerConfigsRequest, SetKeymapBulkRequest, SetLightingExtensionLayersRequest,
     SetLightingExtensionParamRequest, SetLightingExtensionStateRequest,
     SetLightingLayerPolicyRequest, SetLightingOutputModeRequest, SetLightingStateRequest,
+    SetMorseHoldTriggerPositionsRequest,
 };
 use rynk::{Client, RynkHostError};
 
@@ -442,9 +443,33 @@ const MACRO_CHUNK: usize = rynk::rmk_types::constants::MACRO_DATA_SIZE;
 
 async fn read_behaviors(client: &Client) -> Result<BehaviorSnapshot> {
     let options = client.get_behavior_options().await.ok();
+    let hold_trigger_positions =
+        client
+            .get_morse_hold_trigger_positions()
+            .await
+            .ok()
+            .map(|state| {
+                state
+                    .positions
+                    .into_iter()
+                    .map(|position| glove80_config::HoldTriggerPosition {
+                        profile: position.profile,
+                        row: position.row,
+                        col: position.col,
+                    })
+                    .collect::<Vec<_>>()
+            });
     let mut morse_profiles = client.read_all_morse_profiles().await.ok();
     if let (Some(profiles), Some(options)) = (&mut morse_profiles, options) {
-        while profiles.last() == Some(&options.morse_default_profile) {
+        let required = hold_trigger_positions
+            .as_deref()
+            .unwrap_or_default()
+            .iter()
+            .filter(|position| position.profile != u8::MAX)
+            .map(|position| usize::from(position.profile) + 1)
+            .max()
+            .unwrap_or_default();
+        while profiles.len() > required && profiles.last() == Some(&options.morse_default_profile) {
             profiles.pop();
         }
     }
@@ -452,6 +477,7 @@ async fn read_behaviors(client: &Client) -> Result<BehaviorSnapshot> {
         config: client.get_behavior().await.ok(),
         options,
         morse_profiles,
+        hold_trigger_positions,
         auto_mouse_layers: client
             .get_auto_mouse_layer_configs()
             .await
@@ -511,6 +537,9 @@ fn claim_every_behavior_table(snapshot: &mut glove80_config::Snapshot) {
     let behaviors = &mut snapshot.behaviors;
     behaviors.morses.get_or_insert_with(Vec::new);
     behaviors.morse_profiles.get_or_insert_with(Vec::new);
+    behaviors
+        .hold_trigger_positions
+        .get_or_insert_with(Vec::new);
     behaviors.auto_mouse_layers.get_or_insert_with(Vec::new);
     behaviors.combos.get_or_insert_with(Vec::new);
     behaviors.forks.get_or_insert_with(Vec::new);
@@ -568,6 +597,25 @@ async fn apply_behaviors(
                 .write_all_morse_profiles(profiles)
                 .await
                 .context("could not write morse profiles")?;
+        }
+    }
+    if let Some(positions) = &desired.hold_trigger_positions {
+        if before.hold_trigger_positions.as_ref() != Some(positions) {
+            client
+                .set_morse_hold_trigger_positions(SetMorseHoldTriggerPositionsRequest {
+                    positions: positions
+                        .iter()
+                        .map(
+                            |position| rynk::rmk_types::protocol::rynk::MorseHoldTriggerPosition {
+                                profile: position.profile,
+                                row: position.row,
+                                col: position.col,
+                            },
+                        )
+                        .collect(),
+                })
+                .await
+                .context("could not write morse hold trigger positions")?;
         }
     }
     if let Some(configs) = &desired.auto_mouse_layers {
