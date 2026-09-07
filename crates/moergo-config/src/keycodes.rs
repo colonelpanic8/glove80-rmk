@@ -322,6 +322,7 @@ const EXTRA: &[(u16, &str, &[&str])] = &[
         "MAINT_LOCK_TOG",
         &["MAINT_TOG", "MAINTENANCE_MODE_TOGGLE"],
     ),
+    (0x7C05, "CTRL_GUI_TOG", &["CtrlGuiSwapToggle", "CG_TOGG"]),
     (0x7C16, "QK_GESC", &["QK_GRAVE_ESCAPE", "GRAVE_ESC"]),
     (0x7C18, "SC_LCPO", &["KC_LCPO"]),
     (0x7C19, "SC_RCPC", &["KC_RCPC"]),
