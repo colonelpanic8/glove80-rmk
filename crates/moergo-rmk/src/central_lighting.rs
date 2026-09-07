@@ -35,8 +35,8 @@ use rmk::types::protocol::rynk::{
 };
 
 use crate::lighting::{
-    BOOTLOADER_TAG, COMMAND_CAPACITY, CORE_MAILBOX, Engine, HalfOutput, LightingHardware,
-    OVERLAY_CAPACITY, REPLICA_SLOT, SCENE_CAPACITY,
+    BOOTLOADER_TAG, BorrowedEngine, COMMAND_CAPACITY, CORE_MAILBOX, Engine, HalfOutput,
+    LightingHardware, OVERLAY_CAPACITY, REPLICA_SLOT, SCENE_CAPACITY,
 };
 
 static RYNK_MAILBOX: RynkLightingMailbox = RynkLightingMailbox::new();
@@ -336,29 +336,33 @@ pub fn init<'keymap, 'data>(
 ) -> LightingProcessor<
     'static,
     KeymapLightingState<'keymap, 'data>,
-    Engine,
+    BorrowedEngine<Engine>,
     HalfOutput,
     COMMAND_CAPACITY,
 > {
     let provider = KeymapLightingState::new(keymap).expect("board layer count fits lighting state");
-    let mut engine = crate::lighting::engine(
+    let engine = crate::lighting::engine(
         persisted_extension,
         persisted_overlay,
         persisted_wake_layers,
     );
     install_lighting_scenes(
-        &mut engine,
+        engine,
         &crate::LIGHTING_TOPOLOGY,
         persisted_scenes,
         persisted_policy,
     );
     install_lighting_runtime_conditional_scenes(
-        &mut engine,
+        engine,
         &crate::LIGHTING_TOPOLOGY,
         persisted_runtime_conditional_scenes,
     );
-    let service = LightingService::new(provider, engine, LogicalFrame::new(Rgb8::BLACK))
-        .with_present_interval(crate::lighting::PRESENT_REFRESH_INTERVAL);
+    let service = LightingService::new(
+        provider,
+        BorrowedEngine(engine),
+        LogicalFrame::new(Rgb8::BLACK),
+    )
+    .with_present_interval(crate::lighting::PRESENT_REFRESH_INTERVAL);
     let output = HalfOutput::left(LightingHardware::new(spi, data_pin, chain_power_pin));
     LightingProcessor::new(service, output, &CORE_MAILBOX)
 }

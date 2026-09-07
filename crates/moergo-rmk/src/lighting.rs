@@ -31,7 +31,10 @@ use rmk_palettefx::rmk_lighting::{
     HitQueue, MAX_INITIAL_PARAMS, PaletteFxConfig, PaletteFxSource, TopologyLayout,
 };
 
+mod borrowed_engine;
 mod lighting_output;
+
+pub use borrowed_engine::BorrowedEngine;
 
 use lighting_output::{chain_should_power, frame_visible, limit_channel};
 
@@ -597,6 +600,22 @@ pub fn engine(
     persisted_extension: Option<LightingExtensionRecord>,
     persisted_overlay: Option<LightingExtensionOverlayRecord>,
     persisted_wake_layers: Option<u64>,
+) -> &'static mut Engine {
+    static ENGINE: static_cell::StaticCell<Engine> = static_cell::StaticCell::new();
+    ENGINE.init_with(|| {
+        make_engine(
+            persisted_extension,
+            persisted_overlay,
+            persisted_wake_layers,
+        )
+    })
+}
+
+#[inline(never)]
+fn make_engine(
+    persisted_extension: Option<LightingExtensionRecord>,
+    persisted_overlay: Option<LightingExtensionOverlayRecord>,
+    persisted_wake_layers: Option<u64>,
 ) -> Engine {
     // Effect index 7 used to mean the combined Storm effect and now means
     // Crosshair. Old Storm advertised at most six parameters, while every
@@ -955,12 +974,13 @@ pub fn init_peripheral(
     spi: Peri<'static, SPI3>,
     data_pin: Peri<'static, impl Pin>,
     chain_power_pin: Peri<'static, impl Pin>,
-) -> LightingProcessor<'static, PeripheralState, Engine, HalfOutput, COMMAND_CAPACITY> {
+) -> LightingProcessor<'static, PeripheralState, BorrowedEngine<Engine>, HalfOutput, COMMAND_CAPACITY>
+{
     // The peripheral never persists a selection: it renders whatever the
     // central replicates to it, so it boots on the compiled defaults.
     let service = LightingService::new(
         PeripheralState,
-        engine(None, None, None),
+        BorrowedEngine(engine(None, None, None)),
         LogicalFrame::new(Rgb8::BLACK),
     )
     .with_present_interval(PRESENT_REFRESH_INTERVAL);

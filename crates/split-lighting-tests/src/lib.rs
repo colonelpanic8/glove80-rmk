@@ -39,6 +39,11 @@ mod split_lighting;
 #[path = "../../moergo-rmk/src/lighting_output.rs"]
 mod lighting_output;
 
+#[path = "../../moergo-rmk/src/borrowed_engine.rs"]
+mod borrowed_engine;
+
+mod engine_tests;
+
 use lighting::BatteryPair;
 use split_lighting::{
     AttestationDecision, AttestationRecovery, DecodeError, FrameChunkDecision, FramePageAssembly,

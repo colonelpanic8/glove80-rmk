@@ -1525,6 +1525,7 @@ dependencies = [
 name = "split-lighting-tests"
 version = "0.0.0"
 dependencies = [
+ "critical-section",
  "rmk",
 ]
 
