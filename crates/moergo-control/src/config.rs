@@ -377,6 +377,8 @@ async fn read_snapshot(client: &Client) -> Result<Snapshot> {
                         cell,
                         connection: None,
                         effects: None,
+                        layers: None,
+                        indicators: None,
                     })
                 })
                 .collect::<Vec<_>>(),

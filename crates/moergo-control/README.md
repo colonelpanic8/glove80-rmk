@@ -156,6 +156,32 @@ anything after it could never show and is rejected. The fallback lowers to a
 durable scene cell and conditional arms to conditional rules, which is exactly
 the compositor's own priority order.
 
+Two conditions look past the key's own layer. `layers` gates on a set of
+layers at once — every layer in `active` held and none in `inactive` — which
+is how a status layer shows which *other* layers are on while it is held.
+`indicators` gates on the host's caps, num, and scroll lock:
+
+```toml
+[[layer.key]]
+key = [1, 3]
+color = "#000000"
+
+[[layer.key.rule]]
+when = { layers = { active = [3] } }
+color = "#ff00ff"
+
+[[layer.key]]
+key = [0, 2]
+color = "#000000"
+
+[[layer.key.rule]]
+when = { indicators = { caps_lock = true } }
+color = "#ff0000"
+```
+
+Standalone `[[lighting.conditional_scene]]` entries accept the same two
+fields.
+
 An entry with only an `action` is a binding; one with only lighting is a scene
 written next to the layer it belongs to, which is also what saves repeating
 `layer = N` on every cell. Emitters that belong to no key — underglow,

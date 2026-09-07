@@ -13,7 +13,8 @@ use rmk::lighting::compositor::{ExtensionLayerState, ExtensionState};
 use rmk::lighting::standard::{EXTENSION_PARAM_CHUNK, ExtensionReplicaParams};
 use rmk::lighting::{
     ActiveTransport, BackgroundMode, BackgroundState, BatteryCondition, BondedSlotCondition,
-    BuiltinEffect, ChargeCondition, ConditionSet, ConnectionCondition, EffectsCondition,
+    BuiltinEffect, ChargeCondition, ConditionSet, ConnectionCondition, EffectsCondition, IndicatorCondition,
+    LayersCondition,
     FRAME_CHUNK_SIZE, IndicatorState, LayerCondition, LayerPolicy, LayerState, LedSlot,
     LightingContext, OutputMode, OverlayBatch, OverlayCell, Rgb8, RuntimeConditionalSceneCell,
     RuntimeConditionalSceneTable, SceneTable, SceneTableCell, StandardMutableState,
@@ -22,7 +23,7 @@ use rmk::lighting::{
 use rmk::split_app::{SPLIT_APP_MSG_MAX, SplitAppData};
 use rmk::types::battery::{BatteryStatus, ChargeState};
 use rmk::types::ble::BleState;
-use rmk::types::protocol::rynk::LIGHTING_REPLICA_DIGEST_SCHEMA_V1;
+use rmk::types::protocol::rynk::LIGHTING_REPLICA_DIGEST_SCHEMA_V2;
 
 use crate::lighting::{BatteryPair, LEDS_PER_HALF, OVERLAY_CAPACITY, SCENE_CAPACITY, TOTAL_LEDS};
 
@@ -76,6 +77,9 @@ const TAG_TRANSPORT_STATUS: u8 = 21;
 /// app mode. Additive like the other side-band tags.
 const TAG_DEBUG_TRACE: u8 = 22;
 const TAG_DEBUG_PANIC_LOC: u8 = 23;
+/// Second amendment to a staged conditional cell: its layers and indicator
+/// predicates, which the first amendment's byte budget cannot hold.
+const TAG_CONDITIONAL_SCENE_EXT2: u8 = 24;
 
 const BEGIN_LEN: usize = 26;
 const WAKE_LAYERS_LEN: usize = 15;
@@ -89,6 +93,7 @@ const SCENE_CELL_LEN: usize = 23;
 const CONDITIONAL_SCENE_BEGIN_LEN: usize = 8;
 const CONDITIONAL_SCENE_CELL_LEN: usize = 26;
 const CONDITIONAL_SCENE_EXT_LEN: usize = 11;
+const CONDITIONAL_SCENE_EXT2_LEN: usize = 24;
 const COMMIT_LEN: usize = 9;
 const ACK_LEN: usize = 7;
 const EFFECT_HIT_LEN: usize = 3;
@@ -108,6 +113,7 @@ const _: () = assert!(EXTENSION_LEN <= SPLIT_APP_MSG_MAX);
 const _: () = assert!(EXTENSION_OVERLAY_LEN <= SPLIT_APP_MSG_MAX);
 const _: () = assert!(CONDITIONAL_SCENE_CELL_LEN <= SPLIT_APP_MSG_MAX);
 const _: () = assert!(CONDITIONAL_SCENE_EXT_LEN <= SPLIT_APP_MSG_MAX);
+const _: () = assert!(CONDITIONAL_SCENE_EXT2_LEN <= SPLIT_APP_MSG_MAX);
 const _: () = assert!(ATTESTATION_LEN <= SPLIT_APP_MSG_MAX);
 const _: () = assert!(STATUS_REPORT_LEN <= SPLIT_APP_MSG_MAX);
 const _: () = assert!(FRAME_CHUNK_LEN <= SPLIT_APP_MSG_MAX);
@@ -226,6 +232,15 @@ pub enum Message {
         revision: u32,
         connection: Option<ConnectionCondition>,
         effects: Option<EffectsCondition>,
+    },
+    /// Amends the most recently staged conditional-scene cell with its
+    /// layers and indicator conditions; sent after that cell's packet and
+    /// after its `ConditionalSceneExt`, when either predicate is present.
+    ConditionalSceneExt2 {
+        generation: u8,
+        revision: u32,
+        layers: Option<LayersCondition>,
+        indicators: Option<IndicatorCondition>,
     },
     Commit {
         generation: u8,
@@ -788,6 +803,37 @@ impl Message {
                 };
                 CONDITIONAL_SCENE_EXT_LEN
             }
+            Message::ConditionalSceneExt2 {
+                generation,
+                revision,
+                layers,
+                indicators,
+            } => {
+                out[1] = TAG_CONDITIONAL_SCENE_EXT2;
+                out[2] = generation;
+                put_u32(&mut out, 3, revision);
+                // Bit 7: layers present. Bit 6: indicators present. Then one
+                // present/wanted bit pair per lock: num at 0-1, caps at 2-3,
+                // scroll at 4-5.
+                let mut flags = if layers.is_some() { 0x80 } else { 0 };
+                if let Some(indicators) = indicators {
+                    flags |= 0x40;
+                    for (shift, lock) in [
+                        (0, indicators.num_lock),
+                        (2, indicators.caps_lock),
+                        (4, indicators.scroll_lock),
+                    ] {
+                        if let Some(wanted) = lock {
+                            flags |= (0x01 | (wanted as u8) << 1) << shift;
+                        }
+                    }
+                }
+                out[7] = flags;
+                let layers = layers.unwrap_or_default();
+                put_u64(&mut out, 8, layers.active);
+                put_u64(&mut out, 16, layers.inactive);
+                CONDITIONAL_SCENE_EXT2_LEN
+            }
             Message::Commit {
                 generation,
                 revision,
@@ -1190,6 +1236,8 @@ impl Message {
                             // packet, which is sent when either is present.
                             connection: None,
                             effects: None,
+                            layers: None,
+                            indicators: None,
                         },
                         slot: LedSlot(slot as u16),
                         effect,
@@ -1252,6 +1300,25 @@ impl Message {
                     effects: (gates & 0x20 != 0).then_some(EffectsCondition {
                         enabled: gates & 0x10 != 0,
                     }),
+                })
+            }
+            TAG_CONDITIONAL_SCENE_EXT2 if bytes.len() == CONDITIONAL_SCENE_EXT2_LEN => {
+                let flags = bytes[7];
+                let layers = (flags & 0x80 != 0).then(|| LayersCondition {
+                    active: get_u64(bytes, 8),
+                    inactive: get_u64(bytes, 16),
+                });
+                let lock = |shift: u8| ((flags >> shift) & 0x01 != 0).then_some((flags >> shift) & 0x02 != 0);
+                let indicators = (flags & 0x40 != 0).then(|| IndicatorCondition {
+                    num_lock: lock(0),
+                    caps_lock: lock(2),
+                    scroll_lock: lock(4),
+                });
+                Ok(Message::ConditionalSceneExt2 {
+                    generation: bytes[2],
+                    revision: get_u32(bytes, 3),
+                    layers,
+                    indicators,
                 })
             }
             TAG_COMMIT if bytes.len() == COMMIT_LEN => Ok(Message::Commit {
@@ -1358,6 +1425,7 @@ impl Message {
             | TAG_CONDITIONAL_SCENE_BEGIN
             | TAG_CONDITIONAL_SCENE_CELL
             | TAG_CONDITIONAL_SCENE_EXT
+            | TAG_CONDITIONAL_SCENE_EXT2
             | TAG_EFFECT_HIT
             | TAG_CONTEXT_UPDATE
             | TAG_ATTESTATION
@@ -1401,7 +1469,7 @@ impl Fnv32 {
 
     fn domain(domain: u8) -> Self {
         let mut hash = Self(Self::OFFSET);
-        hash.byte(LIGHTING_REPLICA_DIGEST_SCHEMA_V1);
+        hash.byte(LIGHTING_REPLICA_DIGEST_SCHEMA_V2);
         hash.byte(domain);
         hash
     }
@@ -1518,6 +1586,17 @@ fn hash_conditions(hash: &mut Fnv32, conditions: ConditionSet) {
     if let Some(effects) = conditions.effects {
         hash.byte(effects.enabled as u8);
     }
+    hash.byte(conditions.layers.is_some() as u8);
+    if let Some(layers) = conditions.layers {
+        hash.bytes(&layers.active.to_le_bytes());
+        hash.bytes(&layers.inactive.to_le_bytes());
+    }
+    hash.byte(conditions.indicators.is_some() as u8);
+    if let Some(indicators) = conditions.indicators {
+        for lock in [indicators.num_lock, indicators.caps_lock, indicators.scroll_lock] {
+            hash.bytes(&[lock.is_some() as u8, lock.unwrap_or(false) as u8]);
+        }
+    }
 }
 
 /// Canonical FNV-1a-32 digests of the durable right-half projection.
@@ -1625,7 +1704,7 @@ pub fn replica_digests(
     }
 
     ReplicaDigests {
-        schema: LIGHTING_REPLICA_DIGEST_SCHEMA_V1,
+        schema: LIGHTING_REPLICA_DIGEST_SCHEMA_V2,
         revision: snapshot.revision,
         settings: settings.0,
         overlay: overlay.0,
@@ -1762,6 +1841,16 @@ fn walk_snapshot(
                 revision: snapshot.revision,
                 connection: conditions.connection,
                 effects: conditions.effects,
+            })
+        {
+            return false;
+        }
+        if (conditions.layers.is_some() || conditions.indicators.is_some())
+            && !sink(Message::ConditionalSceneExt2 {
+                generation,
+                revision: snapshot.revision,
+                layers: conditions.layers,
+                indicators: conditions.indicators,
             })
         {
             return false;
@@ -2083,6 +2172,30 @@ stage_abort(8);
                         .is_some();
                 if !amended {
 stage_abort(9);
+                    self.stage = None;
+                }
+                None
+            }
+            Message::ConditionalSceneExt2 {
+                generation,
+                revision,
+                layers,
+                indicators,
+            } => {
+                let stage = self.stage.as_mut()?;
+                let amended = stage.generation == generation
+                    && stage.snapshot.revision == revision
+                    && stage
+                        .snapshot
+                        .runtime_conditional_scenes
+                        .last_conditions_mut()
+                        .map(|conditions| {
+                            conditions.layers = layers;
+                            conditions.indicators = indicators;
+                        })
+                        .is_some();
+                if !amended {
+                    stage_abort(13);
                     self.stage = None;
                 }
                 None

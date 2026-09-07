@@ -20,10 +20,10 @@ use rynk::rmk_types::protocol::rynk::{
     LightingBatteryCondition, LightingBondedSlotCondition, LightingChargeCondition,
     LightingConditionSet, LightingConditionalSceneCell, LightingConnectionCondition,
     LightingEffect, LightingEffectsCondition, LightingExtendedConditionalSceneCell,
-    LightingExtensionState, LightingLayerCondition, LightingLayerPolicy, LightingLedId,
-    LightingMatrixPosition, LightingNodeId, LightingOutputMode, LightingRgb8, LightingSceneCell,
-    LightingZoneId, PointingConfig as WirePointingConfig,
-    PointingDeviceConfig as WirePointingDeviceConfig,
+    LightingExtensionState, LightingIndicatorCondition, LightingLayerCondition,
+    LightingLayerPolicy, LightingLayersCondition, LightingLedId, LightingMatrixPosition,
+    LightingNodeId, LightingOutputMode, LightingRgb8, LightingSceneCell, LightingZoneId,
+    PointingConfig as WirePointingConfig, PointingDeviceConfig as WirePointingDeviceConfig,
     PointingLayerOverride as WirePointingLayerOverride, BLE_NAME_MAX_LEN, LAYER_NAME_MAX_LEN,
 };
 use rynk::{KeyId, KeyTopology, LogicalKey};
@@ -547,6 +547,8 @@ impl LayerConfig {
                                 output_mode: when.output_mode,
                                 connection: when.connection,
                                 effects: when.effects,
+                                layers: when.layers.clone(),
+                                indicators: when.indicators,
                             });
                         }
                     }
@@ -651,7 +653,7 @@ fn is_solid(effect: &EffectKind) -> bool {
 }
 
 /// The conditions a layer-attached rule adds to its layer's own.
-#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct KeyConditionConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -662,6 +664,10 @@ pub struct KeyConditionConfig {
     pub connection: Option<ConnectionConditionConfig>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub effects: Option<EffectsConditionConfig>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub layers: Option<LayersConditionConfig>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub indicators: Option<IndicatorConditionConfig>,
 }
 
 impl LayerKeyConfig {
@@ -1221,12 +1227,56 @@ pub struct ConditionalSceneConfig {
     /// its own state.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub effects: Option<EffectsConditionConfig>,
+    /// Gate on several layers at once. `layer` watches one layer, so this is
+    /// how a status layer shows which other layers are held while it is.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub layers: Option<LayersConditionConfig>,
+    /// Gate on the host's caps, num, and scroll lock indicators.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub indicators: Option<IndicatorConditionConfig>,
 }
 
 /// Gate a rule on the extension band being on or off.
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub struct EffectsConditionConfig {
     pub enabled: bool,
+}
+
+/// Gate a rule on a set of layers: every layer in `active` must be active
+/// and every layer in `inactive` must not be.
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct LayersConditionConfig {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub active: Vec<u8>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub inactive: Vec<u8>,
+}
+
+/// Highest layer a layer-set condition can name: the mask is 64 bits wide.
+const MAX_LAYER_BIT: u8 = 63;
+
+fn layer_mask(layers: &[u8]) -> u64 {
+    layers.iter().fold(0, |mask, layer| mask | 1_u64 << layer)
+}
+
+fn layer_list(mask: u64) -> Vec<u8> {
+    (0..=MAX_LAYER_BIT)
+        .filter(|layer| mask & 1_u64 << layer != 0)
+        .collect()
+}
+
+/// Gate a rule on the host's lock indicators. Each named lock must match;
+/// an unnamed one is ignored.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct IndicatorConditionConfig {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub num_lock: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub caps_lock: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scroll_lock: Option<bool>,
 }
 
 /// Gate a rule on the keyboard's live connection state. Every named field
@@ -3562,6 +3612,42 @@ pub fn validate_conditional_scene(index: usize, cell: &ConditionalSceneConfig) -
             );
         }
     }
+    if let Some(layers) = &cell.layers {
+        if layers.active.is_empty() && layers.inactive.is_empty() {
+            bail!(
+                "conditional rule {index} ({}) has a layers condition that names no layer",
+                cell.target
+            );
+        }
+        if let Some(layer) = layers
+            .active
+            .iter()
+            .chain(&layers.inactive)
+            .find(|layer| **layer > MAX_LAYER_BIT)
+        {
+            bail!(
+                "conditional rule {index} ({}) names layer {layer} past the layer-set limit (0-{MAX_LAYER_BIT})",
+                cell.target
+            );
+        }
+        if layer_mask(&layers.active) & layer_mask(&layers.inactive) != 0 {
+            bail!(
+                "conditional rule {index} ({}) wants a layer both active and inactive",
+                cell.target
+            );
+        }
+    }
+    if let Some(indicators) = cell.indicators {
+        if indicators.num_lock.is_none()
+            && indicators.caps_lock.is_none()
+            && indicators.scroll_lock.is_none()
+        {
+            bail!(
+                "conditional rule {index} ({}) has an indicators condition that names no lock",
+                cell.target
+            );
+        }
+    }
     Ok(())
 }
 
@@ -3688,11 +3774,22 @@ pub fn conditional_scene_from_wire(
     let effects = extended
         .effects
         .map(|c| EffectsConditionConfig { enabled: c.enabled });
+    let layers = extended.layers.map(|c| LayersConditionConfig {
+        active: layer_list(c.active),
+        inactive: layer_list(c.inactive),
+    });
+    let indicators = extended.indicators.map(|c| IndicatorConditionConfig {
+        num_lock: c.num_lock,
+        caps_lock: c.caps_lock,
+        scroll_lock: c.scroll_lock,
+    });
     let cell = extended.cell;
     let (color, effect, period_ms, phase_ms, duty, step_ms) = effect_from_wire(cell.effect);
     ConditionalSceneConfig {
         connection,
         effects,
+        layers,
+        indicators,
         target: KeyTargetConfig::led(cell.led_id.0),
         color: format!("#{:02x}{:02x}{:02x}", color.r, color.g, color.b),
         effect,
@@ -3826,6 +3923,15 @@ pub fn conditional_scene_to_wire(
         effects: cell
             .effects
             .map(|c| LightingEffectsCondition { enabled: c.enabled }),
+        layers: cell.layers.as_ref().map(|c| LightingLayersCondition {
+            active: layer_mask(&c.active),
+            inactive: layer_mask(&c.inactive),
+        }),
+        indicators: cell.indicators.map(|c| LightingIndicatorCondition {
+            num_lock: c.num_lock,
+            caps_lock: c.caps_lock,
+            scroll_lock: c.scroll_lock,
+        }),
     })
 }
 
@@ -5211,6 +5317,8 @@ Density = 6
             battery: None,
             output_mode: None,
             effects: None,
+            layers: None,
+            indicators: None,
         };
         let snapshot = |cells: Vec<ConditionalSceneConfig>| {
             let mut snap = lighting_snapshot(None, None);
@@ -5294,6 +5402,8 @@ Density = 6
                 }),
                 output_mode: None,
                 effects: None,
+                layers: None,
+                indicators: None,
             }]);
             Snapshot {
                 rows: ROWS,
@@ -5395,10 +5505,50 @@ Density = 6
             }),
             output_mode: None,
             effects: None,
+            layers: None,
+            indicators: None,
         };
         let wire = conditional_scene_to_wire(&cell).unwrap();
         assert_eq!(conditional_scene_from_wire(wire), cell);
         assert!(validate_conditional_scene(0, &cell).is_ok());
+
+        cell.layers = Some(LayersConditionConfig {
+            active: vec![2, 5],
+            inactive: vec![3],
+        });
+        cell.indicators = Some(IndicatorConditionConfig {
+            num_lock: None,
+            caps_lock: Some(true),
+            scroll_lock: Some(false),
+        });
+        let wire = conditional_scene_to_wire(&cell).unwrap();
+        assert_eq!(
+            wire.layers.map(|layers| (layers.active, layers.inactive)),
+            Some((0b10_0100, 0b1000))
+        );
+        assert_eq!(conditional_scene_from_wire(wire), cell);
+        assert!(validate_conditional_scene(0, &cell).is_ok());
+
+        let mut both = cell.clone();
+        both.layers = Some(LayersConditionConfig {
+            active: vec![2],
+            inactive: vec![2],
+        });
+        assert!(validate_conditional_scene(0, &both).is_err());
+        let mut none = cell.clone();
+        none.layers = Some(LayersConditionConfig::default());
+        assert!(validate_conditional_scene(0, &none).is_err());
+        let mut past = cell.clone();
+        past.layers = Some(LayersConditionConfig {
+            active: vec![64],
+            inactive: Vec::new(),
+        });
+        assert!(validate_conditional_scene(0, &past).is_err());
+        let mut no_lock = cell.clone();
+        no_lock.indicators = Some(IndicatorConditionConfig::default());
+        assert!(validate_conditional_scene(0, &no_lock).is_err());
+        cell.layers = None;
+        cell.indicators = None;
 
         cell.connection = Some(ConnectionConditionConfig {
             transport: Some(TransportConfig::Ble),
