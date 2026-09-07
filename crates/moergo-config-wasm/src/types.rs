@@ -11,7 +11,7 @@ use rynk::rmk_types::combo::ComboDefinition;
 use rynk::rmk_types::fork::Fork;
 use rynk::rmk_types::morse::Morse;
 use rynk::rmk_types::protocol::rynk::{
-    BehaviorConfig as WireBehaviorConfig, BehaviorOptions, LayerMetadata, LightingBackgroundState,
+    BehaviorConfig, BehaviorOptions, LayerMetadata, LightingBackgroundState,
     LightingExtendedConditionalSceneCell, LightingExtensionParam, LightingExtensionState,
     LightingLayerPolicy, LightingOutputMode, LightingSceneCell, MorseProfileEntry, PointingConfig,
 };
@@ -103,7 +103,7 @@ pub struct RuntimeSnapshot {
 #[derive(Clone, Debug, Default, Deserialize, Serialize, Tsify)]
 #[tsify(into_wasm_abi, from_wasm_abi)]
 pub struct BehaviorSnapshot {
-    pub config: Option<WireBehaviorConfig>,
+    pub config: Option<BehaviorConfig>,
     pub options: Option<BehaviorOptions>,
     pub morse_profiles: Option<Vec<MorseProfileEntry>>,
     pub hold_trigger_positions: Option<Vec<HoldTriggerPosition>>,
