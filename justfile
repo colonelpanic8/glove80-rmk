@@ -3,7 +3,6 @@ default:
 
 fmt:
   cargo fmt -p moergo-config -p moergo-config-wasm -p moergo-control -p xtask
-  cargo fmt --manifest-path crates/moergo-rmk/Cargo.toml
   cargo fmt --manifest-path crates/glove80-rmk/Cargo.toml
   cargo fmt --manifest-path crates/go60-rmk/Cargo.toml
   cargo fmt --manifest-path crates/split-lighting-tests/Cargo.toml

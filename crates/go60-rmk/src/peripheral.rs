@@ -81,21 +81,22 @@ pub fn debug_trace_parts() -> (u32, u32, [u32; 2], [u32; 2]) {
     // is actually being used to diagnose. Counts that can run into the
     // thousands get a full word; the rest share one, 16 bits each.
     let (stage, boots, _rr, _cause) = crate::panic_store::trace_parts();
-    let (rx_bytes, frames_ok, frames_bad, tx_frames, tx_done, err_and_cancel) = ::rmk::split::serial::counters::snapshot();
+    let (rx_bytes, frames_ok, frames_bad, tx_frames, tx_done, err_and_cancel) =
+        ::rmk::split::serial::counters::snapshot();
     let half = |v: u32| v.min(0xffff);
     // Lane drops replace selector entries in this slot: a refused key event
     // or diagnostic leaves no other trace, while transport flapping is now
     // visible through the TransportStatus announcements themselves.
-    let drops_and_bad = (half(::rmk::split::serial::counters::LANE_DROPS.load(
-        core::sync::atomic::Ordering::Relaxed,
-    )) << 16)
+    let drops_and_bad = (half(
+        ::rmk::split::serial::counters::LANE_DROPS.load(core::sync::atomic::Ordering::Relaxed),
+    ) << 16)
         | half(frames_bad);
     let tx = (half(tx_frames) << 16) | half(tx_done);
     let _ = (frames_ok, err_and_cancel);
-    let stage_debug = crate::split_lighting::STAGE_DEBUG.load(core::sync::atomic::Ordering::Relaxed);
+    let stage_debug =
+        crate::split_lighting::STAGE_DEBUG.load(core::sync::atomic::Ordering::Relaxed);
     (stage, boots, [drops_and_bad, tx], [rx_bytes, stage_debug])
 }
-
 
 pub fn debug_panic_loc() -> Option<heapless::String<{ crate::panic_store::REPORT_CAP }>> {
     crate::panic_store::raw_report_loc()

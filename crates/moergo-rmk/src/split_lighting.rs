@@ -1850,7 +1850,10 @@ fn stage_abort(site: u32) {
     use core::sync::atomic::Ordering;
     let v = STAGE_DEBUG.load(Ordering::Relaxed);
     let aborts = ((v >> 16) & 0xff).wrapping_add(1) & 0xff;
-    STAGE_DEBUG.store((v & 0x0000_ffff) | (site << 24) | (aborts << 16), Ordering::Relaxed);
+    STAGE_DEBUG.store(
+        (v & 0x0000_ffff) | (site << 24) | (aborts << 16),
+        Ordering::Relaxed,
+    );
 }
 
 pub struct SnapshotStage {
@@ -1919,7 +1922,7 @@ impl SnapshotStage {
             } => {
                 let stage = self.stage.as_mut()?;
                 if stage.generation != generation || stage.snapshot.revision != revision {
-stage_abort(1);
+                    stage_abort(1);
                     self.stage = None;
                 } else {
                     stage.snapshot.wake_layers = wake_layers;
@@ -1935,7 +1938,7 @@ stage_abort(1);
             } => {
                 let stage = self.stage.as_mut()?;
                 if stage.generation != generation || stage.snapshot.revision != revision {
-stage_abort(2);
+                    stage_abort(2);
                     self.stage = None;
                     return None;
                 }
@@ -1952,7 +1955,7 @@ stage_abort(2);
             } => {
                 let stage = self.stage.as_mut()?;
                 if stage.generation != generation || stage.snapshot.revision != revision {
-stage_abort(3);
+                    stage_abort(3);
                     self.stage = None;
                     return None;
                 }
@@ -1969,7 +1972,7 @@ stage_abort(3);
             } => {
                 let stage = self.stage.as_mut()?;
                 if stage.generation != generation || stage.snapshot.revision != revision {
-stage_abort(4);
+                    stage_abort(4);
                     self.stage = None;
                     return None;
                 }
@@ -1995,7 +1998,7 @@ stage_abort(4);
                         .any(|existing| existing.slot == cell.slot)
                     || stage.snapshot.overlay.push(cell).is_err()
                 {
-stage_abort(5);
+                    stage_abort(5);
                     self.stage = None;
                 }
                 None
@@ -2016,7 +2019,7 @@ stage_abort(5);
                         .any(|existing| existing.layer == cell.layer && existing.slot == cell.slot)
                     || stage.snapshot.scenes.set(cell).is_err()
                 {
-stage_abort(6);
+                    stage_abort(6);
                     self.stage = None;
                 }
                 None
@@ -2031,7 +2034,7 @@ stage_abort(6);
                     || stage.snapshot.revision != revision
                     || cell_count as usize > SCENE_CAPACITY
                 {
-stage_abort(7);
+                    stage_abort(7);
                     self.stage = None;
                 } else {
                     stage.expected_conditional_scene_cells = Some(cell_count as usize);
@@ -2058,7 +2061,7 @@ stage_abort(7);
                         .push(cell)
                         .is_err()
                 {
-stage_abort(8);
+                    stage_abort(8);
                     self.stage = None;
                 }
                 None
@@ -2082,7 +2085,7 @@ stage_abort(8);
                         })
                         .is_some();
                 if !amended {
-stage_abort(9);
+                    stage_abort(9);
                     self.stage = None;
                 }
                 None
@@ -2129,8 +2132,6 @@ stage_abort(9);
             | Message::FrameChunkRequest { .. }
             | Message::FrameChunk { .. }
             | Message::TransportStatus { .. }
-            | Message::DebugTrace { .. }
-            | Message::DebugPanicLoc { .. }
             | Message::DebugTrace { .. }
             | Message::DebugPanicLoc { .. }
             | Message::ContextUpdate { .. } => None,
