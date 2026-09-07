@@ -62,6 +62,26 @@ Boards may register typed, namespaced device data through Rynk. The Go60 uses
 this for its automatic split policy, active wired/BLE transport, and cable
 detect state; query it with `moergo-control device-data` for JSON output.
 
+## BLE reconnect advertising
+
+Both boards advertise to the host every 30 ms for five seconds, then back off to
+200 ms until the existing advertising timeout. A new advertising attempt after
+boot, disconnect, profile selection, or waking from advertising-timeout sleep
+starts a fresh fast window. Split and dongle advertising timing is unchanged.
+
+The board `keyboard.toml` files expose these compiled settings under `[ble]`:
+
+```toml
+advertising_fast_interval_ms = 30
+advertising_slow_interval_ms = 200
+advertising_fast_timeout_secs = 5
+```
+
+Intervals must be 20–10240 ms, with the fast interval no larger than the slow
+interval. Set the timeout to zero to use only the slow interval. These are
+firmware settings: changing them requires a rebuild and flash, and does not
+change the connected keyboard's report rate.
+
 ## Board parity
 
 Shared behavior belongs in `crates/moergo-rmk`. A board crate should contain

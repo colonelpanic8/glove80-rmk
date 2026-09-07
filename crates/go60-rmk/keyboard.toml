@@ -164,6 +164,9 @@ num_sectors = 8
 
 [ble]
 enabled = true
+advertising_fast_interval_ms = 30
+advertising_slow_interval_ms = 200
+advertising_fast_timeout_secs = 5
 
 [host]
 vial_enabled = false
