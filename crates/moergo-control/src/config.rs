@@ -287,38 +287,7 @@ async fn read_snapshot(client: &Client) -> Result<Snapshot> {
     let rows = capabilities.num_rows;
     let cols = capabilities.num_cols;
     let layer_size = usize::from(rows) * usize::from(cols);
-    if layer_size == 0 {
-        bail!("device reports an empty {rows}x{cols} matrix");
-    }
-    // The bulk read is an optimization, so a device that advertises it but
-    // cannot deliver a decodable response falls back to reading key by key
-    // rather than failing the whole command. Firmware carrying a keymap
-    // written by an older keycode table can land in exactly that state.
-    let bulk = if capabilities.bulk_transfer_supported {
-        match client.read_all_keymap().await {
-            Ok(actions) => Some(actions),
-            Err(error) => {
-                eprintln!("bulk keymap read failed ({error}); falling back to key-by-key");
-                None
-            }
-        }
-    } else {
-        None
-    };
-    let actions = match bulk {
-        Some(actions) => actions,
-        None => {
-            let mut actions = Vec::new();
-            for layer in 0..capabilities.num_layers {
-                for row in 0..rows {
-                    for col in 0..cols {
-                        actions.push(client.get_key(layer, row, col).await?);
-                    }
-                }
-            }
-            actions
-        }
-    };
+    let actions = crate::rynk_client::read_all_actions(client, &capabilities).await?;
     let layers = actions
         .chunks(layer_size)
         .map(|actions| actions.to_vec())
@@ -422,10 +391,7 @@ async fn read_snapshot(client: &Client) -> Result<Snapshot> {
     Ok(Snapshot {
         rows,
         cols,
-        bluetooth_name: client
-            .get_ble_name()
-            .await
-            .ok()
+        bluetooth_name: optional_endpoint(client.get_ble_name().await)?
             .map(|name| name.template.as_str().to_owned()),
         default_layer: client.get_default_layer().await?,
         layers,
@@ -1322,6 +1288,20 @@ mod tests {
     use rynk::rmk_types::protocol::rynk::{
         PointingDeviceConfig, POINTING_MODE_CURSOR_REMAP, POINTING_MODE_KEYPAD,
     };
+
+    #[test]
+    fn optional_endpoints_do_not_hide_transport_failures() {
+        assert_eq!(optional_endpoint(Ok("name")).unwrap(), Some("name"));
+        assert_eq!(
+            optional_endpoint::<()>(Err(RynkHostError::Rejected(RynkError::UnknownCmd))).unwrap(),
+            None
+        );
+        assert!(optional_endpoint::<()>(Err(RynkHostError::Transport(
+            "read",
+            "disconnected".into()
+        )))
+        .is_err());
+    }
 
     #[test]
     fn keypad_capability_probe_handles_new_and_old_firmware() {

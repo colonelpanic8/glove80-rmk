@@ -1,6 +1,6 @@
 # moergo-control
 
-Native Glove80 control CLI using RMK's Rynk protocol over USB HID or BLE. It
+Native Glove80 and Go60 control CLI using RMK's Rynk protocol over USB HID or BLE. It
 controls current firmware only; the retired Glove80 product protocol
 is intentionally not supported.
 
@@ -17,16 +17,18 @@ The top-level commands are:
 - `config validate|diff|apply|pull|show`
 - `connection status|switch|clear|name`
 - `device-data` (namespaced static metadata and live state as JSON)
-- `keymap read|set|default|monitor|find`
+- `keymap read|set|default|name|monitor|find`
 - `lighting ping|caps|set|unset|clear|read|frame|replica-status|replace|brightness`
 - `lighting scene-read|scene-set|scene-unset|scene-policy|params`
 - `version`
 - `bootloader [--peripheral] [--yes]`
 - `maintenance`
 
-Device selection defaults to USB with BLE fallback. Use `--usb` or `--ble` to
-require one transport, and `--device` to select a `/dev/hidraw*` or BLE address
-when multiple keyboards are available.
+Device selection prefers USB, falling back to BLE only when no accessible
+Rynk USB device is found. Ambiguous USB selection is an error. Use `--usb` or
+`--ble` to require one transport, and `--device` to select a `/dev/hidraw*` path
+or full BLE address when multiple keyboards are available. An explicit selector
+must match a device; a missing path never selects another keyboard.
 
 `battery` reads the central and split-peripheral levels over Rynk when USB is
 available. With `--ble`, it reads each standard Battery Service instance and
@@ -36,7 +38,9 @@ connected, and `battery --json` emits a machine-readable report.
 
 `keymap set` accepts `LAYER KEY KEYCODE` triples. A key may be a flat index or
 `row,col`; keycodes use familiar names such as `KC_A`, `MO(2)`, and
-`LT(1,KC_ESC)`.
+`LT(1,KC_ESC)`. Matrix dimensions come from the connected keyboard. All
+entries are checked for faithful Rynk conversion before any are written;
+read-back mismatches return an error.
 
 Lighting commands operate on RMK's topology-aware overlay and revisioned
 state. `lighting replace` accepts one cell per line:
