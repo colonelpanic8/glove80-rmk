@@ -592,6 +592,7 @@ const DEFAULT_EFFECT_PARAMS: [u8; MAX_INITIAL_PARAMS] = [0, 90, 11, 170, 1, 0, 1
 /// combined Storm effect into its Rain plus Reactive representation.
 const LEGACY_STORM_OVERLAY: u8 = 6;
 
+#[inline(never)]
 pub fn engine(
     persisted_extension: Option<LightingExtensionRecord>,
     persisted_overlay: Option<LightingExtensionOverlayRecord>,

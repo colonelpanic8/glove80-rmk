@@ -321,6 +321,7 @@ pub fn route_peripheral_bootloader(slot: u8) -> Result<(), rmk::types::protocol:
 }
 
 #[allow(clippy::too_many_arguments)]
+#[inline(never)]
 pub fn init<'keymap, 'data>(
     keymap: &'keymap KeyMap<'data>,
     persisted_scenes: &[LightingSceneCell],
