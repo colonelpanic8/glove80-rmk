@@ -25,11 +25,8 @@ use crate::connection::{ConnectionCommand, NameCommand};
 use crate::keymap::{self, KeymapCommand};
 use crate::lighting::{EffectArg, EffectSpec, LayerPolicyArg, LightingCommand};
 use crate::rynk_hid::HidDevice;
-use crate::transport::{Preference, Selector};
+use crate::transport::{select_candidate, Preference, Selector};
 
-const GLOVE80_ROWS: u8 = 6;
-const GLOVE80_COLS: u8 = 14;
-const GLOVE80_HOLES: [u8; 4] = [5, 8, 75, 78];
 const RYNK_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 const RYNK_BOOTLOADER_TIMEOUT: Duration = Duration::from_secs(3);
 // A peripheral command sits behind any already-queued split lighting frames;
@@ -1047,7 +1044,7 @@ async fn connect_device<D: RynkDevice>(
 
 async fn operate(client: &Client, command: &KeymapCommand) -> Result<()> {
     let capabilities = client.get_capabilities().await?;
-    check_grid(
+    keymap::check_grid(
         capabilities.num_rows,
         capabilities.num_cols,
         capabilities.num_layers,
@@ -1084,7 +1081,9 @@ async fn operate(client: &Client, command: &KeymapCommand) -> Result<()> {
                     .iter()
                     .copied()
                     .enumerate()
-                    .map(|(offset, action)| action_to_via(action, layer, offset))
+                    .map(|(offset, action)| {
+                        action_to_via(action, layer, offset, capabilities.num_cols)
+                    })
                     .collect::<Result<Vec<_>>>()?;
                 if index > 0 {
                     println!();
@@ -1096,7 +1095,7 @@ async fn operate(client: &Client, command: &KeymapCommand) -> Result<()> {
                         &codes,
                         capabilities.num_rows,
                         capabilities.num_cols,
-                        &GLOVE80_HOLES,
+                        keymap::holes(capabilities.num_rows, capabilities.num_cols),
                         *raw,
                     )
                 );
@@ -1117,15 +1116,11 @@ async fn operate(client: &Client, command: &KeymapCommand) -> Result<()> {
 
             let mut readback = Vec::with_capacity(parsed.len());
             for entry in &parsed {
-                let row = entry.key / capabilities.num_cols;
-                let col = entry.key % capabilities.num_cols;
+                let row = (entry.key / u16::from(capabilities.num_cols)) as u8;
+                let col = (entry.key % u16::from(capabilities.num_cols)) as u8;
+                let wanted = crate::rynk_keycode::from_via_keycode(entry.keycode);
                 client
-                    .set_key(
-                        entry.layer,
-                        row,
-                        col,
-                        crate::rynk_keycode::from_via_keycode(entry.keycode),
-                    )
+                    .set_key(entry.layer, row, col, wanted)
                     .await
                     .with_context(|| {
                         format!(
@@ -1134,6 +1129,12 @@ async fn operate(client: &Client, command: &KeymapCommand) -> Result<()> {
                         )
                     })?;
                 let stored = client.get_key(entry.layer, row, col).await?;
+                if stored != wanted {
+                    bail!(
+                        "read-back verification failed at layer {} r{row},c{col}: requested {wanted:?}, stored {stored:?}",
+                        entry.layer
+                    );
+                }
                 readback.push(crate::rynk_keycode::to_via_keycode(stored));
             }
             println!(
@@ -1228,12 +1229,26 @@ async fn operate(client: &Client, command: &KeymapCommand) -> Result<()> {
     Ok(())
 }
 
-async fn read_all_actions(
+pub(crate) async fn read_all_actions(
     client: &Client,
     capabilities: &rynk::rmk_types::protocol::rynk::DeviceCapabilities,
 ) -> Result<Vec<KeyAction>> {
+    keymap::check_grid(
+        capabilities.num_rows,
+        capabilities.num_cols,
+        capabilities.num_layers,
+    )?;
     if capabilities.bulk_transfer_supported {
-        return client.read_all_keymap().await.map_err(Into::into);
+        let bulk = match client.read_all_keymap().await {
+            Ok(actions) => keymap::check_action_count(&actions, capabilities).map(|()| actions),
+            Err(error) => Err(error.into()),
+        };
+        match bulk {
+            Ok(actions) => return Ok(actions),
+            Err(error) => {
+                eprintln!("bulk keymap read failed ({error}); falling back to key-by-key")
+            }
+        }
     }
 
     let mut actions = Vec::with_capacity(
@@ -1251,28 +1266,16 @@ async fn read_all_actions(
     Ok(actions)
 }
 
-fn action_to_via(action: KeyAction, layer: u8, offset: usize) -> Result<u16> {
+fn action_to_via(action: KeyAction, layer: u8, offset: usize, cols: u8) -> Result<u16> {
     let code = crate::rynk_keycode::to_via_keycode(action);
     if code == 0 && !matches!(action, KeyAction::No) {
-        let row = offset / usize::from(GLOVE80_COLS);
-        let col = offset % usize::from(GLOVE80_COLS);
+        let row = offset / usize::from(cols);
+        let col = offset % usize::from(cols);
         bail!(
             "Rynk action {action:?} at layer {layer} r{row},c{col} cannot be represented by the CLI's VIA-compatible keycode notation"
         );
     }
     Ok(code)
-}
-
-fn check_grid(rows: u8, cols: u8, layers: u8) -> Result<()> {
-    if rows != GLOVE80_ROWS || cols != GLOVE80_COLS {
-        bail!(
-            "expected the Glove80 {GLOVE80_ROWS}x{GLOVE80_COLS} keymap, but Rynk reports {rows}x{cols}"
-        );
-    }
-    if layers == 0 {
-        bail!("Rynk reports no keymap layers");
-    }
-    Ok(())
 }
 
 async fn select_device(selector: &Selector) -> Result<Device> {
@@ -1291,12 +1294,14 @@ async fn select_device(selector: &Selector) -> Result<Device> {
                     .await
                     .map(Device::Ble);
             }
-            match select_usb(selector.device.as_deref()) {
-                Ok(device) => Ok(device),
-                Err(usb_error) => select_ble(selector.device.as_deref())
-                    .await
-                    .map(Device::Ble)
-                    .with_context(|| format!("USB Rynk discovery also failed: {usb_error:#}")),
+            if selector.device.is_some() {
+                return select_usb(selector.device.as_deref());
+            }
+            let devices = HidDevice::discover().context("Rynk USB HID discovery failed")?;
+            if devices.is_empty() {
+                select_ble(None).await.map(Device::Ble)
+            } else {
+                select_candidate(devices, None, "Rynk USB HID", |_, _| false).map(Device::Hid)
             }
         }
     }
@@ -1314,48 +1319,33 @@ fn select_usb(requested: Option<&str>) -> Result<Device> {
 
 fn select_hid(requested: Option<&str>) -> Result<HidDevice> {
     let devices = HidDevice::discover().context("Rynk USB HID discovery failed")?;
-    if let Some(path) = requested.filter(|path| path.starts_with("/dev/hidraw")) {
-        if let Some(index) = devices
-            .iter()
-            .position(|device| device.path() == std::path::Path::new(path))
-        {
-            return Ok(devices
-                .into_iter()
-                .nth(index)
-                .expect("index came from devices"));
-        }
-    }
-    one_device(devices, "Rynk USB HID")
+    select_candidate(devices, requested, "Rynk USB HID", |device, path| {
+        device.path() == std::path::Path::new(path)
+    })
 }
 
 async fn select_ble(requested: Option<&str>) -> Result<BleDevice> {
     if requested.is_some_and(|value| value.starts_with("/dev/")) {
         bail!("a device path cannot be used with --ble");
     }
+    if requested.is_some_and(|value| !crate::transport::is_ble_address(value)) {
+        bail!("--device must be a full BLE address (AA:BB:CC:DD:EE:FF)");
+    }
     let devices = BleDevice::discover()
         .await
         .context("Rynk BLE discovery failed")?;
-    if let Some(address) = requested {
-        let needle = address.replace(':', "").to_ascii_lowercase();
-        return devices
-            .into_iter()
-            .find(|device| {
-                format!("{:?}", device.id())
-                    .chars()
-                    .filter(|character| character.is_ascii_hexdigit())
-                    .collect::<String>()
-                    .to_ascii_lowercase()
-                    .contains(&needle)
-            })
-            .ok_or_else(|| anyhow!("no connected Rynk BLE device matches {address}"));
-    }
-    one_device(devices, "connected Rynk BLE")
-}
-
-fn one_device<T>(mut devices: Vec<T>, kind: &str) -> Result<T> {
-    match devices.len() {
-        0 => bail!("no {kind} device found"),
-        1 => Ok(devices.pop().expect("length checked")),
-        count => bail!("found {count} {kind} devices; pass --device to select one"),
-    }
+    select_candidate(
+        devices,
+        requested,
+        "connected Rynk BLE",
+        |device, address| {
+            let needle = address.replace(':', "").to_ascii_lowercase();
+            format!("{:?}", device.id())
+                .chars()
+                .filter(|character| character.is_ascii_hexdigit())
+                .collect::<String>()
+                .to_ascii_lowercase()
+                .contains(&needle)
+        },
+    )
 }

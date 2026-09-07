@@ -14,7 +14,6 @@ exclude = [
   ".worktrees",
   "crates/glove80-rmk",
   "crates/go60-rmk",
-  "crates/moergo-rmk",
   "crates/split-lighting-tests",
   "dependencies/rmk/rmk",
   "dependencies/rmk/rmk-config",

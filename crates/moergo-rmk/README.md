@@ -1,28 +1,28 @@
 # Shared MoErgo firmware
 
-This crate owns firmware services that should behave identically on the
-Glove80 and Go60:
+This directory owns firmware services shared by Glove80 and Go60:
 
 - the lighting engine and physical LED driver;
 - Rynk lighting control and split-state replication;
-- Magic-layer lighting actions; and
-- cross-half bootloader routing.
+- Magic-layer lighting actions;
+- cross-half bootloader routing; and
+- retained panic diagnostics used by Go60.
 
-`glove80-rmk` and `go60-rmk` are thin board crates. Each selects one feature
-on this crate, supplies its RMK-generated hardware/configuration statics, and
-registers only processors that are specific to that board. Shared behavior
-must be implemented here rather than copied into a board crate.
+The board binaries include these modules with `#[path]`. They compile in the
+board's crate, using its RMK-generated configuration, hardware constants, and
+diagnostic hooks. This directory is a shared source tree, not an independent
+Cargo package. The board workspaces own dependencies and build scripts.
 
-The two feature sets are intentionally mutually exclusive. The embedded board
-crates are separate Cargo workspaces, so each build gets one set of constants
-and one `KEYBOARD_TOML_PATH`-derived topology:
+`crates/xtask/tests/board_parity.rs` checks that both boards compile the shared
+services and keep their RMK features aligned, with the documented Go60 battery
+service exception. Formatting and compilation run through both board manifests.
 
-| Feature | LEDs per half | Channel ceiling | Maintenance LED |
+Hardware constants live in each board's entry points:
+
+| Board | LEDs per half | Channel ceiling | Maintenance LED |
 | --- | ---: | ---: | ---: |
-| `glove80` | 40 | 230 | 12 |
-| `go60` | 30 | 102 | 8 |
+| Glove80 | 40 | 230 | 12 |
+| Go60 | 30 | 102 | 8 |
 
-The remaining differences—matrix wiring, GPIOs, Go60 trackpads, and device
-data—stay in their board crates. `crates/xtask/tests/board_parity.rs` prevents
-either board from reaching into the other's source tree and keeps their RMK
-capability sets aligned.
+Matrix wiring, GPIOs, Go60 trackpads, and device data stay in the board crates.
+Shared services remain here so fixes apply to both keyboards.

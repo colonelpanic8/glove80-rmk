@@ -439,25 +439,25 @@ mod tests {
         let healthy = status(LightingReplicationHealth::Healthy);
         assert_eq!(replica_verdict(&healthy, 30_000), ReplicaVerdict::InSync);
 
-        let mut resyncing = healthy.clone();
+        let mut resyncing = healthy;
         resyncing.replication.as_mut().unwrap().awaiting_ack = true;
         assert_eq!(
             replica_verdict(&resyncing, 30_000),
             ReplicaVerdict::Resyncing
         );
 
-        let mut unattested = healthy.clone();
+        let mut unattested = healthy;
         unattested.peripheral.as_mut().unwrap().digests = None;
         assert_eq!(
             replica_verdict(&unattested, 30_000),
             ReplicaVerdict::Unattested
         );
 
-        let mut stale = healthy.clone();
+        let mut stale = healthy;
         stale.peripheral.as_mut().unwrap().age_ms = 30_001;
         assert_eq!(replica_verdict(&stale, 30_000), ReplicaVerdict::Stale);
 
-        let mut divergent = healthy.clone();
+        let mut divergent = healthy;
         divergent
             .peripheral
             .as_mut()

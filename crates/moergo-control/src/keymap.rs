@@ -4,13 +4,13 @@ use anyhow::{bail, Context, Result};
 use clap::Subcommand;
 use rynk::rmk_types::protocol::rynk::LAYER_NAME_MAX_LEN;
 
-use crate::keycodes;
 use crate::transport::Selector;
+use crate::{keycodes, rynk_keycode};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct KeymapEntry {
     pub layer: u8,
-    pub key: u8,
+    pub key: u16,
     pub keycode: u16,
 }
 
@@ -58,6 +58,37 @@ pub enum KeymapCommand {
     Find { fragment: String },
 }
 
+pub fn check_grid(rows: u8, cols: u8, layers: u8) -> Result<()> {
+    if rows == 0 || cols == 0 || layers == 0 {
+        bail!("Rynk reports an empty keymap ({layers} layers of {rows}x{cols})");
+    }
+    Ok(())
+}
+
+pub fn check_action_count(
+    actions: &[rynk::rmk_types::action::KeyAction],
+    capabilities: &rynk::rmk_types::protocol::rynk::DeviceCapabilities,
+) -> Result<()> {
+    let expected = usize::from(capabilities.num_rows)
+        * usize::from(capabilities.num_cols)
+        * usize::from(capabilities.num_layers);
+    if actions.len() != expected {
+        bail!(
+            "Rynk returned {} key actions; expected {expected}",
+            actions.len()
+        );
+    }
+    Ok(())
+}
+
+pub fn holes(rows: u8, cols: u8) -> &'static [u16] {
+    match (rows, cols) {
+        (6, 14) => &[5, 8, 75, 78],
+        (5, 14) => &[48, 49, 56, 57, 61, 62, 63, 64, 68, 69],
+        _ => &[],
+    }
+}
+
 pub fn pressed_positions(bitmap: &[u8], rows: u8, cols: u8) -> Vec<(u8, u8)> {
     let bytes_per_row = usize::from(cols).div_ceil(8);
     let mut positions = Vec::new();
@@ -89,7 +120,8 @@ pub fn render_pressed(positions: &[(u8, u8)]) -> String {
     )
 }
 
-pub fn parse_key_position(text: &str, rows: u8, cols: u8) -> Result<u8> {
+pub fn parse_key_position(text: &str, rows: u8, cols: u8) -> Result<u16> {
+    check_grid(rows, cols, 1)?;
     let total = u16::from(rows) * u16::from(cols);
     let key = if let Some((row, col)) = text.split_once(',') {
         let row: u16 = row
@@ -115,7 +147,7 @@ pub fn parse_key_position(text: &str, rows: u8, cols: u8) -> Result<u8> {
             total - 1
         );
     }
-    Ok(key as u8)
+    Ok(key)
 }
 
 pub fn parse_set_entries(arguments: &[String], rows: u8, cols: u8) -> Result<Vec<KeymapEntry>> {
@@ -129,12 +161,19 @@ pub fn parse_set_entries(arguments: &[String], rows: u8, cols: u8) -> Result<Vec
     arguments
         .chunks(3)
         .map(|triple| {
+            let keycode = keycodes::parse_keycode(&triple[2])?;
+            if rynk_keycode::to_via_keycode(rynk_keycode::from_via_keycode(keycode)) != keycode {
+                bail!(
+                    "keycode '{}' cannot be represented faithfully by Rynk",
+                    triple[2]
+                );
+            }
             Ok(KeymapEntry {
                 layer: triple[0]
                     .parse()
                     .with_context(|| format!("bad layer '{}'", triple[0]))?,
                 key: parse_key_position(&triple[1], rows, cols)?,
-                keycode: keycodes::parse_keycode(&triple[2])?,
+                keycode,
             })
         })
         .collect()
@@ -145,7 +184,7 @@ pub fn render_layer(
     keycodes_flat: &[u16],
     rows: u8,
     cols: u8,
-    holes: &[u8],
+    holes: &[u16],
     raw: bool,
 ) -> String {
     let columns = usize::from(cols);
@@ -155,7 +194,7 @@ pub fn render_layer(
             .map(|column| {
                 let index = row * columns + column;
                 let code = keycodes_flat[index];
-                if holes.contains(&(index as u8)) && code == 0 {
+                if holes.contains(&(index as u16)) && code == 0 {
                     "--".to_owned()
                 } else if raw {
                     format!("0x{code:04X}")
@@ -209,8 +248,8 @@ pub fn render_write_outcome(entries: &[KeymapEntry], readback: &[u16], cols: u8)
                 "LOSSY layer {} key {} (r{},c{}): requested {}, stored {}\n",
                 entry.layer,
                 entry.key,
-                entry.key / cols,
-                entry.key % cols,
+                entry.key / u16::from(cols),
+                entry.key % u16::from(cols),
                 keycodes::format_keycode(entry.keycode),
                 keycodes::format_keycode(*stored),
             ));
@@ -267,6 +306,76 @@ mod tests {
         assert!(parse_key_position("84", 6, 14).is_err());
         let entries = parse_set_entries(&["0".into(), "28".into(), "KC_A".into()], 6, 14).unwrap();
         assert_eq!(entries[0].keycode, 0x0004);
+    }
+
+    #[test]
+    fn rejects_lossy_actions_before_writing_any_entries() {
+        let arguments = ["0", "0", "KC_A", "0", "1", "0x52c0"].map(String::from);
+        let error = parse_set_entries(&arguments, 5, 14).unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("cannot be represented faithfully"));
+        for code in ["KC_NO", "MO(3)", "LCTL(KC_C)"] {
+            assert!(parse_set_entries(&["0".into(), "0".into(), code.into()], 5, 14).is_ok());
+        }
+    }
+
+    #[test]
+    fn supports_both_boards_and_large_matrices() {
+        assert!(check_grid(6, 14, 16).is_ok());
+        assert!(check_grid(5, 14, 16).is_ok());
+        assert!(check_grid(0, 14, 16).is_err());
+        assert!(check_grid(5, 0, 16).is_err());
+        assert!(check_grid(5, 14, 0).is_err());
+        assert!(parse_key_position("0", 0, 0).is_err());
+        assert_eq!(parse_key_position("19,19", 20, 20).unwrap(), 399);
+        assert!(parse_key_position("70", 5, 14).is_err());
+        assert_eq!(parse_key_position("4,13", 5, 14).unwrap(), 69);
+    }
+
+    #[test]
+    fn rejects_truncated_and_surplus_bulk_keymaps() {
+        use rynk::rmk_types::{action::KeyAction, protocol::rynk::DeviceCapabilities};
+        let capabilities = DeviceCapabilities {
+            num_rows: 5,
+            num_cols: 14,
+            num_layers: 2,
+            ..Default::default()
+        };
+        assert!(check_action_count(&vec![KeyAction::No; 140], &capabilities).is_ok());
+        for length in [0, 70, 139, 141] {
+            assert!(check_action_count(&vec![KeyAction::No; length], &capabilities).is_err());
+        }
+    }
+
+    #[test]
+    fn holes_match_stock_board_layouts() {
+        for (board, rows) in [("glove80", 6), ("go60", 5)] {
+            let path = format!(
+                "{}/../{board}-rmk/keyboard.toml",
+                env!("CARGO_MANIFEST_DIR")
+            );
+            let text = std::fs::read_to_string(path).unwrap();
+            let layout = rynk_kle::decode_layout(&text).unwrap();
+            let keys = &layout.variants[layout.default_variant as usize].keys;
+            let missing: Vec<_> = (0..u16::from(rows) * 14)
+                .filter(|index| {
+                    !keys
+                        .iter()
+                        .any(|key| u16::from(key.row) * 14 + u16::from(key.col) == *index)
+                })
+                .collect();
+            assert_eq!(holes(rows, 14), missing);
+            let rendered = render_layer(
+                0,
+                &vec![0; usize::from(rows) * 14],
+                rows,
+                14,
+                holes(rows, 14),
+                false,
+            );
+            assert_eq!(rendered.matches("--").count(), missing.len());
+        }
     }
 
     #[test]

@@ -2252,8 +2252,6 @@ impl SnapshotStage {
             | Message::TransportStatus { .. }
             | Message::DebugTrace { .. }
             | Message::DebugPanicLoc { .. }
-            | Message::DebugTrace { .. }
-            | Message::DebugPanicLoc { .. }
             | Message::ContextUpdate { .. } => None,
             Message::Begin { .. } => {
                 stage_note(8);

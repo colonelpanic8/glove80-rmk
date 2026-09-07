@@ -13,6 +13,8 @@ crates/
 ├── moergo-rmk/       # shared embedded services and parity contract
 ├── glove80-rmk/      # Glove80 hardware entry points
 ├── go60-rmk/         # Go60 hardware entry points
+├── moergo-config/    # pure runtime configuration model
+├── moergo-config-wasm/ # browser adapter for the same model
 ├── moergo-control/   # multi-board native Rynk CLI
 └── xtask/            # repository checks and release packaging
 dependencies/
@@ -20,8 +22,8 @@ dependencies/
 ```
 
 Each board firmware is a standalone Cargo workspace because it cross-compiles
-for the nRF52840. Both depend on `moergo-rmk`; neither board may include source
-from the other. Native packages share the root workspace. Generated release
+for the nRF52840. Both compile shared modules from `crates/moergo-rmk/src`
+inside their board binaries; neither board may include source from the other. Native packages share the root workspace. Generated release
 artifacts go in `dist/`.
 
 ## Setup

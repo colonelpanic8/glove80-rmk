@@ -75,10 +75,19 @@ fn run() -> Result<()> {
         }
         Some("inspect-uf2") => {
             let path = args.next().ok_or("inspect-uf2 requires a file")?;
-            if args.next().is_some() {
-                return Err("inspect-uf2 accepts exactly one file".into());
-            }
-            let info = inspect_uf2(&root.join(path), None)?;
+            let expected_family = match args.next().as_deref() {
+                None => None,
+                Some("--family") => {
+                    let value = args.next().ok_or("--family requires a hexadecimal family ID")?;
+                    let family = u32::from_str_radix(value.trim_start_matches("0x"), 16)?;
+                    if args.next().is_some() {
+                        return Err("inspect-uf2 accepts FILE [--family HEX]".into());
+                    }
+                    Some(family)
+                }
+                _ => return Err("inspect-uf2 accepts FILE [--family HEX]".into()),
+            };
+            let info = inspect_uf2(&root.join(path), expected_family)?;
             println!(
                 "{}: {} blocks, {}-{}, family {}",
                 info.path.display(),
@@ -89,7 +98,7 @@ fn run() -> Result<()> {
             );
             Ok(())
         }
-        _ => Err("usage: cargo run -p xtask -- <check|dist|dist-go60|verify-config-profile STOCK CONFIGURED|verify-stock-config STOCK CONFIGURED [--allow-bilateral-thumbs]|inspect-uf2 FILE>".into()),
+        _ => Err("usage: cargo run -p xtask -- <check|dist|dist-go60|verify-config-profile STOCK CONFIGURED|verify-stock-config STOCK CONFIGURED [--allow-bilateral-thumbs]|inspect-uf2 FILE [--family HEX]>".into()),
     }
 }
 
@@ -544,7 +553,12 @@ fn copy_tracked_tree(root: &Path, destination: &Path) -> Result<()> {
         if let Some(parent) = target.parent() {
             fs::create_dir_all(parent)?;
         }
-        let metadata = fs::symlink_metadata(&source)?;
+        let metadata = match fs::symlink_metadata(&source) {
+            Ok(metadata) => metadata,
+            // Local validation may include tracked files deleted from the worktree.
+            Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
+            Err(error) => return Err(error.into()),
+        };
         if metadata.file_type().is_symlink() {
             copy_symlink(&source, &target)?;
         } else if metadata.is_file() {
@@ -592,10 +606,10 @@ fn reproducible_rustflags(root: &Path, config_path: &Path) -> String {
     if let Some(cargo_home) = cargo_home {
         mappings.push((cargo_home, "/cargo"));
     }
-    if !config_path.starts_with(root) {
-        if let Some(config_dir) = config_path.parent() {
-            mappings.push((config_dir.to_path_buf(), "/source/config"));
-        }
+    if !config_path.starts_with(root)
+        && let Some(config_dir) = config_path.parent()
+    {
+        mappings.push((config_dir.to_path_buf(), "/source/config"));
     }
 
     let inherited = env::var("RUSTFLAGS").unwrap_or_default();
@@ -768,14 +782,21 @@ fn inspect_uf2(path: &Path, expected_family: Option<u32>) -> Result<Uf2Info> {
         let flags = read_u32(&data, offset + 8)?;
         let address = read_u32(&data, offset + 12)?;
         let payload_size = read_u32(&data, offset + 16)?;
-        if payload_size > 476 {
-            return Err(format!("{} has an oversized UF2 payload", path.display()).into());
+        if payload_size == 0 || payload_size > 476 {
+            return Err(format!("{} has an invalid UF2 payload size", path.display()).into());
         }
         if read_u32(&data, offset + 20)? != u32::try_from(block)?
             || read_u32(&data, offset + 24)? != u32::try_from(blocks)?
         {
             return Err(format!(
                 "{} has inconsistent UF2 block numbering at block {block}",
+                path.display()
+            )
+            .into());
+        }
+        if expected_family.is_some() && flags != UF2_FLAG_FAMILY_ID {
+            return Err(format!(
+                "{} block {block} must be a family-tagged application flash block",
                 path.display()
             )
             .into());
@@ -999,6 +1020,61 @@ mod tests {
         assert_eq!(info.blocks, 1);
         assert_eq!(info.start, APPLICATION_START);
         assert_eq!(info.end, APPLICATION_START + UF2_PAYLOAD_SIZE as u32);
+    }
+
+    #[test]
+    fn tracked_tree_copy_preserves_edits_and_omits_deleted_files() {
+        let root = env::temp_dir().join(format!("moergo-copy-{}", std::process::id()));
+        fs::create_dir_all(&root).unwrap();
+        run_command(&root, "git", &["init", "--quiet"], &[]).unwrap();
+        fs::write(root.join("kept.rs"), "old").unwrap();
+        fs::write(root.join("deleted.rs"), "obsolete").unwrap();
+        run_command(&root, "git", &["add", "kept.rs", "deleted.rs"], &[]).unwrap();
+        fs::write(root.join("kept.rs"), "edited").unwrap();
+        fs::remove_file(root.join("deleted.rs")).unwrap();
+        fs::write(root.join("untracked.rs"), "untracked").unwrap();
+        let output = root.join("snapshot");
+        copy_tracked_tree(&root, &output).unwrap();
+        assert_eq!(
+            fs::read_to_string(output.join("kept.rs")).unwrap(),
+            "edited"
+        );
+        assert!(!output.join("deleted.rs").exists());
+        assert!(!output.join("untracked.rs").exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn rejects_invalid_flash_images_before_packaging() {
+        let bytes = encode_uf2(
+            &[Segment {
+                address: APPLICATION_START,
+                data: &[1; 300],
+            }],
+            0x9807_b007,
+        )
+        .unwrap();
+        let path = env::temp_dir().join(format!("moergo-invalid-{}.uf2", std::process::id()));
+        fs::write(&path, &bytes).unwrap();
+        assert!(inspect_uf2(&path, Some(0x9808_b007)).is_err());
+        for (offset, value) in [
+            (512 + 8, 0),
+            (8, UF2_FLAG_FAMILY_ID | 1),
+            (16, 0),
+            (16, 477),
+            (12, APPLICATION_START - 256),
+            (12, APPLICATION_END),
+            (512 + 28, 0x9808_b007),
+        ] {
+            let mut invalid = bytes.clone();
+            write_u32(&mut invalid, offset, value).unwrap();
+            fs::write(&path, invalid).unwrap();
+            assert!(
+                inspect_uf2(&path, Some(0x9807_b007)).is_err(),
+                "offset {offset}, value {value}"
+            );
+        }
+        fs::remove_file(path).unwrap();
     }
 
     /// Every key in `[layout].map` carries a hand tag.
