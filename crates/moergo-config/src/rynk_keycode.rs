@@ -44,6 +44,7 @@ pub fn to_via_keycode(key_action: KeyAction) -> u16 {
                 KeyboardAction::DebugToggle => 0x7c02,
                 KeyboardAction::ClearEeprom => 0x7c03,
                 KeyboardAction::MaintenanceModeToggle => 0x7c04,
+                KeyboardAction::CtrlGuiSwapToggle => 0x7c05,
                 KeyboardAction::OutputAuto => 0x7780,
                 KeyboardAction::OutputUsb => 0x7784,
                 KeyboardAction::OutputBluetooth => 0x7786,
@@ -215,6 +216,7 @@ pub fn from_via_keycode(code: u16) -> KeyAction {
         0x7c04 => KeyAction::Single(Action::KeyboardControl(
             KeyboardAction::MaintenanceModeToggle,
         )),
+        0x7c05 => KeyAction::Single(Action::KeyboardControl(KeyboardAction::CtrlGuiSwapToggle)),
         0x7c16 => KeyAction::Single(Action::Special(SpecialKey::GraveEscape)),
         0x7c18 => space_cadet(HidKeyCode::Kc9, ModifierCombination::LCTRL),
         0x7c19 => space_cadet(HidKeyCode::Kc0, ModifierCombination::RCTRL),
@@ -250,6 +252,21 @@ fn space_cadet(key: HidKeyCode, hold: ModifierCombination) -> KeyAction {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ctrl_gui_toggle_preserves_held_modifier_encoding() {
+        for name in ["CTRL_GUI_TOG", "CtrlGuiSwapToggle", "CG_TOGG"] {
+            let code = crate::keycodes::parse_keycode(name).unwrap();
+            let action =
+                KeyAction::Single(Action::KeyboardControl(KeyboardAction::CtrlGuiSwapToggle));
+            assert_eq!(from_via_keycode(code), action);
+            assert_eq!(to_via_keycode(action), code);
+            assert_eq!(crate::keycodes::format_keycode(code), "CTRL_GUI_TOG");
+        }
+        let held = from_via_keycode(0x701d);
+        assert!(matches!(held, KeyAction::Single(Action::Modifier(_))));
+        assert_eq!(to_via_keycode(held), 0x701d);
+    }
 
     #[test]
     fn representative_via_actions_round_trip() {
