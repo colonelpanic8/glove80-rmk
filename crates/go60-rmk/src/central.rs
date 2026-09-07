@@ -78,7 +78,7 @@ mod keyboard_central {
         >::new();
         let persisted_policy = storage.read_lighting_scenes(&mut persisted_scenes).await;
         let mut persisted_conditional_scenes = ::rmk::heapless::Vec::<
-            ::rmk::types::protocol::rynk::LightingExtendedConditionalSceneCell,
+            ::rmk::types::protocol::rynk::LightingAdvancedConditionalSceneCell,
             { crate::lighting::SCENE_CAPACITY },
         >::new();
         storage

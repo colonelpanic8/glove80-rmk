@@ -13,12 +13,11 @@ use rmk::lighting::compositor::{ExtensionLayerState, ExtensionState};
 use rmk::lighting::standard::{EXTENSION_PARAM_CHUNK, ExtensionReplicaParams};
 use rmk::lighting::{
     ActiveTransport, BackgroundMode, BackgroundState, BatteryCondition, BondedSlotCondition,
-    BuiltinEffect, ChargeCondition, ConditionSet, ConnectionCondition, EffectsCondition, IndicatorCondition,
-    LayersCondition,
-    FRAME_CHUNK_SIZE, IndicatorState, LayerCondition, LayerPolicy, LayerState, LedSlot,
-    LightingContext, OutputMode, OverlayBatch, OverlayCell, Rgb8, RuntimeConditionalSceneCell,
-    RuntimeConditionalSceneTable, SceneTable, SceneTableCell, StandardMutableState,
-    StandardReplicaState,
+    BuiltinEffect, ChargeCondition, ConditionSet, ConnectionCondition, EffectsCondition,
+    FRAME_CHUNK_SIZE, IndicatorCondition, IndicatorState, LayerCondition, LayerPolicy, LayerState,
+    LayersCondition, LedSlot, LightingContext, OutputMode, OverlayBatch, OverlayCell, Rgb8,
+    RuntimeConditionalSceneCell, RuntimeConditionalSceneTable, SceneTable, SceneTableCell,
+    StandardMutableState, StandardReplicaState,
 };
 use rmk::split_app::{SPLIT_APP_MSG_MAX, SplitAppData};
 use rmk::types::battery::{BatteryStatus, ChargeState};
@@ -93,7 +92,7 @@ const SCENE_CELL_LEN: usize = 23;
 const CONDITIONAL_SCENE_BEGIN_LEN: usize = 8;
 const CONDITIONAL_SCENE_CELL_LEN: usize = 26;
 const CONDITIONAL_SCENE_EXT_LEN: usize = 11;
-const CONDITIONAL_SCENE_EXT2_LEN: usize = 24;
+const CONDITIONAL_SCENE_EXT2_LEN: usize = 16;
 const COMMIT_LEN: usize = 9;
 const ACK_LEN: usize = 7;
 const EFFECT_HIT_LEN: usize = 3;
@@ -830,8 +829,8 @@ impl Message {
                 }
                 out[7] = flags;
                 let layers = layers.unwrap_or_default();
-                put_u64(&mut out, 8, layers.active);
-                put_u64(&mut out, 16, layers.inactive);
+                put_u32(&mut out, 8, layers.active);
+                put_u32(&mut out, 12, layers.inactive);
                 CONDITIONAL_SCENE_EXT2_LEN
             }
             Message::Commit {
@@ -1305,10 +1304,12 @@ impl Message {
             TAG_CONDITIONAL_SCENE_EXT2 if bytes.len() == CONDITIONAL_SCENE_EXT2_LEN => {
                 let flags = bytes[7];
                 let layers = (flags & 0x80 != 0).then(|| LayersCondition {
-                    active: get_u64(bytes, 8),
-                    inactive: get_u64(bytes, 16),
+                    active: get_u32(bytes, 8),
+                    inactive: get_u32(bytes, 12),
                 });
-                let lock = |shift: u8| ((flags >> shift) & 0x01 != 0).then_some((flags >> shift) & 0x02 != 0);
+                let lock = |shift: u8| {
+                    ((flags >> shift) & 0x01 != 0).then_some((flags >> shift) & 0x02 != 0)
+                };
                 let indicators = (flags & 0x40 != 0).then(|| IndicatorCondition {
                     num_lock: lock(0),
                     caps_lock: lock(2),
@@ -1593,7 +1594,11 @@ fn hash_conditions(hash: &mut Fnv32, conditions: ConditionSet) {
     }
     hash.byte(conditions.indicators.is_some() as u8);
     if let Some(indicators) = conditions.indicators {
-        for lock in [indicators.num_lock, indicators.caps_lock, indicators.scroll_lock] {
+        for lock in [
+            indicators.num_lock,
+            indicators.caps_lock,
+            indicators.scroll_lock,
+        ] {
             hash.bytes(&[lock.is_some() as u8, lock.unwrap_or(false) as u8]);
         }
     }
@@ -1939,7 +1944,10 @@ fn stage_abort(site: u32) {
     use core::sync::atomic::Ordering;
     let v = STAGE_DEBUG.load(Ordering::Relaxed);
     let aborts = ((v >> 16) & 0xff).wrapping_add(1) & 0xff;
-    STAGE_DEBUG.store((v & 0x0000_ffff) | (site << 24) | (aborts << 16), Ordering::Relaxed);
+    STAGE_DEBUG.store(
+        (v & 0x0000_ffff) | (site << 24) | (aborts << 16),
+        Ordering::Relaxed,
+    );
 }
 
 pub struct SnapshotStage {
@@ -2008,7 +2016,7 @@ impl SnapshotStage {
             } => {
                 let stage = self.stage.as_mut()?;
                 if stage.generation != generation || stage.snapshot.revision != revision {
-stage_abort(1);
+                    stage_abort(1);
                     self.stage = None;
                 } else {
                     stage.snapshot.wake_layers = wake_layers;
@@ -2024,7 +2032,7 @@ stage_abort(1);
             } => {
                 let stage = self.stage.as_mut()?;
                 if stage.generation != generation || stage.snapshot.revision != revision {
-stage_abort(2);
+                    stage_abort(2);
                     self.stage = None;
                     return None;
                 }
@@ -2041,7 +2049,7 @@ stage_abort(2);
             } => {
                 let stage = self.stage.as_mut()?;
                 if stage.generation != generation || stage.snapshot.revision != revision {
-stage_abort(3);
+                    stage_abort(3);
                     self.stage = None;
                     return None;
                 }
@@ -2058,7 +2066,7 @@ stage_abort(3);
             } => {
                 let stage = self.stage.as_mut()?;
                 if stage.generation != generation || stage.snapshot.revision != revision {
-stage_abort(4);
+                    stage_abort(4);
                     self.stage = None;
                     return None;
                 }
@@ -2084,7 +2092,7 @@ stage_abort(4);
                         .any(|existing| existing.slot == cell.slot)
                     || stage.snapshot.overlay.push(cell).is_err()
                 {
-stage_abort(5);
+                    stage_abort(5);
                     self.stage = None;
                 }
                 None
@@ -2105,7 +2113,7 @@ stage_abort(5);
                         .any(|existing| existing.layer == cell.layer && existing.slot == cell.slot)
                     || stage.snapshot.scenes.set(cell).is_err()
                 {
-stage_abort(6);
+                    stage_abort(6);
                     self.stage = None;
                 }
                 None
@@ -2120,7 +2128,7 @@ stage_abort(6);
                     || stage.snapshot.revision != revision
                     || cell_count as usize > SCENE_CAPACITY
                 {
-stage_abort(7);
+                    stage_abort(7);
                     self.stage = None;
                 } else {
                     stage.expected_conditional_scene_cells = Some(cell_count as usize);
@@ -2147,7 +2155,7 @@ stage_abort(7);
                         .push(cell)
                         .is_err()
                 {
-stage_abort(8);
+                    stage_abort(8);
                     self.stage = None;
                 }
                 None
@@ -2171,7 +2179,7 @@ stage_abort(8);
                         })
                         .is_some();
                 if !amended {
-stage_abort(9);
+                    stage_abort(9);
                     self.stage = None;
                 }
                 None

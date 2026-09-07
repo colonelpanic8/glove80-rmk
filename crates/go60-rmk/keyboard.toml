@@ -212,6 +212,7 @@ col_pins = ["P0_14", "P0_13", "P0_16", "P0_15", "P0_17", "P0_20", "P0_24"]
 topology_revision = 1
 
 [lighting.controls]
+wake_linger_ms = 20000
 wake_layers = [3]
 
 [[lighting.zone]]

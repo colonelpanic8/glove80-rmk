@@ -16,13 +16,13 @@ use rynk::rmk_types::pointing::{
 };
 use rynk::rmk_types::protocol::rynk::{
     BehaviorConfig as WireBehaviorConfig, BehaviorOptions as WireBehaviorOptions, LayerMetadata,
-    LightingActiveTransport, LightingBackgroundMode, LightingBackgroundState,
-    LightingBatteryCondition, LightingBondedSlotCondition, LightingChargeCondition,
-    LightingConditionSet, LightingConditionalSceneCell, LightingConnectionCondition,
-    LightingEffect, LightingEffectsCondition, LightingExtendedConditionalSceneCell,
-    LightingExtensionState, LightingIndicatorCondition, LightingLayerCondition,
-    LightingLayerPolicy, LightingLayersCondition, LightingLedId, LightingMatrixPosition,
-    LightingNodeId, LightingOutputMode, LightingRgb8, LightingSceneCell, LightingZoneId,
+    LightingActiveTransport, LightingAdvancedConditionalSceneCell, LightingBackgroundMode,
+    LightingBackgroundState, LightingBatteryCondition, LightingBondedSlotCondition,
+    LightingChargeCondition, LightingConditionSet, LightingConditionalSceneCell,
+    LightingConnectionCondition, LightingEffect, LightingEffectsCondition, LightingExtensionState,
+    LightingIndicatorCondition, LightingLayerCondition, LightingLayerPolicy,
+    LightingLayersCondition, LightingLedId, LightingMatrixPosition, LightingNodeId,
+    LightingOutputMode, LightingRgb8, LightingSceneCell, LightingZoneId,
     PointingConfig as WirePointingConfig, PointingDeviceConfig as WirePointingDeviceConfig,
     PointingLayerOverride as WirePointingLayerOverride, BLE_NAME_MAX_LEN, LAYER_NAME_MAX_LEN,
 };
@@ -1253,16 +1253,16 @@ pub struct LayersConditionConfig {
     pub inactive: Vec<u8>,
 }
 
-/// Highest layer a layer-set condition can name: the mask is 64 bits wide.
-const MAX_LAYER_BIT: u8 = 63;
+/// Highest layer a layer-set condition can name: the mask is 32 bits wide.
+const MAX_LAYER_BIT: u8 = 31;
 
-fn layer_mask(layers: &[u8]) -> u64 {
-    layers.iter().fold(0, |mask, layer| mask | 1_u64 << layer)
+fn layer_mask(layers: &[u8]) -> u32 {
+    layers.iter().fold(0, |mask, layer| mask | 1_u32 << layer)
 }
 
-fn layer_list(mask: u64) -> Vec<u8> {
+fn layer_list(mask: u32) -> Vec<u8> {
     (0..=MAX_LAYER_BIT)
-        .filter(|layer| mask & 1_u64 << layer != 0)
+        .filter(|layer| mask & 1_u32 << layer != 0)
         .collect()
 }
 
@@ -3751,7 +3751,7 @@ pub fn scene_from_wire(cell: LightingSceneCell) -> SceneConfig {
 }
 
 pub fn conditional_scene_from_wire(
-    extended: LightingExtendedConditionalSceneCell,
+    extended: LightingAdvancedConditionalSceneCell,
 ) -> ConditionalSceneConfig {
     let connection = extended.connection.map(|c| ConnectionConditionConfig {
         transport: c.transport.map(|transport| match transport {
@@ -3865,7 +3865,7 @@ pub fn scene_to_wire(cell: &SceneConfig) -> Result<LightingSceneCell> {
 
 pub fn conditional_scene_to_wire(
     cell: &ConditionalSceneConfig,
-) -> Result<LightingExtendedConditionalSceneCell> {
+) -> Result<LightingAdvancedConditionalSceneCell> {
     let connection = cell.connection.map(|c| LightingConnectionCondition {
         transport: c.transport.map(|transport| match transport {
             TransportConfig::Usb => LightingActiveTransport::Usb,
@@ -3917,7 +3917,7 @@ pub fn conditional_scene_to_wire(
             cell.step_ms,
         )?,
     };
-    Ok(LightingExtendedConditionalSceneCell {
+    Ok(LightingAdvancedConditionalSceneCell {
         cell: base,
         connection,
         effects: cell
@@ -5540,7 +5540,7 @@ Density = 6
         assert!(validate_conditional_scene(0, &none).is_err());
         let mut past = cell.clone();
         past.layers = Some(LayersConditionConfig {
-            active: vec![64],
+            active: vec![32],
             inactive: Vec::new(),
         });
         assert!(validate_conditional_scene(0, &past).is_err());

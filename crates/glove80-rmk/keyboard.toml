@@ -274,6 +274,9 @@ col_pins = ["P1_06", "P1_04", "P0_02", "P1_07", "P1_05", "P1_03", "P1_01"]
 [lighting]
 topology_revision = 1
 
+[lighting.controls]
+wake_linger_ms = 20000
+
 [[lighting.zone]]
 id = 1
 name = "per-key"

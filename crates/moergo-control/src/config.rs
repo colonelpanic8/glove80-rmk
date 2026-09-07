@@ -18,7 +18,7 @@ use moergo_config::{
 use rynk::rmk_types::morse::MorseProfileName;
 use rynk::rmk_types::pointing::PointingMode;
 use rynk::rmk_types::protocol::rynk::{
-    BleName, Cmd, LayerMetadata, LightingError, LightingExtendedConditionalSceneCell,
+    BleName, Cmd, LayerMetadata, LightingAdvancedConditionalSceneCell, LightingError,
     LightingExtensionNameKind, LightingExtensionParamsRequest, LightingFeatureFlags,
     LightingMutableState, MorseProfileEntry as WireMorseProfileEntry, PointingCapabilities,
     PointingConfig as WirePointingConfig, RynkError, SetAutoMouseLayerConfigsRequest,
@@ -138,9 +138,33 @@ async fn desired_snapshot(client: &Client, config: RuntimeConfig) -> Result<Snap
     config.snapshot_with_topology(&topology)
 }
 
+async fn read_advanced_runtime_conditionals(
+    client: &Client,
+) -> Result<Vec<LightingAdvancedConditionalSceneCell>> {
+    let mut last_error = None;
+    for _ in 0..CONDITIONAL_READ_ATTEMPTS {
+        match tokio::time::timeout(
+            CONDITIONAL_READ_TIMEOUT,
+            client.read_all_lighting_advanced_runtime_conditional_scenes(),
+        )
+        .await
+        {
+            Ok(Ok((_, cells))) => return Ok(cells),
+            Ok(Err(error)) => last_error = Some(anyhow!(error)),
+            Err(_) => {
+                last_error = Some(anyhow!(
+                    "extended conditional table did not answer within {:?}",
+                    CONDITIONAL_READ_TIMEOUT
+                ));
+            }
+        }
+    }
+    Err(last_error.unwrap_or_else(|| anyhow!("extended conditional table read failed")))
+}
+
 async fn read_extended_runtime_conditionals(
     client: &Client,
-) -> Result<Vec<LightingExtendedConditionalSceneCell>> {
+) -> Result<Vec<LightingAdvancedConditionalSceneCell>> {
     let mut last_error = None;
     for _ in 0..CONDITIONAL_READ_ATTEMPTS {
         match tokio::time::timeout(
@@ -149,7 +173,7 @@ async fn read_extended_runtime_conditionals(
         )
         .await
         {
-            Ok(Ok((_, cells))) => return Ok(cells),
+            Ok(Ok((_, cells))) => return Ok(cells.into_iter().map(Into::into).collect()),
             Ok(Err(error)) => last_error = Some(anyhow!(error)),
             Err(_) => {
                 last_error = Some(anyhow!(
@@ -355,14 +379,25 @@ async fn read_snapshot(client: &Client) -> Result<Snapshot> {
     // as "delete what the board has".
     let conditional_scenes = if lighting_caps
         .features
-        .contains(LightingFeatureFlags::RUNTIME_EFFECTS_CONDITIONS)
+        .contains(LightingFeatureFlags::RUNTIME_LAYER_INDICATOR_CONDITIONS)
     {
-        let cells = read_extended_runtime_conditionals(client).await?;
+        let cells = read_advanced_runtime_conditionals(client).await?;
         Some(
             cells
                 .into_iter()
                 .map(conditional_scene_from_wire)
                 .collect::<Vec<_>>(),
+        )
+    } else if lighting_caps
+        .features
+        .contains(LightingFeatureFlags::RUNTIME_EFFECTS_CONDITIONS)
+    {
+        Some(
+            read_extended_runtime_conditionals(client)
+                .await?
+                .into_iter()
+                .map(conditional_scene_from_wire)
+                .collect(),
         )
     } else if lighting_caps
         .features
@@ -373,7 +408,7 @@ async fn read_snapshot(client: &Client) -> Result<Snapshot> {
             cells
                 .into_iter()
                 .map(|cell| {
-                    conditional_scene_from_wire(LightingExtendedConditionalSceneCell {
+                    conditional_scene_from_wire(LightingAdvancedConditionalSceneCell {
                         cell,
                         connection: None,
                         effects: None,
@@ -1233,22 +1268,22 @@ async fn apply_snapshot(client: &Client, desired: &Snapshot, before: &Snapshot) 
                         .map(conditional_scene_to_wire)
                         .collect::<Result<Vec<_>>>()?;
                     let status = client.get_lighting_runtime_conditional_scene_status().await?;
-                    let extended_conditionals = client
-                        .get_lighting_capabilities()
-                        .await?
-                        .features
-                        .contains(LightingFeatureFlags::RUNTIME_EFFECTS_CONDITIONS);
-                    if extended_conditionals {
+                    let features = client.get_lighting_capabilities().await?.features;
+                    if features.contains(LightingFeatureFlags::RUNTIME_LAYER_INDICATOR_CONDITIONS) {
                         client
-                            .replace_all_lighting_extended_runtime_conditional_scenes(
+                            .replace_all_lighting_advanced_runtime_conditional_scenes(
                                 status.revision,
                                 &cells,
                             )
                             .await?;
+                    } else if features.contains(LightingFeatureFlags::RUNTIME_EFFECTS_CONDITIONS) {
+                        let extended = cells.into_iter().map(TryInto::try_into).collect::<Result<Vec<_>, _>>()
+                            .map_err(|_| anyhow!("firmware cannot store layer-set or lock-indicator conditions; update firmware first"))?;
+                        client.replace_all_lighting_extended_runtime_conditional_scenes(status.revision, &extended).await?;
                     } else {
                         if let Some(gated) = wanted_conditional
                             .iter()
-                            .position(|c| c.connection.is_some() || c.effects.is_some())
+                            .position(|c| c.connection.is_some() || c.effects.is_some() || c.layers.is_some() || c.indicators.is_some())
                         {
                             bail!(
                                 "conditional rule {gated} names a connection or effects condition but the keyboard's firmware predates the extended conditional cell"
