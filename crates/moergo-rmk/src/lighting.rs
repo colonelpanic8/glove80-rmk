@@ -772,6 +772,7 @@ static PERIPHERAL_CONTEXT: BlockingMutex<rmk::RawMutex, Cell<LightingContext>> =
             kana: false,
         },
         powered: false,
+        local_powered: false,
         // Replaced by the central's bitmap on the first replicated context;
         // until then the peripheral knows of no bonds.
         bonded_slots: 0,
@@ -832,12 +833,10 @@ impl SnapshotProvider for PeripheralState {
 
     fn snapshot(&self) -> Self::Snapshot {
         let mut context = PERIPHERAL_CONTEXT.lock(Cell::get);
-        if matches!(
-            crate::LIGHTING_CONTROLS.powered_only_scope,
-            rmk::lighting::PoweredOnlyScope::Local
-        ) {
-            context.powered = local_vbus_present();
-        }
+        // `powered` stays the authority's VBUS, replicated over the split
+        // link; this half's own VBUS goes in `local_powered`. The engine
+        // picks between them per `powered_only_scope`.
+        context.local_powered = local_vbus_present();
         // The split link replicates the central's connection status into this
         // half's own global; the lighting context packet does not carry it.
         context.connection = rmk::state::current_connection_status();

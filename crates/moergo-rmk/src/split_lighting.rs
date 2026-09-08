@@ -1179,6 +1179,10 @@ impl Message {
                         conditions: ConditionSet {
                             layer,
                             battery,
+                            // The split conditional-cell wire form predates
+                            // these predicates and carries neither.
+                            layers: None,
+                            indicators: None,
                             output_mode: match bytes[25] {
                                 0 => Some(OutputMode::AlwaysOn),
                                 1 => Some(OutputMode::AlwaysOff),

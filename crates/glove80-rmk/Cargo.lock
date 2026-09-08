@@ -162,21 +162,6 @@ dependencies = [
 
 [[package]]
 name = "bt-hci"
-version = "0.9.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8f3c66fd0a41a3b3a5906847b1bf5516048ce083e24fa9341a0fa31d3b4cd73d"
-dependencies = [
- "btuuid",
- "defmt 1.1.1",
- "embassy-sync",
- "embedded-io 0.7.1",
- "embedded-io-async 0.7.0",
- "futures-intrusive",
- "heapless 0.9.3",
-]
-
-[[package]]
-name = "bt-hci"
 version = "0.10.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f63b3d6f0ef006d9b87a075705d6c142b03681ad34090659647f0e227c1c667f"
@@ -1210,7 +1195,7 @@ checksum = "0cc23270f6e1808e30a928bdc84dea0b9b4136a8bc82338574f23baf47bbd280"
 name = "glove80-rmk"
 version = "0.1.0"
 dependencies = [
- "bt-hci 0.9.0",
+ "bt-hci",
  "const-gen",
  "cortex-m",
  "cortex-m-rt",
@@ -1570,7 +1555,7 @@ dependencies = [
 [[package]]
 name = "nrf-mpsl"
 version = "0.3.0"
-source = "git+https://github.com/colonelpanic8/nrf-sdc?rev=202600e31f6b1c093e3d2afe32357da3b108b806#202600e31f6b1c093e3d2afe32357da3b108b806"
+source = "git+https://github.com/colonelpanic8/nrf-sdc?rev=2dfeabc74b3ed423ace82e527a8bce9b221d6f17#2dfeabc74b3ed423ace82e527a8bce9b221d6f17"
 dependencies = [
  "cfg-if",
  "cortex-m",
@@ -1587,7 +1572,7 @@ dependencies = [
 [[package]]
 name = "nrf-mpsl-sys"
 version = "0.2.1"
-source = "git+https://github.com/colonelpanic8/nrf-sdc?rev=202600e31f6b1c093e3d2afe32357da3b108b806#202600e31f6b1c093e3d2afe32357da3b108b806"
+source = "git+https://github.com/colonelpanic8/nrf-sdc?rev=2dfeabc74b3ed423ace82e527a8bce9b221d6f17#2dfeabc74b3ed423ace82e527a8bce9b221d6f17"
 dependencies = [
  "bindgen",
  "doxygen-rs",
@@ -1606,9 +1591,10 @@ dependencies = [
 [[package]]
 name = "nrf-sdc"
 version = "0.4.0"
-source = "git+https://github.com/colonelpanic8/nrf-sdc?rev=202600e31f6b1c093e3d2afe32357da3b108b806#202600e31f6b1c093e3d2afe32357da3b108b806"
+source = "git+https://github.com/colonelpanic8/nrf-sdc?rev=2dfeabc74b3ed423ace82e527a8bce9b221d6f17#2dfeabc74b3ed423ace82e527a8bce9b221d6f17"
 dependencies = [
- "bt-hci 0.9.0",
+ "bt-hci",
+ "bt-hci-transport",
  "critical-section",
  "defmt 1.1.1",
  "embassy-nrf",
@@ -1623,7 +1609,7 @@ dependencies = [
 [[package]]
 name = "nrf-sdc-sys"
 version = "0.2.1"
-source = "git+https://github.com/colonelpanic8/nrf-sdc?rev=202600e31f6b1c093e3d2afe32357da3b108b806#202600e31f6b1c093e3d2afe32357da3b108b806"
+source = "git+https://github.com/colonelpanic8/nrf-sdc?rev=2dfeabc74b3ed423ace82e527a8bce9b221d6f17#2dfeabc74b3ed423ace82e527a8bce9b221d6f17"
 dependencies = [
  "bindgen",
  "doxygen-rs",
@@ -1971,7 +1957,7 @@ checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
 name = "rmk"
 version = "0.9.0"
 dependencies = [
- "bt-hci 0.10.1",
+ "bt-hci",
  "byteorder",
  "cobs",
  "cortex-m",
@@ -2537,7 +2523,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "19a566cc37ceaff5cc2a6ff8cc02debd1ee6b95d59ced8830d005da8b080cbe9"
 dependencies = [
  "aes",
- "bt-hci 0.10.1",
+ "bt-hci",
  "cmac",
  "defmt 1.1.1",
  "embassy-futures",

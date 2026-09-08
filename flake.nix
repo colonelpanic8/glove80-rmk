@@ -20,6 +20,10 @@
           sha256 = "sha256-OATSZm98Es5kIFuqaba+UvkQtFsVgJEBMmS+t6od5/U=";
         };
         libclang = pkgs.llvmPackages.libclang.lib;
+        # trouble-host's `security` feature pulls in p256-cortex-m4-sys, whose
+        # build script compiles C for the firmware target; cc-rs would
+        # otherwise reach for the host gcc and reject the ARM flags.
+        armGcc = pkgs.gcc-arm-embedded;
         clangMajor = lib.versions.major pkgs.llvmPackages.clang.version;
       in
       {
@@ -34,9 +38,12 @@
             pkgs.jq
             pkgs.unzip
             libclang
+            armGcc
           ];
 
           LIBCLANG_PATH = "${libclang}/lib";
+          CC_thumbv7em_none_eabihf = "arm-none-eabi-gcc";
+          AR_thumbv7em_none_eabihf = "arm-none-eabi-ar";
           BINDGEN_EXTRA_CLANG_ARGS =
             "-ffreestanding -nostdinc -isystem ${libclang}/lib/clang/${clangMajor}/include";
           CARGO_NET_GIT_FETCH_WITH_CLI = "true";

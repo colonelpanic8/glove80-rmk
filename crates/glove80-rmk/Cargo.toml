@@ -23,18 +23,18 @@ rmk = { path = "../../dependencies/rmk/rmk", default-features = false, features 
     "lighting",
     "adafruit_bl",
 ] }
-nrf-sdc = { git = "https://github.com/colonelpanic8/nrf-sdc", rev = "202600e31f6b1c093e3d2afe32357da3b108b806", features = [
+nrf-sdc = { git = "https://github.com/colonelpanic8/nrf-sdc", rev = "2dfeabc74b3ed423ace82e527a8bce9b221d6f17", features = [
     "defmt",
     "peripheral",
     "central",
     "nrf52840",
 ] }
-nrf-mpsl = { git = "https://github.com/colonelpanic8/nrf-sdc", rev = "202600e31f6b1c093e3d2afe32357da3b108b806", features = [
+nrf-mpsl = { git = "https://github.com/colonelpanic8/nrf-sdc", rev = "2dfeabc74b3ed423ace82e527a8bce9b221d6f17", features = [
     "defmt",
     "critical-section-impl",
     "nrf52840",
 ] }
-bt-hci = { version = "0.9", features = ["defmt"] }
+bt-hci = { version = "0.10", features = ["defmt"] }
 
 # PaletteFx effect pack for the standard engine's extension band, pinned by
 # the dependencies/rmk-palettefx submodule.
