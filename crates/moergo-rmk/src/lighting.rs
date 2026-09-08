@@ -34,6 +34,7 @@ use rmk_palettefx::rmk_lighting::{
 };
 
 mod lighting_output;
+mod lighting_preferences;
 
 use lighting_output::{chain_should_power, frame_visible, limit_channel};
 
@@ -696,20 +697,14 @@ pub fn engine(preferences: Preferences) -> Engine {
         &HIT_QUEUE,
         config,
     );
-    for record in preferences.params {
-        for (index, value) in record.values[..usize::from(record.len)]
-            .iter()
-            .copied()
-            .enumerate()
-        {
-            <_ as LightingSource<Rgb8, LightingContext>>::apply_extension_param(
-                &mut palettefx,
-                record.effect,
-                record.offset + index as u8,
-                value,
-            );
-        }
-    }
+    lighting_preferences::restore_params(
+        &mut palettefx,
+        config.initial_effect,
+        config.initial_overlay,
+        DEFAULT_EFFECT,
+        &DEFAULT_EFFECT_PARAMS[..CrosshairParams::COUNT as usize],
+        &preferences.params,
+    );
     let mut controls = crate::LIGHTING_CONTROLS;
     if let Some(wake_layers) = persisted_wake_layers {
         controls.wake_layers = wake_layers;

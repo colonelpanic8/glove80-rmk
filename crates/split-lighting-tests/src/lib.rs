@@ -497,3 +497,6 @@ fn diagnostics_only_enter_an_empty_response_queue() {
     assert!(!split_lighting::diagnostic_may_enqueue(2, 16));
     assert!(!split_lighting::diagnostic_may_enqueue(15, 16));
 }
+
+#[path = "../../moergo-rmk/src/lighting_preferences.rs"]
+mod lighting_preferences;

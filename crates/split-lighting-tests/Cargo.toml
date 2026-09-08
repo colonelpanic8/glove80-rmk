@@ -8,3 +8,7 @@ publish = false
 
 [dependencies]
 rmk = { path = "../../dependencies/rmk/rmk", default-features = false, features = ["lighting", "rynk", "split", "std", "storage"] }
+rmk-palettefx = { path = "../../dependencies/rmk-palettefx", features = ["rmk-lighting"] }
+
+[patch."https://github.com/colonelpanic8/rmk"]
+rmk = { path = "../../dependencies/rmk/rmk" }
