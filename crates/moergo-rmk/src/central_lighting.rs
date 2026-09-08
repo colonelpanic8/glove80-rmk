@@ -27,7 +27,7 @@ use rmk::host::{
 use rmk::keymap::KeyMap;
 use rmk::lighting::{
     FramePage, KeymapLightingState, LightingNodeId, LightingProcessor, LightingService,
-    LogicalFrame, Rgb8, StandardCommand, StandardReplicaState,
+    LogicalFrame, Rgb8, StandardCommand,
 };
 use rmk::split_app::SplitAppData;
 use rmk::types::protocol::rynk::{
@@ -543,7 +543,7 @@ pub const fn replication() -> CentralReplication {
 }
 
 impl CentralReplication {
-    async fn export_replica() -> Option<StandardReplicaState<OVERLAY_CAPACITY, SCENE_CAPACITY>> {
+    async fn prepare_replica() -> Option<()> {
         if CORE_MAILBOX
             .request(StandardCommand::ExportReplica(&REPLICA_SLOT))
             .await
@@ -551,11 +551,18 @@ impl CentralReplication {
         {
             return None;
         }
-        REPLICA_SLOT.take().ok()
+        Some(())
     }
 
     async fn try_send_snapshot(&mut self) -> Option<PendingAck> {
-        let snapshot = Self::export_replica().await?;
+        Self::prepare_replica().await?;
+        self.queue_prepared_snapshot()
+    }
+
+    // Keep the large snapshot out of the replication future and its return values.
+    #[inline(never)]
+    fn queue_prepared_snapshot(&mut self) -> Option<PendingAck> {
+        let snapshot = REPLICA_SLOT.take().ok()?;
         let digests = crate::split_lighting::replica_digests(&snapshot);
         self.generation = self.generation.wrapping_add(1);
         if crate::split_lighting::try_queue_snapshot(
@@ -579,7 +586,16 @@ impl CentralReplication {
         &mut self,
         last_acked_revision: Option<u32>,
     ) -> Option<PendingAck> {
-        let snapshot = Self::export_replica().await?;
+        Self::prepare_replica().await?;
+        self.queue_prepared_context_update(last_acked_revision)
+    }
+
+    #[inline(never)]
+    fn queue_prepared_context_update(
+        &mut self,
+        last_acked_revision: Option<u32>,
+    ) -> Option<PendingAck> {
+        let snapshot = REPLICA_SLOT.take().ok()?;
         self.generation = self.generation.wrapping_add(1);
         let kind = if Some(snapshot.revision) == last_acked_revision {
             let message = crate::split_lighting::Message::ContextUpdate {
