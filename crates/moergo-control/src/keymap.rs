@@ -321,6 +321,18 @@ mod tests {
     }
 
     #[test]
+    fn rejects_removed_keyboard_actions() {
+        for code in ["0x7780", "0x7c02", "QK_OUTPUT_AUTO", "OUT_AUTO"] {
+            let arguments = ["0", "0", "KC_A", "0", "1", code].map(String::from);
+            assert!(parse_set_entries(&arguments, 6, 14).is_err(), "{code}");
+        }
+        for code in ["QK_OUTPUT_USB", "QK_OUTPUT_BLUETOOTH", "QK_BOOT"] {
+            let arguments = ["0", "0", code].map(String::from);
+            assert!(parse_set_entries(&arguments, 6, 14).is_ok(), "{code}");
+        }
+    }
+
+    #[test]
     fn supports_both_boards_and_large_matrices() {
         assert!(check_grid(6, 14, 16).is_ok());
         assert!(check_grid(5, 14, 16).is_ok());

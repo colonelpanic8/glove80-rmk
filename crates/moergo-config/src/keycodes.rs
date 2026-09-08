@@ -17,8 +17,7 @@
 //! - `0x5700..=0x57FF` tap dance / morse — `TD(n)`
 //! - `0x7000..=0x701F` held modifier combinations — `MOD(MOD_…)`
 //! - `0x7700..=0x771F` macros — `MACRO(n)`
-//! - `0x7780..=0x7786` output selection — `QK_OUTPUT_AUTO`,
-//!   `QK_OUTPUT_USB`, and `QK_OUTPUT_BLUETOOTH`
+//! - `0x7784`, `0x7786` output selection — `QK_OUTPUT_USB` and `QK_OUTPUT_BLUETOOTH`
 //! - `0x7800..=0x7806` keyboard lighting — `BL_ON`, `BL_OFF`, `BL_TOGG`,
 //!   `BL_DOWN`, `BL_UP`, `BL_STEP`, `BL_BRTG`
 //! - `0x7820..=0x7835` RGB effects — `UG_TOGG`, `UG_NEXT`, `UG_PREV`,
@@ -266,7 +265,6 @@ const BASIC: &[(u16, &str, &[&str])] = &[
 
 /// Named non-basic keycodes the firmware understands (QMK "magic" range).
 const EXTRA: &[(u16, &str, &[&str])] = &[
-    (0x7780, "QK_OUTPUT_AUTO", &["OUT_AUTO"]),
     (0x7784, "QK_OUTPUT_USB", &["OUT_USB"]),
     (0x7786, "QK_OUTPUT_BLUETOOTH", &["OUT_BT"]),
     (0x7800, "BL_ON", &["QK_BACKLIGHT_ON"]),
