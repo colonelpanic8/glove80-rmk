@@ -1206,6 +1206,7 @@ dependencies = [
  "embassy-nrf",
  "embassy-sync",
  "embassy-time",
+ "embedded-storage-async",
  "heapless 0.8.0",
  "json",
  "nrf-mpsl",

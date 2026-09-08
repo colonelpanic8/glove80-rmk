@@ -23,7 +23,9 @@ use rmk::lighting::{
     LightingService, LogicalFrame, Rgb8, SnapshotProvider, StandardCommand, StandardError,
     StandardLightingEngine, StandardReplicaSlot, StandardReply,
 };
-use rmk::storage::{LightingExtensionOverlayRecord, LightingExtensionRecord};
+use rmk::storage::{
+    LightingExtensionOverlayRecord, LightingExtensionParamsRecord, LightingExtensionRecord, Storage,
+};
 use rmk::types::battery::BatteryStatus;
 use rmk_palettefx::effects::{CrosshairParams, Effect};
 use rmk_palettefx::palette::id as palette_id;
@@ -592,11 +594,49 @@ const DEFAULT_EFFECT_PARAMS: [u8; MAX_INITIAL_PARAMS] = [0, 90, 11, 170, 1, 0, 1
 /// combined Storm effect into its Rain plus Reactive representation.
 const LEGACY_STORM_OVERLAY: u8 = 6;
 
-pub fn engine(
-    persisted_extension: Option<LightingExtensionRecord>,
-    persisted_overlay: Option<LightingExtensionOverlayRecord>,
-    persisted_wake_layers: Option<u64>,
-) -> Engine {
+#[derive(Default)]
+pub struct Preferences {
+    extension: Option<LightingExtensionRecord>,
+    overlay: Option<LightingExtensionOverlayRecord>,
+    wake_layers: Option<u64>,
+    output_mode: Option<rmk::types::protocol::rynk::LightingOutputMode>,
+    params: rmk::heapless::Vec<LightingExtensionParamsRecord, { Effect::<1>::NAMES.len() }>,
+}
+
+pub async fn load_preferences<
+    F: embedded_storage_async::nor_flash::NorFlash,
+    const R: usize,
+    const C: usize,
+    const L: usize,
+    const E: usize,
+>(
+    storage: &mut Storage<F, R, C, L, E>,
+) -> Preferences {
+    let mut preferences = Preferences {
+        extension: storage.read_lighting_extension_state().await,
+        overlay: storage.read_lighting_extension_overlay().await,
+        wake_layers: storage.read_lighting_wake_layers().await,
+        output_mode: storage.read_lighting_output_mode().await,
+        params: rmk::heapless::Vec::new(),
+    };
+    const {
+        assert!(MAX_INITIAL_PARAMS <= rmk::types::protocol::rynk::LIGHTING_EXTENSION_PARAM_CHUNK);
+    }
+    for effect in 0..Effect::<1>::NAMES.len() {
+        if let Some(record) = storage
+            .read_lighting_extension_params(effect as u8, 0)
+            .await
+        {
+            let _ = preferences.params.push(record);
+        }
+    }
+    preferences
+}
+
+pub fn engine(preferences: Preferences) -> Engine {
+    let persisted_extension = preferences.extension;
+    let persisted_overlay = preferences.overlay;
+    let persisted_wake_layers = preferences.wake_layers;
     // Effect index 7 used to mean the combined Storm effect and now means
     // Crosshair. Old Storm advertised at most six parameters, while every
     // Crosshair record stores its seven-parameter row. Together with the
@@ -651,14 +691,36 @@ pub fn engine(
         config.initial_overlay_param_len = restored.len() as u8;
         config.initial_overlay_params[..restored.len()].copy_from_slice(restored);
     }
-    let palettefx = PaletteFxSource::new(
+    let mut palettefx = PaletteFxSource::new(
         TopologyLayout::new(&topology_config::LIGHTING_TOPOLOGY),
         &HIT_QUEUE,
         config,
     );
+    for record in preferences.params {
+        for (index, value) in record.values[..usize::from(record.len)]
+            .iter()
+            .copied()
+            .enumerate()
+        {
+            <_ as LightingSource<Rgb8, LightingContext>>::apply_extension_param(
+                &mut palettefx,
+                record.effect,
+                record.offset + index as u8,
+                value,
+            );
+        }
+    }
     let mut controls = crate::LIGHTING_CONTROLS;
     if let Some(wake_layers) = persisted_wake_layers {
         controls.wake_layers = wake_layers;
+    }
+    if let Some(mode) = preferences.output_mode {
+        use rmk::types::protocol::rynk::LightingOutputMode;
+        controls.initial_output_mode = match mode {
+            LightingOutputMode::AlwaysOn => rmk::lighting::OutputMode::AlwaysOn,
+            LightingOutputMode::AlwaysOff => rmk::lighting::OutputMode::AlwaysOff,
+            LightingOutputMode::PoweredOnly => rmk::lighting::OutputMode::PoweredOnly,
+        };
     }
     Engine::new(
         crate::LIGHTING_BACKGROUND,
@@ -958,7 +1020,7 @@ pub fn init_peripheral(
     // central replicates to it, so it boots on the compiled defaults.
     let service = LightingService::new(
         PeripheralState,
-        engine(None, None, None),
+        engine(Preferences::default()),
         LogicalFrame::new(Rgb8::BLACK),
     )
     .with_present_interval(PRESENT_REFRESH_INTERVAL);
