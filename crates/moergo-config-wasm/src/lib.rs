@@ -23,13 +23,15 @@ mod convert;
 mod types;
 
 use moergo_config::{
-    differences, runtime_config_from_moergo_json, snapshot_to_moergo_json, RuntimeConfig,
+    differences, runtime_config_from_moergo_json, snapshot_to_moergo_json, LightingConfig,
+    RuntimeConfig, Snapshot,
 };
+use rynk::rmk_types::protocol::rynk::LightingLed;
 use wasm_bindgen::prelude::*;
 
 pub use types::{
-    ConfigFormat, EffectParamSet, EffectParamWrite, ExtensionCatalog, ImportNote, LightingSnapshot,
-    ParsedConfig, RuntimeSnapshot,
+    ConfigFormat, EffectParamSet, EffectParamWrite, ExtensionCatalog, ImportNote, KeyTopologyInput,
+    LightingSnapshot, ParsedConfig, RuntimeSnapshot, TopologyLed,
 };
 
 #[wasm_bindgen(start)]
@@ -96,6 +98,72 @@ fn parse_text_reporting(
     }
 }
 
+/// Lower a parsed document to the managed snapshot, resolving every readable
+/// selector through the board's advertised topology.
+///
+/// This is `moergo-control`'s `desired_snapshot` rule, and it has to be: a
+/// `[[lighting.scene]]` addressed by `key = [row, col]` names a key, and only
+/// the topology knows which emitters that key owns. Without it the lowering
+/// fails deep inside the wire encoding, so the requirement is stated here
+/// instead, naming what to do about it.
+///
+/// A `[[layer.bind]]` is the one selector that survives without topology: a
+/// matrix position is already the address the keymap uses, and `snapshot`
+/// defers the rest rather than guessing. That stays true, so a caller with no
+/// board model keeps working on documents that ask nothing about the board.
+fn lower(
+    mut config: RuntimeConfig,
+    topology: Option<KeyTopologyInput>,
+) -> anyhow::Result<Snapshot> {
+    let semantic_lighting = config
+        .lighting
+        .as_ref()
+        .is_some_and(LightingConfig::has_semantic_targets);
+    let Some(topology) = topology else {
+        if semantic_lighting {
+            anyhow::bail!(
+                "this document addresses lighting by key, zone or `all`, which only the \
+                 keyboard's advertised topology can lower to emitters; open it with a \
+                 keyboard connected, or address those scenes by `led = <id>`"
+            );
+        }
+        return config.snapshot();
+    };
+    let topology = key_topology(topology)?;
+    if let Some(lighting) = config.lighting.take() {
+        config.lighting = Some(lighting.resolve_semantic_targets(&topology)?);
+    }
+    config.snapshot_with_topology(&topology)
+}
+
+/// Rebuild the host-side topology from the pages a caller already holds.
+///
+/// `KeyTopology::new` is what enforces the table's own invariants — no
+/// duplicate matrix position or LED id, no emitter owned by a key that is not
+/// in the table — so a malformed topology is reported as such rather than
+/// surfacing later as a document that mysteriously will not resolve.
+fn key_topology(input: KeyTopologyInput) -> anyhow::Result<rynk::KeyTopology> {
+    let leds = input
+        .leds
+        .into_iter()
+        .map(|led| LightingLed {
+            id: led.id,
+            key: led.key,
+            position: None,
+            zone_start: led.zone_start,
+            zone_len: led.zone_len,
+        })
+        .collect();
+    rynk::KeyTopology::new(
+        input.revision,
+        input.keys,
+        leds,
+        input.zones,
+        input.zone_memberships,
+    )
+    .map_err(|error| anyhow::anyhow!("advertised key topology is inconsistent: {error:?}"))
+}
+
 /// Parse and validate a configuration document, then restate it in protocol
 /// types. The format is recognized from the text, so a caller can hand over
 /// whatever the user picked without inspecting it first.
@@ -105,10 +173,18 @@ fn parse_text_reporting(
 /// checked here rather than left to the firmware, so an out-of-range parameter
 /// is reported by name instead of as a bare rejection. A MoErgo document
 /// carries no lighting at all, so for that format the catalog goes unused.
+///
+/// `topology` answers the questions a document asks about the board rather than
+/// about itself — which emitters a key owns, which keys a zone holds. Omit it
+/// only when there is no board model to consult; see [`lower`].
 #[wasm_bindgen]
-pub fn parse_config(text: &str, catalog: ExtensionCatalog) -> Result<RuntimeSnapshot, JsValue> {
+pub fn parse_config(
+    text: &str,
+    catalog: ExtensionCatalog,
+    topology: Option<KeyTopologyInput>,
+) -> Result<RuntimeSnapshot, JsValue> {
     let config = parse_text(text, detect_config_format(text)).map_err(js_error)?;
-    let snapshot = config.snapshot().map_err(js_error)?;
+    let snapshot = lower(config, topology).map_err(js_error)?;
     convert::snapshot_to_wire(&snapshot, &catalog).map_err(js_error)
 }
 
@@ -121,10 +197,11 @@ pub fn parse_config(text: &str, catalog: ExtensionCatalog) -> Result<RuntimeSnap
 pub fn parse_config_document(
     text: &str,
     catalog: ExtensionCatalog,
+    topology: Option<KeyTopologyInput>,
 ) -> Result<ParsedConfig, JsValue> {
     let format = detect_config_format(text);
     let (config, notes) = parse_text_reporting(text, format).map_err(js_error)?;
-    let snapshot = config.snapshot().map_err(js_error)?;
+    let snapshot = lower(config, topology).map_err(js_error)?;
     let snapshot = convert::snapshot_to_wire(&snapshot, &catalog).map_err(js_error)?;
     Ok(ParsedConfig {
         format,

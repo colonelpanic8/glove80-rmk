@@ -13,7 +13,8 @@ use rynk::rmk_types::morse::Morse;
 use rynk::rmk_types::protocol::rynk::{
     BehaviorConfig, BehaviorOptions, LayerMetadata, LightingBackgroundState,
     LightingExtendedConditionalSceneCell, LightingExtensionParam, LightingExtensionState,
-    LightingLayerPolicy, LightingOutputMode, LightingSceneCell, MorseProfileEntry, PointingConfig,
+    LightingLayerPolicy, LightingLedId, LightingMatrixPosition, LightingOutputMode,
+    LightingSceneCell, LightingZone, LightingZoneId, MorseProfileEntry, PointingConfig,
 };
 use serde::{Deserialize, Serialize};
 use tsify::Tsify;
@@ -151,6 +152,45 @@ pub struct LightingSnapshot {
     /// Cells are the extended form; hosts talking to older firmware pass
     /// `connection: undefined` on every cell.
     pub conditional_scenes: Option<Vec<LightingExtendedConditionalSceneCell>>,
+}
+
+/// The board's advertised semantic topology, as the Rynk lighting metadata
+/// pages report it.
+///
+/// A document may address lighting by matrix key, logical key id, zone, or
+/// "everything", and a `[[layer.bind]]` may do the same. Those are questions
+/// about the board rather than about the file — which emitters a key owns,
+/// which keys a zone holds — so a host that has read the pages passes the
+/// answers in here rather than leaving the parse to guess. A caller with no
+/// keyboard and no board model omits it; only a document that asks a question
+/// about the board then fails, and it says so.
+#[derive(Clone, Debug, Deserialize, Serialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi)]
+pub struct KeyTopologyInput {
+    pub revision: u32,
+    /// One matrix position per logical key, in key-id order: the id is the
+    /// index, which is how the topology page reports it.
+    pub keys: Vec<LightingMatrixPosition>,
+    pub leds: Vec<TopologyLed>,
+    pub zones: Vec<LightingZone>,
+    /// Flat membership table, indexed by each LED's `zone_start`/`zone_len`.
+    pub zone_memberships: Vec<LightingZoneId>,
+}
+
+/// One emitter, reduced to what lowering a selector actually reads: which key
+/// owns it, and which zones it belongs to.
+///
+/// The LED page also carries a physical position. That answers a different
+/// question — where to draw the board — so asking for it here would only give a
+/// caller a field to get wrong.
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi)]
+pub struct TopologyLed {
+    pub id: LightingLedId,
+    pub key: Option<LightingMatrixPosition>,
+    /// Span into `KeyTopologyInput::zone_memberships`.
+    pub zone_start: u16,
+    pub zone_len: u8,
 }
 
 /// One parameter value addressed the way `SetLightingExtensionParam` addresses
